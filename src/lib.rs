@@ -1,6 +1,7 @@
 mod arch;
 mod elf;
 mod jni;
+pub mod serve;
 mod syscalls;
 mod threads;
 pub use jni::{Handle, JniCall, JniHandler, JniValue, PrimitiveType};
@@ -654,7 +655,7 @@ impl Emulator {
         }
         Ok(String::from_utf8_lossy(&value).into_owned())
     }
-    fn location(&self, address: u64) -> String {
+    pub fn location(&self, address: u64) -> String {
         self.modules
             .iter()
             .find(|m| address >= m.base && address < m.base + m.image.size)
@@ -664,9 +665,36 @@ impl Emulator {
             )
     }
     pub fn call_function(&mut self, function: u64, args: &[u64]) -> Result<u64> {
-        let sp = self.place_arguments(args.iter().map(|&bits| (b'L', bits)))?;
-        let result = self.run(function, &mut ());
-        self.set_sp(sp)?;
+        self.invoke(
+            function,
+            args.iter().map(|&bits| (b'L', bits)),
+            b'L',
+            &mut (),
+        )
+    }
+    pub(crate) fn invoke(
+        &mut self,
+        function: u64,
+        args: impl IntoIterator<Item = (u8, u64)>,
+        kind: u8,
+        handler: &mut dyn JniHandler,
+    ) -> Result<u64> {
+        let context = if self.threads.depth > 0 {
+            Some(self.cpu()?.context_init()?)
+        } else {
+            None
+        };
+        let result = (|| {
+            let sp = self.place_arguments(args)?;
+            let result = self
+                .run(function, handler)
+                .and_then(|_| self.result_bits(kind));
+            self.set_sp(sp)?;
+            result
+        })();
+        if let Some(context) = context {
+            self.cpu_mut()?.context_restore(&context)?;
+        }
         result
     }
     fn run(&mut self, pc: u64, handler: &mut dyn JniHandler) -> Result<u64> {
@@ -773,12 +801,6 @@ impl Emulator {
             .into()),
             HostFunction::Dl(name) => self.dl_function(name),
         }
-    }
-    fn nested_call(&mut self, function: u64, args: &[u64]) -> Result<u64> {
-        let context = self.cpu()?.context_init()?;
-        let value = self.call_function(function, args);
-        self.cpu_mut()?.context_restore(&context)?;
-        value
     }
     fn dl_function(&mut self, name: &str) -> Result<u64> {
         let a = self.reg(0)?;
@@ -891,8 +913,10 @@ impl Emulator {
             }
             "dl_iterate_phdr" => {
                 for i in 0..self.modules.len() {
-                    let result = self
-                        .nested_call(a, &[self.modules[i].info_ptr, 4 * self.pointer_size(), b])?;
+                    let result = self.call_function(
+                        a,
+                        &[self.modules[i].info_ptr, 4 * self.pointer_size(), b],
+                    )?;
                     if result != 0 {
                         return Ok(result);
                     }
@@ -948,6 +972,85 @@ mod test_elf;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rust_jni_handler_can_call_guest_code_without_clobbering_the_outer_call() -> Result<()> {
+        struct Handler {
+            strlen: u64,
+            text: u64,
+            fields: usize,
+        }
+        impl JniHandler for Handler {
+            fn get_static_object_field(
+                &mut self,
+                emu: &mut Emulator,
+                call: &JniCall<'_>,
+            ) -> Option<Handle> {
+                if call.name != "TYPE" || call.signature != "Ljava/lang/Class;" {
+                    return None;
+                }
+                let name = match call.class {
+                    "java/lang/Void" => "void",
+                    "java/lang/Boolean" => "boolean",
+                    "java/lang/Byte" => "byte",
+                    "java/lang/Character" => "char",
+                    "java/lang/Short" => "short",
+                    "java/lang/Integer" => "int",
+                    "java/lang/Long" => "long",
+                    "java/lang/Float" => "float",
+                    "java/lang/Double" => "double",
+                    _ => return None,
+                };
+                assert_eq!(emu.call_function(self.strlen, &[self.text]).unwrap(), 6);
+                self.fields += 1;
+                Some(emu.class(name))
+            }
+            fn new_object(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<Handle> {
+                if (call.class, call.name, call.signature)
+                    != ("java/lang/String", "<init>", "([B)V")
+                {
+                    return None;
+                }
+                Some(emu.new_string(&String::from_utf8_lossy(
+                    &emu.byte_array(call.args[0].object()),
+                )))
+            }
+            fn call_static_object_method(
+                &mut self,
+                emu: &mut Emulator,
+                call: &JniCall<'_>,
+            ) -> Option<Handle> {
+                if (call.class, call.name, call.signature)
+                    == (
+                        "java/lang/System",
+                        "getProperty",
+                        "(Ljava/lang/String;)Ljava/lang/String;",
+                    )
+                    && emu.string(call.args[0].object()) == "file.encoding"
+                {
+                    Some(emu.new_string("UTF-8"))
+                } else {
+                    None
+                }
+            }
+        }
+        for arch in ["arm64-v8a", "armeabi-v7a"] {
+            let mut emu = Emulator::builder().build()?;
+            let module = emu.load_library(format!("tests/fixtures/{arch}/libjnidispatch.so"))?;
+            let mut handler = Handler {
+                strlen: emu.find_symbol(module, "strlen")?,
+                text: emu.new_cstring("nested")?,
+                fields: 0,
+            };
+            assert_eq!(
+                emu.call_jni_onload(module, &mut handler)?,
+                0x10004,
+                "{arch}"
+            );
+            assert_eq!(handler.fields, 9, "{arch}");
+        }
+        Ok(())
+    }
 
     #[test]
     fn arm32_kuser_barrier_tls_and_version_work_without_threads() -> Result<()> {

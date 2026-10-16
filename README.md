@@ -2,7 +2,7 @@
 
 A low-memory unidbg. It runs Android `.so` files on a computer, no phone needed. Both 64-bit (`arm64-v8a`) and 32-bit (`armeabi-v7a`) work. The most common use is calling an app's signing or encryption functions.
 
-It's written in Rust on top of Unicorn, the same CPU emulator unidbg uses. There's no Java VM.
+It's written in Rust on top of Unicorn, the same CPU emulator unidbg uses. There's no Java VM. Use it as a Rust library, or from any other language through the `minidbg` command.
 
 ## How much it saves
 
@@ -95,6 +95,138 @@ emu.load_library("libd-lib.so")?;
 
 The alias is used only when no loaded library has the real name.
 
+## The `minidbg` command
+
+For other languages (TypeScript, Python, Go, ...) there's a command-line program. Build it once:
+
+```bash
+cargo build --release
+```
+
+It lands at `target/release/minidbg`. It has two subcommands.
+
+### `inspect`: look at a library first
+
+```bash
+target/release/minidbg inspect --rootfs rootfs libfoo.so
+```
+
+No code needed. It prints what the library is, which libraries it needs, its `Java_` functions, and whether it has `JNI_OnLoad`. Then it runs `JNI_OnLoad` and prints each Java call it makes (on stderr). It stops at the first one, because nothing answers it yet. Last, it lists the methods registered through `RegisterNatives`. Now you know what to call and which Java calls you'll have to answer.
+
+For the SignUtil sample:
+
+```
+libsignutil.so: 32-bit ARM (armeabi-v7a)
+Needs: liblog.so, libm.so, libdl.so, libc.so
+Java_ exports:
+  Java_com_anjuke_mobile_sign_SignUtil_getSign0
+  Java_com_anjuke_mobile_sign_SignUtil_setCacheFilePath
+JNI_OnLoad: yes
+JNI_OnLoad returned 0x10004
+Registered natives:
+  (none)
+```
+
+This one asks Java nothing in `JNI_OnLoad`, so it runs to the end. Its two Java methods are plain `Java_` exports.
+
+### `serve`: drive it from your program
+
+```bash
+target/release/minidbg serve --rootfs rootfs
+```
+
+Your program starts this as a child process. Then the two talk through stdin and stdout, one JSON object per line. Logs go to stderr, so they never mix with the messages.
+
+You send commands. minidbg answers each one with `{"ok": ...}` or `{"error": "..."}`. When the library calls Java in the middle of a command, minidbg sends a `{"jni": ...}` question instead, and you answer it. This is the same job `JniHandler` does in Rust, written in your own language:
+
+Part of a real run of the SignUtil example (`→` you send, `←` minidbg replies; some lines left out):
+
+```
+→ {"cmd":"load","path":"tests/fixtures/armeabi-v7a/libsignutil.so"}
+← {"ok":0}
+→ {"cmd":"onload","module":0}
+← {"ok":65540}
+→ {"cmd":"new_string","value":"aa"}
+← {"ok":7}
+   ... bb → 8, a HashMap → 9, cc → 10 ...
+→ {"cmd":"call_static","class":"com/anjuke/mobile/sign/SignUtil","method":"getSign0(Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/String;I)Ljava/lang/String;","args":[7,8,9,10,10]}
+← {"jni":{"args":[],"class":"java/util/HashMap","name":"size","op":"call","receiver":9,"signature":"()I","static":false,"type":"I"}}
+→ {"cmd":"answer","value":2}
+   ... keySet, toArray ...
+← {"jni":{"args":[14],"class":"java/util/HashMap","name":"get","op":"call","receiver":9,"signature":"(Ljava/lang/Object;)Ljava/lang/Object;","static":false,"type":"L"}}
+→ {"cmd":"string","handle":14}
+← {"ok":"a"}
+→ {"cmd":"answer","value":2}
+   ... get("b") ...
+← {"ok":16}
+→ {"cmd":"string","handle":16}
+← {"ok":"1000ed2f7e5ecd00bb4a6454e1d487b7dc7500040002000acc"}
+```
+
+Look at the `get` question: before answering, the program sends `string` to read which key is wanted (`"a"`), then answers with the handle of that key's value. While a question is open you can send any other command like this. A command that runs library code can even bring a question of its own; answer it first. If you don't know the answer, send `{"cmd":"unhandled"}`. The command then fails with the usual `unhandled JNI call: ...` message.
+
+A full working example in TypeScript, with no npm packages: [examples/ts/signutil.ts](examples/ts/signutil.ts). Run it with:
+
+```bash
+node examples/ts/signutil.ts
+```
+
+The same program works for local testing and inside an HTTP service: the service starts `minidbg serve` and answers the Java calls the same way. One `serve` process runs one instance, one command at a time. For calls in parallel, start several.
+
+Options, the same for both subcommands:
+
+| option | what it does |
+|---|---|
+| `--rootfs DIR` | Android system libraries (default `rootfs`) |
+| `--process-name NAME` | process name the library sees |
+| `--prop KEY=VALUE` | a system property, repeatable |
+| `--alias NAME=TARGET` | same as `symbol_alias`, repeatable |
+| `--verbose` | print every JNI call on stderr (`inspect` always does) |
+
+How values are written in JSON:
+
+| Java type | JSON |
+|---|---|
+| object, string, array | handle number (`0` is `null`) |
+| `boolean` | `true` / `false` |
+| `byte`, `char`, `short`, `int`, `float`, `double` | number |
+| `long` | decimal string, like `"-12"` (a JS number can't hold 64 bits) |
+
+Addresses are decimal strings too. Bytes are base64.
+
+Commands:
+
+| command | fields | result |
+|---|---|---|
+| `load` | `path` | module number |
+| `alias` | `name`, `target` | `null` |
+| `onload` | `module` | `JNI_OnLoad`'s return |
+| `call_static` | `class`, `method` (name + signature), `args` | the return value |
+| `call` | `class`, `receiver`, `method`, `args` | the return value |
+| `find_symbol` | `module`, `name` | address |
+| `call_function` | `address`, `args` (decimal strings) | result (decimal string) |
+| `malloc` / `free` | `size` / `address` | address / `null` |
+| `new_cstring` | `value` | address |
+| `read` / `write` | `address`, `size` / `address`, `base64` | base64 / `null` |
+| `new_string` / `string` | `value` / `handle` | handle / the string |
+| `new_array` / `array` | `type` (`Z B C S I J F D`), `base64` / `handle` | handle / base64 |
+| `new_object_array` / `object_array` | `class`, `items` / `handle` | handle / list of handles |
+| `new_object` | `class` | handle |
+| `class` | `name` | handle |
+| `release` | `handle` | `null` |
+| `answer` | `value` (left out for `void` and field sets) | (answers the open question) |
+| `unhandled` | | (answers the open question) |
+
+A question looks like this:
+
+```json
+{"jni":{"op":"call","static":true,"type":"L","class":"java/lang/System","name":"getProperty","signature":"(Ljava/lang/String;)Ljava/lang/String;","receiver":4,"args":[7]}}
+```
+
+- `op` is `call`, `get` (read a field), `set` (write a field), `new` (a constructor) or `is_assignable` (that one carries `from` and `to` instead).
+- `type` is what your answer must be, using the letters above. `V` means just `{"cmd":"answer"}`.
+- `args` are written the same way as values. For `set`, the value being written is in `args`.
+
 ## What it does and doesn't support
 
 Supported:
@@ -118,7 +250,8 @@ A dependency missing from rootfs (such as `libEGL.so`) only prints a warning. If
 
 ## Directories
 
-- `src/`: the emulator
+- `src/`: the emulator, and the `minidbg` command (`main.rs`, `serve.rs`)
+- `examples/ts/`: using the command from TypeScript
 - `rootfs/lib/`, `rootfs/lib64/`: Android 6.0 system libraries (32-bit and 64-bit), from unidbg
 - `tests/`: tests, including one per sample, checked byte for byte against unidbg
 - `bench/`: the unidbg comparison program and script

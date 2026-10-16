@@ -276,6 +276,16 @@ impl Emulator {
         self.write_pointer(self.jni.vm, table)?;
         Ok(())
     }
+    pub fn registered_natives(&self) -> Vec<(String, String, u64)> {
+        let mut natives: Vec<_> = self
+            .jni
+            .natives
+            .iter()
+            .map(|((class, method), &address)| (class.clone(), method.clone(), address))
+            .collect();
+        natives.sort_unstable_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        natives
+    }
     pub fn call_jni_onload(&mut self, module: Module, handler: &mut dyn JniHandler) -> Result<u64> {
         self.cpu()?;
         let function = self.find_symbol(module, "JNI_OnLoad")?;
@@ -338,11 +348,14 @@ impl Emulator {
     ) -> Result<JniValue> {
         let old_scope = self.jni.scope;
         self.jni.scope = old_scope.max(1) + 1;
-        let sp = self.place_arguments(args.iter().map(|&value| (value.kind(), value.bits())))?;
         let result = self
-            .run(function, handler)
-            .and_then(|_| Ok(decode(kind, self.result_bits(kind)?)));
-        self.set_sp(sp)?;
+            .invoke(
+                function,
+                args.iter().map(|&value| (value.kind(), value.bits())),
+                kind,
+                handler,
+            )
+            .map(|bits| decode(kind, bits));
         if let Ok(JniValue::Object(handle)) = result
             && let Some(reference) = self.jni.objects.get_mut(&handle)
         {
@@ -359,7 +372,7 @@ impl Emulator {
         let function = (0..self.modules.len())
             .find_map(|i| self.local_symbol(Module(i), name))
             .ok_or_else(|| format!("JNI buffer requires {name}: no loaded library exports it"))?;
-        self.nested_call(function, &[argument])
+        self.call_function(function, &[argument])
     }
     fn jni_buffer(&mut self, bytes: &[u8]) -> Result<u64> {
         let ptr = self.jni_allocator("malloc", bytes.len() as u64)?;
