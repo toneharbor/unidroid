@@ -1,5 +1,10 @@
 use crate::{Emulator, HostFunction, Module, RETURN, Reg, Result};
-use std::{any::Any, cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    any::Any,
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub enum PrimitiveType {
@@ -44,11 +49,15 @@ const ARRAY_TYPES: [PrimitiveType; 8] = [
     PrimitiveType::Float,
     PrimitiveType::Double,
 ];
+#[allow(clippy::enum_variant_names)]
 enum Object {
     Class(String),
     String(Vec<u16>),
     Array(PrimitiveType, Vec<u8>),
     User(String, Rc<dyn Any>),
+    ObjectArray(Vec<Option<Rc<RefCell<Object>>>>, String),
+    DirectBuffer(u64, i64),
+    Exception(String, Option<String>),
 }
 struct Reference {
     object: Rc<RefCell<Object>>,
@@ -73,25 +82,23 @@ pub(crate) struct JniState {
     vm: u64,
     buffers: HashMap<u64, usize>,
     free_buffers: Vec<(u64, usize)>,
+    weak: HashSet<Handle>,
+    pending: Option<Handle>,
 }
 
 impl Emulator {
-    fn insert_object(&mut self, object: Object) -> Handle {
+    fn insert_ref(&mut self, object: Rc<RefCell<Object>>, scope: usize) -> Handle {
         self.jni.next_handle += 1;
         let handle = Handle(self.jni.next_handle);
-        self.jni.objects.insert(
-            handle,
-            Reference {
-                object: Rc::new(RefCell::new(object)),
-                scope: self.jni.scope,
-            },
-        );
+        self.jni.objects.insert(handle, Reference { object, scope });
         handle
     }
+    fn insert_object(&mut self, object: Object) -> Handle {
+        let scope = self.jni.scope;
+        self.insert_ref(Rc::new(RefCell::new(object)), scope)
+    }
     fn insert_api_object(&mut self, object: Object) -> Handle {
-        let handle = self.insert_object(object);
-        self.jni.objects.get_mut(&handle).unwrap().scope = 0;
-        handle
+        self.insert_ref(Rc::new(RefCell::new(object)), 0)
     }
     fn object(&self, handle: Handle) -> Rc<RefCell<Object>> {
         self.jni.objects[&handle].object.clone()
@@ -147,6 +154,85 @@ impl Emulator {
     pub fn new_object<T: Any>(&mut self, class: &str, value: T) -> Handle {
         self.insert_api_object(Object::User(class.into(), Rc::new(value)))
     }
+    pub fn new_object_array(&mut self, class: &str, values: &[Handle]) -> Handle {
+        let values = values
+            .iter()
+            .map(|handle| (handle.0 != 0).then(|| self.object(*handle)))
+            .collect();
+        self.insert_api_object(Object::ObjectArray(values, class.into()))
+    }
+    pub fn object_array(&mut self, handle: Handle) -> Vec<Handle> {
+        let values = match &*self.object(handle).borrow() {
+            Object::ObjectArray(values, _) => values.clone(),
+            _ => panic!(),
+        };
+        values
+            .into_iter()
+            .map(|object| object.map_or(Handle(0), |object| self.insert_ref(object, 0)))
+            .collect()
+    }
+    fn reference_error(&self, function: &str, handle: u64) -> Box<dyn std::error::Error> {
+        format!(
+            "invalid JNI reference 0x{handle:x} in {function} from {}",
+            self.location(self.uc.reg_read(Reg::LR).unwrap_or(0))
+        )
+        .into()
+    }
+    fn require_object(&self, function: &str, handle: u64) -> Result<Rc<RefCell<Object>>> {
+        if handle == 0 {
+            return Err(self.reference_error(function, handle));
+        }
+        self.jni
+            .objects
+            .get(&Handle(handle))
+            .map(|reference| reference.object.clone())
+            .ok_or_else(|| self.reference_error(function, handle))
+    }
+    fn require_member(&self, function: &str, id: u64) -> Result<Member> {
+        if id < 0x100000000 {
+            return Err(format!(
+                "invalid JNI id 0x{id:x} in {function} from {}",
+                self.location(self.uc.reg_read(Reg::LR).unwrap_or(0))
+            )
+            .into());
+        }
+        self.jni
+            .members
+            .get((id - 0x100000000) as usize)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "invalid JNI id 0x{id:x} in {function} from {}",
+                    self.location(self.uc.reg_read(Reg::LR).unwrap_or(0))
+                )
+                .into()
+            })
+    }
+    fn pending_exception(&mut self, class: &str, message: Option<String>) {
+        if let Some(old) = self.jni.pending.take() {
+            self.release(old);
+        }
+        let handle = self.insert_object(Object::Exception(class.into(), message));
+        self.jni.objects.get_mut(&handle).unwrap().scope = 0;
+        self.jni.pending = Some(handle);
+    }
+    fn exception_result(&mut self) -> Result<()> {
+        let Some(handle) = self.jni.pending.take() else {
+            return Ok(());
+        };
+        let object = self.object(handle);
+        let (class, message) = match &*object.borrow() {
+            Object::Exception(class, message) => (class.clone(), message.clone()),
+            _ => ("java/lang/Throwable".into(), None),
+        };
+        self.release(handle);
+        Err(match message {
+            Some(message) => format!("java exception thrown by native code: {class}: {message}"),
+            None => format!("java exception thrown by native code: {class}"),
+        }
+        .into())
+    }
+
     pub fn user_value<T: Any>(&self, handle: Handle) -> Option<Rc<T>> {
         match &*self.object(handle).borrow() {
             Object::User(_, v) => v.clone().downcast().ok(),
@@ -158,6 +244,9 @@ impl Emulator {
             Object::Class(name) | Object::User(name, _) => name.clone(),
             Object::String(_) => "java/lang/String".into(),
             Object::Array(kind, _) => kind.signature().into(),
+            Object::ObjectArray(_, class) => format!("[L{class};"),
+            Object::DirectBuffer(_, _) => "java/nio/ByteBuffer".into(),
+            Object::Exception(class, _) => class.clone(),
         }
     }
     fn alias(&mut self, handle: Handle, scope: usize) -> Handle {
@@ -165,10 +254,7 @@ impl Emulator {
             return handle;
         }
         let object = self.object(handle);
-        self.jni.next_handle += 1;
-        let handle = Handle(self.jni.next_handle);
-        self.jni.objects.insert(handle, Reference { object, scope });
-        handle
+        self.insert_ref(object, scope)
     }
     pub(crate) fn setup_jni(&mut self) -> Result<()> {
         let table = self.malloc(233 * 8)?;
@@ -286,6 +372,7 @@ impl Emulator {
             .objects
             .retain(|_, reference| reference.scope <= old_scope.max(1));
         self.jni.scope = old_scope;
+        self.exception_result()?;
         result
     }
     fn scratch(&mut self, bytes: &[u8]) -> Result<u64> {
@@ -320,6 +407,43 @@ impl Emulator {
             self.location(self.uc.reg_read(Reg::LR).unwrap_or(0))
         )
         .into()
+    }
+    fn unsupported_jni(&self, name: &str) -> Box<dyn std::error::Error> {
+        format!(
+            "unsupported JNIEnv function {name} from {}",
+            self.location(self.uc.reg_read(Reg::LR).unwrap_or(0))
+        )
+        .into()
+    }
+    fn unsupported_vm(&self, name: &str) -> Box<dyn std::error::Error> {
+        format!(
+            "unsupported JavaVM function {name} from {}",
+            self.location(self.uc.reg_read(Reg::LR).unwrap_or(0))
+        )
+        .into()
+    }
+    fn validate_ref(&self, function: &str, handle: u64, kind: u8) -> Result<()> {
+        if handle == 0 && kind == 6 {
+            return Ok(());
+        }
+        if handle == 0 {
+            return Err(self.reference_error(function, handle));
+        }
+        let object = self.require_object(function, handle)?;
+        let valid = matches!(
+            (&*object.borrow(), kind),
+            (_, 0 | 6)
+                | (Object::Class(_), 1)
+                | (Object::String(_), 2)
+                | (Object::Array(_, _), 3)
+                | (Object::ObjectArray(_, _), 4)
+                | (Object::Array(_, _) | Object::ObjectArray(_, _), 5)
+        );
+        if valid {
+            Ok(())
+        } else {
+            Err(self.reference_error(function, handle))
+        }
     }
     fn jni_arguments(
         &self,
@@ -391,6 +515,52 @@ impl Emulator {
         let a = self.reg(1)?;
         let b = self.reg(2)?;
         let c = self.reg(3)?;
+        // The kind of reference each function takes as its first argument.
+        // NewStringUTF, NewDirectByteBuffer and GetObjectRefType take a
+        // pointer or any value there, so they are not checked.
+        let kind = match index {
+            21..=25 | 226 | 227 => Some(6),
+            164..=166 | 168..=170 | 220 | 221 | 224 | 225 => Some(2),
+            171 => Some(5),
+            183..=214 | 222 | 223 => Some(3),
+            27..=30 | 33 | 94 | 113..=162 | 215 | 216 => Some(1),
+            31 | 32 | 34..=93 | 95..=112 | 230 | 231 => Some(0),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            self.validate_ref(&function, a, kind)?;
+        }
+        if index == 11 {
+            self.validate_ref(&function, a, 1)?;
+            self.validate_ref(&function, b, 1)?;
+        }
+        if index == 13 {
+            self.validate_ref(&function, a, 0)?;
+        }
+        if index == 14 {
+            self.validate_ref(&function, a, 1)?;
+        }
+        if index == 32 {
+            self.validate_ref(&function, b, 1)?;
+        }
+        if index == 172 {
+            self.validate_ref(&function, b, 1)?;
+            if c != 0 {
+                self.validate_ref(&function, c, 0)?;
+            }
+        }
+        if matches!(index, 173 | 174) {
+            self.validate_ref(&function, a, 4)?;
+        }
+        if index == 174 && c != 0 {
+            self.validate_ref(&function, c, 0)?;
+        }
+        if index == 24 {
+            self.validate_ref(&function, b, 6)?;
+        }
+        if matches!(index, 226 | 227) {
+            self.validate_ref(&function, a, 6)?;
+        }
         if self.verbose && !matches!(index,28..=30 | 34..=93 | 95..=112 | 114..=143 | 145..=162) {
             let details = match index {
                 6 | 167 => self.cstring(a)?,
@@ -412,13 +582,139 @@ impl Emulator {
             );
         }
         match index {
+            5 => Err(self.unsupported_jni("DefineClass")),
+            7 => Err(self.unsupported_jni("FromReflectedMethod")),
+            8 => Err(self.unsupported_jni("FromReflectedField")),
+            9 => Err(self.unsupported_jni("ToReflectedMethod")),
+            10 => Err(self.unsupported_jni("GetSuperclass")),
+            12 => Err(self.unsupported_jni("ToReflectedField")),
+            11 | 32 => {
+                let from = self.class_name(Handle(a));
+                let to = self.class_name(Handle(b));
+                Ok(if from == to || to == "java/lang/Object" {
+                    1
+                } else {
+                    handler
+                        .is_assignable(self, &from, &to)
+                        .ok_or_else(|| self.jni_error(&function, &from, &to, ""))?
+                        as u64
+                })
+            }
+            13 => {
+                if self.jni.objects.contains_key(&Handle(a)) {
+                    self.jni.pending = Some(self.alias(Handle(a), 0));
+                    Ok(0)
+                } else {
+                    Err(self.reference_error(&function, a))
+                }
+            }
+            14 => {
+                let class = self.class_name(Handle(a));
+                self.pending_exception(&class, Some(self.cstring(b)?));
+                Ok(0)
+            }
+            15 => Ok(self
+                .jni
+                .pending
+                .map(|handle| self.alias(handle, self.jni.scope).0)
+                .unwrap_or(0)),
+            16 => Ok(0),
+            17 => {
+                if let Some(handle) = self.jni.pending.take() {
+                    self.release(handle);
+                }
+                Ok(0)
+            }
+            18 => Err(format!(
+                "FatalError from native code: {} at {}",
+                self.cstring(a)?,
+                self.location(self.uc.reg_read(Reg::LR)?)
+            )
+            .into()),
+            27 => Ok(self
+                .insert_object(Object::User(self.class_name(Handle(a)), Rc::new(())))
+                .0),
+            217 | 218 => {
+                self.validate_ref(&function, a, 0)?;
+                Ok(0)
+            }
+            226 => {
+                if a == 0 {
+                    return Ok(0);
+                }
+                let handle = self.alias(Handle(a), 1);
+                self.jni.weak.insert(handle);
+                Ok(handle.0)
+            }
+            227 => {
+                self.jni.weak.remove(&Handle(a));
+                self.release(Handle(a));
+                Ok(0)
+            }
+            228 => Ok(if self.jni.pending.is_some() { 1 } else { 0 }),
+            172 => {
+                let length = a as i64;
+                if length < 0 {
+                    self.pending_exception("java/lang/NegativeArraySizeException", None);
+                    Ok(0)
+                } else {
+                    let initial = (c != 0).then(|| self.object(Handle(c)));
+                    let class = self.class_name(Handle(b));
+                    Ok(self
+                        .insert_object(Object::ObjectArray(vec![initial; length as usize], class))
+                        .0)
+                }
+            }
+            173 => {
+                let object = self.require_object(&function, a)?;
+                let value = {
+                    let Object::ObjectArray(values, _) = &*object.borrow() else {
+                        return Err(self.reference_error(&function, a));
+                    };
+                    let index = b as i64;
+                    if index < 0 || index as usize >= values.len() {
+                        self.pending_exception("java/lang/ArrayIndexOutOfBoundsException", None);
+                        return Ok(0);
+                    }
+                    values[index as usize].clone()
+                };
+                Ok(value.map_or(0, |object| self.insert_ref(object, self.jni.scope).0))
+            }
+            174 => {
+                let value = (c != 0).then(|| self.object(Handle(c)));
+                let object = self.require_object(&function, a)?;
+                let Object::ObjectArray(values, _) = &mut *object.borrow_mut() else {
+                    return Err(self.reference_error(&function, a));
+                };
+                let index = b as i64;
+                if index < 0 || index as usize >= values.len() {
+                    self.pending_exception("java/lang/ArrayIndexOutOfBoundsException", None);
+                } else {
+                    values[index as usize] = value;
+                }
+                Ok(0)
+            }
+            229 => Ok(self.insert_object(Object::DirectBuffer(a, b as i64)).0),
+            230 => {
+                let object = self.require_object(&function, a)?;
+                let Object::DirectBuffer(ptr, _) = *object.borrow() else {
+                    return Err(self.reference_error(&function, a));
+                };
+                Ok(ptr)
+            }
+            231 => {
+                let object = self.require_object(&function, a)?;
+                let Object::DirectBuffer(_, capacity) = *object.borrow() else {
+                    return Err(self.reference_error(&function, a));
+                };
+                Ok(capacity as u64)
+            }
             4 => Ok(0x10006),
             6 => {
                 let name = self.cstring(a)?;
                 Ok(self.find_class(&name, self.jni.scope).0)
             }
-            15 | 228 => Ok(0),
-            17 | 26 => Ok(0),
+            26 => Ok(0),
             19 => {
                 self.jni.scope += 1;
                 Ok(0)
@@ -510,7 +806,7 @@ impl Emulator {
                 let constructor = (28..=30).contains(&index);
                 let nonvirtual = (64..=93).contains(&index);
                 let member_id = if nonvirtual { c } else { b };
-                let member = self.jni.members[(member_id - 0x100000000) as usize].clone();
+                let member = self.require_member(&function, member_id)?;
                 let (operation, kind, variant) = match index {
                     28..=30 => (6, 0, index - 28),
                     34..=63 => (0, (index - 34) / 3, (index - 34) % 3),
@@ -592,7 +888,12 @@ impl Emulator {
                 Ok(value.bits())
             }
             163 => {
-                let bytes = self.read_bytes(a, b as usize * 2)?;
+                let length = b as i64;
+                if length < 0 {
+                    self.pending_exception("java/lang/NegativeArraySizeException", None);
+                    return Ok(0);
+                }
+                let bytes = self.read_bytes(a, length as usize * 2)?;
                 Ok(self
                     .insert_object(Object::String(
                         bytes
@@ -656,17 +957,24 @@ impl Emulator {
                 Ok(modified_utf8(value).len() as u64)
             }
             171 => {
-                let object = self.object(Handle(a));
-                let Object::Array(kind, bytes) = &*object.borrow() else {
-                    unreachable!()
-                };
-                Ok((bytes.len() / kind.size()) as u64)
+                let object = self.require_object(&function, a)?;
+                match &*object.borrow() {
+                    Object::Array(kind, bytes) => Ok((bytes.len() / kind.size()) as u64),
+                    Object::ObjectArray(values, _) => Ok(values.len() as u64),
+                    _ => Err(self.reference_error(&function, a)),
+                }
             }
             175..=182 => {
-                let kind = ARRAY_TYPES[index - 175];
-                Ok(self
-                    .insert_object(Object::Array(kind, vec![0; a as usize * kind.size()]))
-                    .0)
+                let length = a as i64;
+                if length < 0 {
+                    self.pending_exception("java/lang/NegativeArraySizeException", None);
+                    Ok(0)
+                } else {
+                    let kind = ARRAY_TYPES[index - 175];
+                    Ok(self
+                        .insert_object(Object::Array(kind, vec![0; length as usize * kind.size()]))
+                        .0)
+                }
             }
             183..=190 | 222 => {
                 let bytes = self.primitive_array(Handle(a));
@@ -690,14 +998,27 @@ impl Emulator {
                 Ok(0)
             }
             199..=214 => {
-                let object = self.object(Handle(a));
+                let object = self.require_object(&function, a)?;
+                let (width, total) = match &*object.borrow() {
+                    Object::Array(kind, bytes) => (*kind as PrimitiveType, bytes.len()),
+                    _ => return Err(self.reference_error(&function, a)),
+                };
+                let start = b as i64;
+                let count = c as i64;
+                if start < 0
+                    || count < 0
+                    || (start as usize).saturating_add(count as usize) * width.size() > total
+                {
+                    self.pending_exception("java/lang/ArrayIndexOutOfBoundsException", None);
+                    return Ok(0);
+                }
+                let start = start as usize * width.size();
+                let length = count as usize * width.size();
+                let ptr = self.reg(4)?;
                 let mut object = object.borrow_mut();
-                let Object::Array(kind, bytes) = &mut *object else {
+                let Object::Array(_, bytes) = &mut *object else {
                     unreachable!()
                 };
-                let start = b as usize * kind.size();
-                let length = c as usize * kind.size();
-                let ptr = self.reg(4)?;
                 if index < 207 {
                     self.write_bytes(ptr, &bytes[start..start + length])?;
                 } else {
@@ -728,11 +1049,20 @@ impl Emulator {
                 Ok(0)
             }
             220 | 221 => {
-                let object = self.object(Handle(a));
+                let object = self.require_object(&function, a)?;
                 let Object::String(value) = &*object.borrow() else {
-                    unreachable!()
+                    return Err(self.reference_error(&function, a));
                 };
-                let units = &value[b as usize..(b + c) as usize];
+                let start = b as i64;
+                let length = c as i64;
+                if start < 0
+                    || length < 0
+                    || (start as usize).saturating_add(length as usize) > value.len()
+                {
+                    self.pending_exception("java/lang/StringIndexOutOfBoundsException", None);
+                    return Ok(0);
+                }
+                let units = &value[start as usize..start as usize + length as usize];
                 let bytes = if index == 221 {
                     modified_utf8(units)
                 } else {
@@ -741,36 +1071,27 @@ impl Emulator {
                 self.write_bytes(self.reg(4)?, &bytes)?;
                 Ok(0)
             }
-            232 => Ok(self
-                .jni
-                .objects
-                .get(&Handle(a))
-                .map_or(0, |v| if v.scope == 1 { 2 } else { 1 })),
+            232 => Ok(self.jni.objects.get(&Handle(a)).map_or(0, |v| {
+                if self.jni.weak.contains(&Handle(a)) {
+                    3
+                } else if v.scope == 1 {
+                    2
+                } else {
+                    1
+                }
+            })),
             _ => Err(self.jni_error(&function, "JNIEnv", "", "")),
         }
     }
     pub(crate) fn vm_function(&mut self, index: usize) -> Result<u64> {
         match index {
+            3 => Err(self.unsupported_vm("DestroyJavaVM")),
             4 | 6 | 7 => {
                 self.write_u64(self.reg(1)?, self.jni.env)?;
                 Ok(0)
             }
             5 => Ok(0),
-            _ => Err(self.jni_error(
-                [
-                    "reserved0",
-                    "reserved1",
-                    "reserved2",
-                    "DestroyJavaVM",
-                    "AttachCurrentThread",
-                    "DetachCurrentThread",
-                    "GetEnv",
-                    "AttachCurrentThreadAsDaemon",
-                ][index],
-                "JavaVM",
-                "",
-                "",
-            )),
+            _ => Err(self.unsupported_vm("reserved")),
         }
     }
 }
@@ -1044,6 +1365,9 @@ pub struct JniCall<'a> {
 }
 
 pub trait JniHandler {
+    fn is_assignable(&mut self, _emu: &mut Emulator, _from: &str, _to: &str) -> Option<bool> {
+        None
+    }
     fn new_object(&mut self, _emu: &mut Emulator, _call: &JniCall<'_>) -> Option<Handle> {
         None
     }
@@ -1488,6 +1812,35 @@ mod tests {
     }
 
     #[test]
+    fn functions_taking_pointers_or_array_references_are_not_rejected() -> Result<()> {
+        let mut emu = Emulator::builder().build()?;
+        let table = emu.read_u64(emu.jni.env)?;
+        let text = emu.new_cstring("hello")?;
+        let string = emu.call_function(emu.read_u64(table + 167 * 8)?, &[emu.jni.env, text])?;
+        assert_eq!(emu.string(Handle(string)), "hello");
+        let array = emu.new_byte_array(&[1, 2, 3]);
+        let ptr = emu.call_function(emu.read_u64(table + 222 * 8)?, &[emu.jni.env, array.0, 0])?;
+        emu.write_bytes(ptr, &[9])?;
+        emu.call_function(
+            emu.read_u64(table + 223 * 8)?,
+            &[emu.jni.env, array.0, ptr, 0],
+        )?;
+        assert_eq!(emu.byte_array(array), [9, 2, 3]);
+        let memory = emu.malloc(16)?;
+        let buffer =
+            emu.call_function(emu.read_u64(table + 229 * 8)?, &[emu.jni.env, memory, 16])?;
+        assert_eq!(
+            emu.call_function(emu.read_u64(table + 230 * 8)?, &[emu.jni.env, buffer])?,
+            memory
+        );
+        assert_eq!(
+            emu.call_function(emu.read_u64(table + 231 * 8)?, &[emu.jni.env, buffer])?,
+            16
+        );
+        Ok(())
+    }
+
+    #[test]
     fn class_identity_survives_local_reference_cleanup() -> Result<()> {
         let mut emu = Emulator::builder().build()?;
         emu.jni.scope = 2;
@@ -1539,6 +1892,78 @@ mod tests {
         let expected = [0xc0, 0x80, 0x41, 0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80];
         assert_eq!(modified_utf8(&units), expected);
         assert_eq!(decode_modified_utf8(&expected), units);
+    }
+
+    #[test]
+    fn object_arrays_exceptions_and_bad_ids_are_safe() -> Result<()> {
+        let mut emu = Emulator::builder().build()?;
+        let table = emu.read_u64(emu.jni.env)?;
+        let class = emu.class("java/lang/String");
+        let initial = emu.new_string("x");
+        let array = emu.call_function(
+            emu.read_u64(table + 172 * 8)?,
+            &[emu.jni.env, 3, class.0, initial.0],
+        )?;
+        assert_eq!(
+            emu.call_function(emu.read_u64(table + 171 * 8)?, &[emu.jni.env, array])?,
+            3
+        );
+        let second = emu.new_string("y");
+        emu.call_function(
+            emu.read_u64(table + 174 * 8)?,
+            &[emu.jni.env, array, 1, second.0],
+        )?;
+        let element =
+            emu.call_function(emu.read_u64(table + 173 * 8)?, &[emu.jni.env, array, 1])?;
+        assert_eq!(emu.string(Handle(element)), "y");
+        let throw_new = emu.read_u64(table + 14 * 8)?;
+        let message = emu.new_cstring("bad input")?;
+        assert_eq!(
+            emu.call_function(throw_new, &[emu.jni.env, class.0, message])?,
+            0
+        );
+        assert_eq!(
+            emu.call_function(emu.read_u64(table + 228 * 8)?, &[emu.jni.env])?,
+            1
+        );
+        let exception = emu.call_function(emu.read_u64(table + 15 * 8)?, &[emu.jni.env])?;
+        assert_ne!(exception, 0);
+        emu.call_function(emu.read_u64(table + 17 * 8)?, &[emu.jni.env])?;
+        assert_eq!(
+            emu.call_function(emu.read_u64(table + 228 * 8)?, &[emu.jni.env])?,
+            0
+        );
+        let invalid = emu
+            .call_function(emu.read_u64(table + 171 * 8)?, &[emu.jni.env, 0])
+            .unwrap_err()
+            .to_string();
+        assert!(invalid.starts_with("invalid JNI reference 0x0 in GetArrayLength"));
+        let invalid_id = emu
+            .call_function(
+                emu.read_u64(table + 141 * 8)?,
+                &[emu.jni.env, class.0, 0x1234],
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(invalid_id.starts_with("invalid JNI id 0x1234 in CallStaticVoidMethod"));
+        let weak = emu.call_function(emu.read_u64(table + 226 * 8)?, &[emu.jni.env, class.0])?;
+        assert_eq!(
+            emu.call_function(emu.read_u64(table + 232 * 8)?, &[emu.jni.env, weak])?,
+            3
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_jni_functions_have_stable_errors() -> Result<()> {
+        let mut emu = Emulator::builder().build()?;
+        let table = emu.read_u64(emu.jni.env)?;
+        let error = emu
+            .call_function(emu.read_u64(table + 5 * 8)?, &[emu.jni.env, 0, 0, 0])
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with("unsupported JNIEnv function DefineClass"));
+        Ok(())
     }
 
     #[test]

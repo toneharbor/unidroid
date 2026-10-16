@@ -18,7 +18,11 @@ use unicorn_engine::{
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const PAGE: u64 = 4096;
 const TRAMPOLINE: u64 = 0x10000;
-const RETURN: u64 = TRAMPOLINE + PAGE;
+const TRAMPOLINE_SIZE: u64 = 0x10000;
+const TRAMPOLINE_STUBS: usize = 8192;
+const RETURN: u64 = TRAMPOLINE + TRAMPOLINE_SIZE;
+pub(crate) const MMAP_START: u64 = 0x50000000;
+pub(crate) const MMAP_END: u64 = 0x60000000;
 const STACK: u64 = 0x70000000;
 const STACK_SIZE: u64 = 0x200000;
 const INITIAL_SP: u64 = STACK + STACK_SIZE - 0x10000;
@@ -39,6 +43,8 @@ struct Loaded {
     dependencies: Vec<Module>,
     relocated: bool,
     initialized: bool,
+    path_ptr: u64,
+    info_ptr: u64,
     dl_references: usize,
 }
 #[derive(Clone)]
@@ -102,11 +108,16 @@ pub struct Emulator {
     next_module: u64,
     heap: u64,
     heap_end: u64,
-    next_mmap: u64,
     brk: u64,
+    free_blocks: Vec<(u64, u64)>,
+    allocations: HashMap<u64, u64>,
+    heap_high_water: u64,
+    process_name: String,
+    dlerror_buf: u64,
+    dlerror_pending: bool,
+    dlerror_capacity: usize,
     files: HashMap<u64, File>,
     next_fd: u64,
-    dlerror: u64,
     jni: jni::JniState,
 }
 impl Emulator {
@@ -137,7 +148,8 @@ impl Emulator {
             *uc.get_data_mut() = Some(interrupt);
             let _ = uc.emu_stop();
         })?;
-        uc.mem_map(TRAMPOLINE, PAGE, Prot::READ | Prot::EXEC)?;
+        uc.mem_map(TRAMPOLINE, TRAMPOLINE_SIZE, Prot::READ | Prot::EXEC)?;
+        uc.mem_map(RETURN, PAGE, Prot::READ | Prot::EXEC)?;
         uc.mem_map(STACK, STACK_SIZE, Prot::READ | Prot::WRITE)?;
         let mut emu = Self {
             uc,
@@ -151,11 +163,16 @@ impl Emulator {
             next_module: 0x10000000,
             heap: 0x40000000,
             heap_end: 0x40000000,
-            next_mmap: 0x50000000,
             brk: BRK_START,
+            free_blocks: Vec::new(),
+            allocations: HashMap::new(),
+            heap_high_water: 0x40000000,
+            process_name: builder.process_name.clone(),
+            dlerror_buf: 0,
+            dlerror_pending: false,
+            dlerror_capacity: 256,
             files: HashMap::new(),
             next_fd: 3,
-            dlerror: 0,
             jni: jni::JniState::default(),
         };
         emu.setup_tls(&builder.process_name)?;
@@ -174,6 +191,7 @@ impl Emulator {
             emu.overrides.insert(name.into(), address);
         }
         emu.setup_jni()?;
+        emu.dlerror_buf = emu.malloc(emu.dlerror_capacity)?;
         Ok(emu)
     }
     fn setup_tls(&mut self, process: &str) -> Result<()> {
@@ -218,10 +236,12 @@ impl Emulator {
         Ok(())
     }
     fn stub(&mut self, function: HostFunction) -> Result<u64> {
-        let address = TRAMPOLINE + self.host.len() as u64 * 8;
-        if address + 8 > RETURN {
-            return Err(uc_error::NOMEM.into());
+        if self.host.len() >= TRAMPOLINE_STUBS {
+            return Err(
+                "trampoline area full: more than 8192 host functions and unresolved symbols".into(),
+            );
         }
+        let address = TRAMPOLINE + self.host.len() as u64 * 8;
         self.write_bytes(address, &[1, 0, 0, 0xd4, 0xc0, 3, 0x5f, 0xd6])?;
         self.host.push(function);
         Ok(address)
@@ -279,6 +299,16 @@ impl Emulator {
             });
         }
         let id = Module(self.modules.len());
+        let path_ptr = self.new_cstring(&path.to_string_lossy())?;
+        let info_ptr = self.malloc(32)?;
+        let first = &image.segments[0];
+        self.write_u64(info_ptr, base)?;
+        self.write_u64(info_ptr + 8, path_ptr)?;
+        self.write_u64(
+            info_ptr + 16,
+            base + first.p_vaddr - first.p_offset + image.phoff,
+        )?;
+        self.write_u64(info_ptr + 24, image.phnum as u64)?;
         self.modules.push(Loaded {
             name: name.clone(),
             image: image.clone(),
@@ -286,6 +316,8 @@ impl Emulator {
             dependencies: Vec::new(),
             relocated: false,
             initialized: false,
+            path_ptr,
+            info_ptr,
             dl_references: 0,
         });
         for needed in &image.needed {
@@ -302,18 +334,16 @@ impl Emulator {
         Ok(id)
     }
     fn local_symbol(&self, module: Module, name: &str) -> Option<u64> {
+        if let Some(value) = self.overrides.get(name) {
+            return Some(*value);
+        }
         let m = &self.modules[module.0];
         let symbol = &m.image.symbols[*m.image.exports.get(name)?];
-        Some(
-            self.overrides
-                .get(name)
-                .copied()
-                .unwrap_or(if symbol.absolute {
-                    symbol.value
-                } else {
-                    m.base + symbol.value
-                }),
-        )
+        Some(if symbol.absolute {
+            symbol.value
+        } else {
+            m.base + symbol.value
+        })
     }
     fn search_symbol(&self, module: Module, name: &str, visited: &mut Vec<Module>) -> Option<u64> {
         if visited.contains(&module) {
@@ -359,6 +389,8 @@ impl Emulator {
                     (0..self.modules.len()).find_map(|i| self.local_symbol(Module(i), &symbol.name))
                 {
                     value
+                } else if symbol.binding == 2 {
+                    0
                 } else if let Some(value) = unresolved.get(&symbol.name) {
                     *value
                 } else {
@@ -373,7 +405,13 @@ impl Emulator {
             .wrapping_add_signed(relocation.addend);
             match kind {
                 257 | 1025..=1027 => self.write_u64(base + relocation.offset, value)?,
-                _ => return Err(uc_error::ARG.into()),
+                _ => {
+                    return Err(format!(
+                        "unsupported relocation type {kind} in {} at offset 0x{:x}",
+                        self.modules[module.0].name, relocation.offset
+                    )
+                    .into());
+                }
             }
         }
         self.modules[module.0].relocated = true;
@@ -401,16 +439,77 @@ impl Emulator {
         Ok(())
     }
     pub fn malloc(&mut self, size: usize) -> Result<u64> {
-        let address = self.heap;
-        self.heap += (size.max(1) as u64 + 15) & !15;
-        if self.heap > self.heap_end {
-            let end = page_up(self.heap);
-            self.uc
-                .mem_map(self.heap_end, end - self.heap_end, Prot::READ | Prot::WRITE)?;
-            self.heap_end = end;
-        }
+        let size = (size.max(1) as u64 + 15) & !15;
+        let address = if let Some(index) = self
+            .free_blocks
+            .iter()
+            .position(|(_, block)| *block >= size)
+        {
+            let (address, block) = self.free_blocks.remove(index);
+            if block > size {
+                self.free_blocks.push((address + size, block - size));
+            }
+            address
+        } else {
+            let address = self.heap;
+            self.heap = self.heap.checked_add(size).ok_or(uc_error::NOMEM)?;
+            if self.heap > self.heap_end {
+                let end = page_up(self.heap);
+                self.uc
+                    .mem_map(self.heap_end, end - self.heap_end, Prot::READ | Prot::WRITE)?;
+                self.heap_end = end;
+            }
+            self.heap_high_water = self.heap_high_water.max(self.heap);
+            address
+        };
+        self.allocations.insert(address, size);
         Ok(address)
     }
+    pub fn free(&mut self, ptr: u64) {
+        let Some(size) = self.allocations.remove(&ptr) else {
+            return;
+        };
+        self.free_blocks.push((ptr, size));
+        self.free_blocks
+            .sort_unstable_by_key(|(address, _)| *address);
+        let mut merged = Vec::with_capacity(self.free_blocks.len());
+        for (address, size) in self.free_blocks.drain(..) {
+            if let Some((last, length)) = merged.last_mut()
+                && *last + *length == address
+            {
+                *length += size;
+                continue;
+            }
+            merged.push((address, size));
+        }
+        self.free_blocks = merged;
+    }
+    pub fn heap_high_water_mark(&self) -> u64 {
+        self.heap_high_water
+    }
+    fn set_dlerror(&mut self, message: &str) -> Result<()> {
+        if self.dlerror_buf == 0 {
+            self.dlerror_buf = self.malloc(self.dlerror_capacity)?;
+        }
+        let bytes = message.as_bytes();
+        let length = bytes.len().min(self.dlerror_capacity.saturating_sub(1));
+        self.write_bytes(self.dlerror_buf, &bytes[..length])?;
+        self.write_bytes(self.dlerror_buf + length as u64, &[0])?;
+        self.dlerror_pending = true;
+        Ok(())
+    }
+    fn dlerror(&mut self) -> u64 {
+        if self.dlerror_pending {
+            self.dlerror_pending = false;
+            self.dlerror_buf
+        } else {
+            0
+        }
+    }
+    fn invalid_handle_error(&mut self, handle: u64) -> Result<()> {
+        self.set_dlerror(&format!("invalid handle: 0x{handle:x}"))
+    }
+
     pub fn new_cstring(&mut self, value: &str) -> Result<u64> {
         let ptr = self.malloc(value.len() + 1)?;
         self.write_bytes(ptr, value.as_bytes())?;
@@ -565,14 +664,23 @@ impl Emulator {
                     return Ok(1);
                 }
                 let path = self.cstring(a)?;
-                let name = Path::new(&path).file_name().unwrap().to_string_lossy();
+                let Some(name) = Path::new(&path).file_name().map(|n| n.to_string_lossy()) else {
+                    self.set_dlerror(&format!("dlopen failed: library \"{path}\" not found"))?;
+                    return Ok(0);
+                };
                 if let Some(i) = self.modules.iter().position(|m| m.name == name) {
                     self.modules[i].dl_references += 1;
                     return Ok(i as u64 + 1);
                 }
-                let path = self.rootfs.join("lib64").join(name.as_ref());
+                // Guest paths resolve inside rootfs, never on the host.
+                let full = self.rootfs.join(path.trim_start_matches('/'));
+                let path = if !path.contains("..") && full.is_file() {
+                    full
+                } else {
+                    self.rootfs.join("lib64").join(name.as_ref())
+                };
                 if !path.is_file() {
-                    self.dlerror = self.new_cstring(&name)?;
+                    self.set_dlerror(&format!("dlopen failed: library \"{name}\" not found"))?;
                     return Ok(0);
                 }
                 let context = self.uc.context_init()?;
@@ -602,7 +710,7 @@ impl Emulator {
                     None
                 };
                 if value.is_none() {
-                    self.dlerror = self.new_cstring(&symbol)?;
+                    self.set_dlerror(&format!("undefined symbol: {symbol}"))?;
                 }
                 Ok(value.unwrap_or(0))
             }
@@ -615,11 +723,11 @@ impl Emulator {
                     self.modules[(a - 1) as usize].dl_references -= 1;
                     Ok(0)
                 } else {
-                    self.dlerror = self.new_cstring(&format!("0x{a:x}"))?;
+                    self.invalid_handle_error(a)?;
                     Ok(u64::MAX)
                 }
             }
-            "dlerror" => Ok(std::mem::take(&mut self.dlerror)),
+            "dlerror" => Ok(self.dlerror()),
             "dladdr" => {
                 let Some(i) = self
                     .modules
@@ -628,41 +736,32 @@ impl Emulator {
                 else {
                     return Ok(0);
                 };
-                let name = self.modules[i].name.clone();
-                let path = self.new_cstring(&name)?;
+                let path = self.modules[i].path_ptr;
                 self.write_u64(b, path)?;
                 self.write_u64(b + 8, self.modules[i].base)?;
                 let symbol = self.modules[i]
                     .image
                     .symbols
                     .iter()
-                    .filter(|s| s.defined && s.value <= a - self.modules[i].base)
-                    .max_by_key(|s| s.value)
-                    .map(|s| (s.name.clone(), s.value));
-                let (name, address) = if let Some((name, value)) = symbol {
-                    (self.new_cstring(&name)?, self.modules[i].base + value)
-                } else {
-                    (0, 0)
-                };
+                    .enumerate()
+                    .filter(|(_, s)| s.defined && s.value <= a - self.modules[i].base)
+                    .max_by_key(|(_, s)| s.value)
+                    .map(|(_, s)| {
+                        (
+                            self.modules[i].base
+                                + self.modules[i].image.dynstr
+                                + s.name_offset as u64,
+                            self.modules[i].base + s.value,
+                        )
+                    });
+                let (name, address) = symbol.unwrap_or((0, 0));
                 self.write_u64(b + 16, name)?;
                 self.write_u64(b + 24, address)?;
                 Ok(1)
             }
             "dl_iterate_phdr" => {
-                let info = self.malloc(32)?;
                 for i in 0..self.modules.len() {
-                    let name = self.modules[i].name.clone();
-                    let name = self.new_cstring(&name)?;
-                    self.write_u64(info, self.modules[i].base)?;
-                    self.write_u64(info + 8, name)?;
-                    let m = &self.modules[i];
-                    let first = &m.image.segments[0];
-                    self.write_u64(
-                        info + 16,
-                        m.base + first.p_vaddr - first.p_offset + m.image.phoff,
-                    )?;
-                    self.write_u64(info + 24, self.modules[i].image.phnum as u64)?;
-                    let result = self.nested_call(a, &[info, 32, b])?;
+                    let result = self.nested_call(a, &[self.modules[i].info_ptr, 32, b])?;
                     if result != 0 {
                         return Ok(result);
                     }

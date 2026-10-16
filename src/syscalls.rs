@@ -1,4 +1,4 @@
-use crate::{Emulator, Prot, Region, Result, page_up};
+use crate::{Emulator, MMAP_END, MMAP_START, Prot, Region, Result, page_up};
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
@@ -106,7 +106,33 @@ impl Emulator {
                 self.write_bytes(if nr == 80 { a[1] } else { a[2] }, &bytes)?;
                 0
             }
-            96 | 172 | 178 => 1234,
+            167 => match a[0] {
+                0x53564d41 => 0,
+                15 => {
+                    let mut bytes = Vec::new();
+                    for i in 0..16 {
+                        let byte = self.read_bytes(a[1] + i, 1).ok().map_or(0, |v| v[0]);
+                        if byte == 0 {
+                            break;
+                        }
+                        bytes.push(byte);
+                    }
+                    self.process_name = String::from_utf8_lossy(&bytes).into_owned();
+                    0
+                }
+                16 => {
+                    let bytes = self.process_name.as_bytes().to_vec();
+                    let length = bytes.len().min(15);
+                    if self.write_bytes(a[1], &bytes[..length]).is_err()
+                        || self.write_bytes(a[1] + length as u64, &[0]).is_err()
+                    {
+                        errno(14)
+                    } else {
+                        0
+                    }
+                }
+                _ => errno(22),
+            },
             98 => match a[1] & 127 {
                 1 | 10 => 0,
                 0 | 9 => errno(11),
@@ -145,40 +171,65 @@ impl Emulator {
             }
             174..=177 => 10000,
             214 => {
-                if a[0] >= crate::BRK_START {
+                if a[0] < crate::BRK_START {
+                    self.brk
+                } else {
                     let old_end = page_up(self.brk);
                     let new_end = page_up(a[0]);
                     if new_end > old_end {
-                        self.uc
-                            .mem_map(old_end, new_end - old_end, Prot::READ | Prot::WRITE)?;
+                        if self
+                            .uc
+                            .mem_map(old_end, new_end - old_end, Prot::READ | Prot::WRITE)
+                            .is_err()
+                        {
+                            return Ok(errno(12));
+                        } else {
+                            self.brk = a[0];
+                            self.brk
+                        }
                     } else if new_end < old_end {
-                        self.unmap(new_end, old_end - new_end)?;
+                        if self.unmap(new_end, old_end - new_end).is_err() {
+                            self.brk
+                        } else {
+                            self.brk = a[0];
+                            self.brk
+                        }
+                    } else {
+                        self.brk = a[0];
+                        self.brk
                     }
-                    self.brk = a[0];
                 }
-                self.brk
             }
             215 => {
-                self.unmap(a[0], page_up(a[1]))?;
-                0
+                if self.unmap(a[0], page_up(a[1])).is_err() {
+                    errno(22)
+                } else {
+                    0
+                }
             }
             222 => {
                 let length = page_up(a[1]);
                 if length == 0 {
                     return Ok(errno(22));
                 }
-                let address = if a[3] & 16 != 0 {
-                    self.unmap(a[0], length)?;
+                let fixed = a[3] & 16 != 0;
+                let address = if fixed {
+                    if self.unmap(a[0], length).is_err() {
+                        return Ok(errno(22));
+                    }
                     a[0]
                 } else {
-                    let address = self.next_mmap;
-                    self.next_mmap += length;
-                    address
+                    match self.lowest_mmap_gap(length) {
+                        Some(address) => address,
+                        None => return Ok(errno(12)),
+                    }
                 };
-                self.uc.mem_map(address, length, Prot(a[2] as u32))?;
+                if self.uc.mem_map(address, length, Prot(a[2] as u32)).is_err() {
+                    return Ok(errno(12));
+                }
                 if a[3] & 32 == 0 {
                     let Some(file) = self.files.get_mut(&a[4]) else {
-                        self.uc.mem_unmap(address, length)?;
+                        let _ = self.uc.mem_unmap(address, length);
                         return Ok(errno(9));
                     };
                     let old = file.stream_position()?;
@@ -186,7 +237,10 @@ impl Emulator {
                     let mut bytes = vec![0; length as usize];
                     let n = file.read(&mut bytes)?;
                     file.seek(SeekFrom::Start(old))?;
-                    self.write_bytes(address, &bytes[..n])?;
+                    if self.write_bytes(address, &bytes[..n]).is_err() {
+                        let _ = self.uc.mem_unmap(address, length);
+                        return Ok(errno(14));
+                    }
                 }
                 self.regions.push(Region {
                     start: address,
@@ -208,6 +262,27 @@ impl Emulator {
             }
         })
     }
+    fn lowest_mmap_gap(&self, length: u64) -> Option<u64> {
+        let mut cursor = crate::MMAP_START;
+        let mut regions = self.uc.mem_regions().ok()?;
+        regions.sort_unstable_by_key(|region| region.begin);
+        for region in regions {
+            if region.end < MMAP_START || region.begin >= MMAP_END {
+                continue;
+            }
+            let begin = region.begin.max(MMAP_START);
+            let end = region.end.saturating_add(1).min(MMAP_END);
+            if begin > cursor && begin - cursor >= length {
+                return Some(cursor);
+            }
+            cursor = cursor.max(end);
+            if cursor + length > MMAP_END {
+                return None;
+            }
+        }
+        (cursor + length <= MMAP_END).then_some(cursor)
+    }
+
     fn open_guest(&self, path: &str) -> std::io::Result<File> {
         if path == "/dev/urandom" || path == "/dev/random" {
             return File::open("/dev/urandom");
@@ -309,6 +384,27 @@ mod tests {
         assert_eq!(emu.syscall(63, [fd, buffer, 16, 0, 0, 0], 0)?, 16);
         drop(emu);
         std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn mmap_reuses_lowest_gap_and_prctl_manages_name() -> Result<()> {
+        let mut emu = Emulator::builder().process_name("service").build()?;
+        let first = emu.syscall(222, [0, 0x3000, 3, 0x22, u64::MAX, 0], 0)?;
+        let second = emu.syscall(222, [0, 0x1000, 3, 0x22, u64::MAX, 0], 0)?;
+        emu.syscall(215, [first, 0x3000, 0, 0, 0, 0], 0)?;
+        assert_eq!(
+            emu.syscall(222, [0, 0x1000, 3, 0x22, u64::MAX, 0], 0)?,
+            first
+        );
+        assert_ne!(second, first);
+        let name = emu.new_cstring("worker-name")?;
+        assert_eq!(emu.syscall(167, [15, name, 0, 0, 0, 0], 0)?, 0);
+        let out = emu.malloc(16)?;
+        assert_eq!(emu.syscall(167, [16, out, 0, 0, 0, 0], 0)?, 0);
+        assert_eq!(emu.read_bytes(out, 12)?, b"worker-name\0");
+        assert_eq!(emu.syscall(167, [0x53564d41, 0, 0, 0, 0, 0], 0)?, 0);
+        assert_eq!(emu.syscall(167, [99, 0, 0, 0, 0, 0], 0)? as i64, -22);
         Ok(())
     }
 

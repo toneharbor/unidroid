@@ -14,6 +14,7 @@ use std::{
 pub(crate) struct Image {
     pub bytes: Mmap,
     pub segments: Vec<ProgramHeader>,
+    pub dynstr: u64,
     pub symbols: Vec<Symbol>,
     pub exports: HashMap<String, usize>,
     pub needed: Vec<String>,
@@ -28,9 +29,11 @@ pub(crate) struct Image {
 
 pub(crate) struct Symbol {
     pub name: String,
+    pub name_offset: usize,
     pub value: u64,
     pub defined: bool,
     pub absolute: bool,
+    pub binding: u8,
 }
 
 impl Image {
@@ -85,9 +88,11 @@ impl Image {
             .iter()
             .map(|s| Symbol {
                 name: elf.dynstrtab.get_at(s.st_name).unwrap_or("").into(),
+                name_offset: s.st_name,
                 value: s.st_value,
                 defined: s.st_shndx != 0,
                 absolute: s.st_shndx == 0xfff1,
+                binding: s.st_bind(),
             })
             .collect();
         let exports = symbols
@@ -109,6 +114,7 @@ impl Image {
             .unwrap();
         let image = Self {
             segments,
+            dynstr: tag(5),
             symbols,
             exports,
             needed: elf.libraries.iter().map(|s| (*s).to_owned()).collect(),

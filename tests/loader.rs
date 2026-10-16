@@ -40,7 +40,7 @@ fn relocation_constructors_bss_and_shared_code_isolation() -> Result<()> {
         assert_eq!(
             error,
             format!(
-                "emulation stopped: Unhandled CPU exception (UC_ERR_EXCEPTION) at {filename}+0x200 (pc=0x{answer:x}, lr=0x11000)"
+                "emulation stopped: Unhandled CPU exception (UC_ERR_EXCEPTION) at {filename}+0x200 (pc=0x{answer:x}, lr=0x20000)"
             )
         );
     }

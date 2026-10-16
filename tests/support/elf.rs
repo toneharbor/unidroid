@@ -54,7 +54,7 @@ impl TestLibrary {
         instruction(&mut bytes, 0x240, 0xd2801c48); // mov x8,#226 (mprotect)
         instruction(&mut bytes, 0x244, 0xd4000001); // svc #0
         instruction(&mut bytes, 0x248, 0xd65f03c0);
-        let names = b"\0answer\0data\0protect\0";
+        let names = b"\0answer\0data\0protect\0weak\0";
         bytes[0x1100..0x1100 + names.len()].copy_from_slice(names);
         for (i, (name, value, info)) in [(1, 0x200, 0x12), (8, 0x1600, 0x11), (13, 0x240, 0x12)]
             .into_iter()
@@ -67,17 +67,22 @@ impl TestLibrary {
             word(&mut bytes, p + 8, value);
             word(&mut bytes, p + 16, 8);
         }
-        // SysV hash: one bucket and four symbols.
+        // SysV hash: one bucket and five symbols.
         instruction(&mut bytes, 0x1300, 1);
-        instruction(&mut bytes, 0x1304, 4);
+        instruction(&mut bytes, 0x1304, 5);
         instruction(&mut bytes, 0x1308, 1);
         instruction(&mut bytes, 0x1310, 2);
         instruction(&mut bytes, 0x1314, 3);
+        let p = 0x1200 + 4 * 24;
+        instruction(&mut bytes, p, names.len() as u32 - 5);
+        bytes[p + 4] = 0x20;
+        word(&mut bytes, p + 16, 8);
         let mut relocs = vec![
             (0x1500, 1027, 0x220),
             (0x1608, (1u64 << 32) | 257, 4),
             (0x1610, (1u64 << 32) | 1025, 0),
             (0x1618, (1u64 << 32) | 1026, 0),
+            (0x1620, (4u64 << 32) | 1025, 0),
         ];
         if relocate_code {
             relocs.push((0x300, 1027, 0x1600));
