@@ -106,4 +106,6 @@ A dependency missing from rootfs (such as `libEGL.so`) only prints a warning. If
 - `tests/`: tests, including one per sample, checked byte for byte against unidbg
 - `bench/`: the unidbg comparison program and script
 
-Credits are in `NOTICE`.
+## License
+
+Apache License 2.0, same as unidbg. See `LICENSE`. Credits are in `NOTICE`.
