@@ -1,0 +1,6 @@
+Find native function Java_com_bytedance_frameworks_core_encrypt_TTEncryptUtils_ttEncrypt => RX@0x12000f19[libttEncrypt.so]0xf19
+JNIEnv->GetByteArrayRegion([B@0x00000000000000000000000000000000, 0, 16, unidbg@0xe4fff700) was called from RX@0x12000f73[libttEncrypt.so]0xf73
+JNIEnv->NewByteArray(22) was called from RX@0x12000f99[libttEncrypt.so]0xf99
+JNIEnv->SetByteArrayRegion([B@0x00000000000000000000000000000000000000000000, 0, 22, unidbg@0xe4fff6e8) was called from RX@0x12000faf[libttEncrypt.so]0xfaf
+ttEncrypt=7463030000019fd0866aa0cbd0323933d2d2fc8c20ec
+instances=1

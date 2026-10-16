@@ -1,0 +1,143 @@
+JNIEnv->FindClass(java/lang/Object) was called from RX@0x12008c4c[libjnidispatch.so]0x8c4c
+JNIEnv->NewGlobalRef(class java/lang/Object) was called from RX@0x12008c6c[libjnidispatch.so]0x8c6c
+JNIEnv->FindClass(java/lang/Class) was called from RX@0x12008c90[libjnidispatch.so]0x8c90
+JNIEnv->NewGlobalRef(class java/lang/Class) was called from RX@0x12008cb0[libjnidispatch.so]0x8cb0
+JNIEnv->FindClass(java/lang/reflect/Method) was called from RX@0x12008cd4[libjnidispatch.so]0x8cd4
+JNIEnv->NewGlobalRef(class java/lang/reflect/Method) was called from RX@0x12008cf4[libjnidispatch.so]0x8cf4
+JNIEnv->FindClass(java/lang/String) was called from RX@0x12008d18[libjnidispatch.so]0x8d18
+JNIEnv->NewGlobalRef(class java/lang/String) was called from RX@0x12008d38[libjnidispatch.so]0x8d38
+JNIEnv->FindClass(java/nio/Buffer) was called from RX@0x12008d5c[libjnidispatch.so]0x8d5c
+JNIEnv->NewGlobalRef(class java/nio/Buffer) was called from RX@0x12008d7c[libjnidispatch.so]0x8d7c
+JNIEnv->FindClass(java/nio/ByteBuffer) was called from RX@0x12008da4[libjnidispatch.so]0x8da4
+JNIEnv->NewGlobalRef(class java/nio/ByteBuffer) was called from RX@0x12008dc8[libjnidispatch.so]0x8dc8
+JNIEnv->FindClass(java/nio/CharBuffer) was called from RX@0x12008dec[libjnidispatch.so]0x8dec
+JNIEnv->NewGlobalRef(class java/nio/CharBuffer) was called from RX@0x12008e0c[libjnidispatch.so]0x8e0c
+JNIEnv->FindClass(java/nio/ShortBuffer) was called from RX@0x12008e30[libjnidispatch.so]0x8e30
+JNIEnv->NewGlobalRef(class java/nio/ShortBuffer) was called from RX@0x12008e50[libjnidispatch.so]0x8e50
+JNIEnv->FindClass(java/nio/IntBuffer) was called from RX@0x12008e74[libjnidispatch.so]0x8e74
+JNIEnv->NewGlobalRef(class java/nio/IntBuffer) was called from RX@0x12008e94[libjnidispatch.so]0x8e94
+JNIEnv->FindClass(java/nio/LongBuffer) was called from RX@0x12008eb8[libjnidispatch.so]0x8eb8
+JNIEnv->NewGlobalRef(class java/nio/LongBuffer) was called from RX@0x12008ed8[libjnidispatch.so]0x8ed8
+JNIEnv->FindClass(java/nio/FloatBuffer) was called from RX@0x12008f00[libjnidispatch.so]0x8f00
+JNIEnv->NewGlobalRef(class java/nio/FloatBuffer) was called from RX@0x12008f24[libjnidispatch.so]0x8f24
+JNIEnv->FindClass(java/nio/DoubleBuffer) was called from RX@0x12008f48[libjnidispatch.so]0x8f48
+JNIEnv->NewGlobalRef(class java/nio/DoubleBuffer) was called from RX@0x12008f68[libjnidispatch.so]0x8f68
+JNIEnv->FindClass(java/lang/Void) was called from RX@0x12008f8c[libjnidispatch.so]0x8f8c
+JNIEnv->NewGlobalRef(class java/lang/Void) was called from RX@0x12008fac[libjnidispatch.so]0x8fac
+JNIEnv->GetStaticFieldID(java/lang/Void.TYPELjava/lang/Class;) => 0xb11da53c was called from RX@0x12008fe8[libjnidispatch.so]0x8fe8
+JNIEnv->GetStaticObjectField(class java/lang/Void, TYPE Ljava/lang/Class; => class void) was called from RX@0x12008ffc[libjnidispatch.so]0x8ffc
+JNIEnv->NewGlobalRef(class void) was called from RX@0x1200901c[libjnidispatch.so]0x901c
+JNIEnv->FindClass(java/lang/Boolean) was called from RX@0x12009040[libjnidispatch.so]0x9040
+JNIEnv->NewGlobalRef(class java/lang/Boolean) was called from RX@0x12009060[libjnidispatch.so]0x9060
+JNIEnv->GetStaticFieldID(java/lang/Boolean.TYPELjava/lang/Class;) => 0x14813f68 was called from RX@0x120090ac[libjnidispatch.so]0x90ac
+JNIEnv->GetStaticObjectField(class java/lang/Boolean, TYPE Ljava/lang/Class; => class boolean) was called from RX@0x120090cc[libjnidispatch.so]0x90cc
+JNIEnv->NewGlobalRef(class boolean) was called from RX@0x120090ec[libjnidispatch.so]0x90ec
+JNIEnv->FindClass(java/lang/Byte) was called from RX@0x12009110[libjnidispatch.so]0x9110
+JNIEnv->NewGlobalRef(class java/lang/Byte) was called from RX@0x12009130[libjnidispatch.so]0x9130
+JNIEnv->GetStaticFieldID(java/lang/Byte.TYPELjava/lang/Class;) => 0xb67a98b0 was called from RX@0x12009168[libjnidispatch.so]0x9168
+JNIEnv->GetStaticObjectField(class java/lang/Byte, TYPE Ljava/lang/Class; => class byte) was called from RX@0x12009180[libjnidispatch.so]0x9180
+JNIEnv->NewGlobalRef(class byte) was called from RX@0x120091a0[libjnidispatch.so]0x91a0
+JNIEnv->FindClass(java/lang/Character) was called from RX@0x120091c4[libjnidispatch.so]0x91c4
+JNIEnv->NewGlobalRef(class java/lang/Character) was called from RX@0x120091e4[libjnidispatch.so]0x91e4
+JNIEnv->GetStaticFieldID(java/lang/Character.TYPELjava/lang/Class;) => 0xd8122869 was called from RX@0x12009218[libjnidispatch.so]0x9218
+JNIEnv->GetStaticObjectField(class java/lang/Character, TYPE Ljava/lang/Class; => class char) was called from RX@0x1200922c[libjnidispatch.so]0x922c
+JNIEnv->NewGlobalRef(class char) was called from RX@0x1200924c[libjnidispatch.so]0x924c
+JNIEnv->FindClass(java/lang/Short) was called from RX@0x12009274[libjnidispatch.so]0x9274
+JNIEnv->NewGlobalRef(class java/lang/Short) was called from RX@0x12009298[libjnidispatch.so]0x9298
+JNIEnv->GetStaticFieldID(java/lang/Short.TYPELjava/lang/Class;) => 0xe9100ebc was called from RX@0x120092e4[libjnidispatch.so]0x92e4
+JNIEnv->GetStaticObjectField(class java/lang/Short, TYPE Ljava/lang/Class; => class short) was called from RX@0x120092fc[libjnidispatch.so]0x92fc
+JNIEnv->NewGlobalRef(class short) was called from RX@0x1200931c[libjnidispatch.so]0x931c
+JNIEnv->FindClass(java/lang/Integer) was called from RX@0x12009340[libjnidispatch.so]0x9340
+JNIEnv->NewGlobalRef(class java/lang/Integer) was called from RX@0x12009360[libjnidispatch.so]0x9360
+JNIEnv->GetStaticFieldID(java/lang/Integer.TYPELjava/lang/Class;) => 0x69d2f27e was called from RX@0x12009394[libjnidispatch.so]0x9394
+JNIEnv->GetStaticObjectField(class java/lang/Integer, TYPE Ljava/lang/Class; => class int) was called from RX@0x120093a8[libjnidispatch.so]0x93a8
+JNIEnv->NewGlobalRef(class int) was called from RX@0x120093c8[libjnidispatch.so]0x93c8
+JNIEnv->FindClass(java/lang/Long) was called from RX@0x120093ec[libjnidispatch.so]0x93ec
+JNIEnv->NewGlobalRef(class java/lang/Long) was called from RX@0x1200940c[libjnidispatch.so]0x940c
+JNIEnv->GetStaticFieldID(java/lang/Long.TYPELjava/lang/Class;) => 0xdec2e224 was called from RX@0x12009458[libjnidispatch.so]0x9458
+JNIEnv->GetStaticObjectField(class java/lang/Long, TYPE Ljava/lang/Class; => class long) was called from RX@0x12009478[libjnidispatch.so]0x9478
+JNIEnv->NewGlobalRef(class long) was called from RX@0x12009498[libjnidispatch.so]0x9498
+JNIEnv->FindClass(java/lang/Float) was called from RX@0x120094bc[libjnidispatch.so]0x94bc
+JNIEnv->NewGlobalRef(class java/lang/Float) was called from RX@0x120094dc[libjnidispatch.so]0x94dc
+JNIEnv->GetStaticFieldID(java/lang/Float.TYPELjava/lang/Class;) => 0x73d70c9c was called from RX@0x12009514[libjnidispatch.so]0x9514
+JNIEnv->GetStaticObjectField(class java/lang/Float, TYPE Ljava/lang/Class; => class float) was called from RX@0x1200952c[libjnidispatch.so]0x952c
+JNIEnv->NewGlobalRef(class float) was called from RX@0x1200954c[libjnidispatch.so]0x954c
+JNIEnv->FindClass(java/lang/Double) was called from RX@0x12009570[libjnidispatch.so]0x9570
+JNIEnv->NewGlobalRef(class java/lang/Double) was called from RX@0x12009590[libjnidispatch.so]0x9590
+JNIEnv->GetStaticFieldID(java/lang/Double.TYPELjava/lang/Class;) => 0xa88ffb79 was called from RX@0x120095c4[libjnidispatch.so]0x95c4
+JNIEnv->GetStaticObjectField(class java/lang/Double, TYPE Ljava/lang/Class; => class double) was called from RX@0x120095d8[libjnidispatch.so]0x95d8
+JNIEnv->NewGlobalRef(class double) was called from RX@0x120095f8[libjnidispatch.so]0x95f8
+JNIEnv->GetMethodID(java/lang/Long.<init>(J)V) => 0xb744a242 was called from RX@0x12009634[libjnidispatch.so]0x9634
+JNIEnv->GetMethodID(java/lang/Integer.<init>(I)V) => 0x4c76e5db was called from RX@0x12009660[libjnidispatch.so]0x9660
+JNIEnv->GetMethodID(java/lang/Short.<init>(S)V) => 0x5f3e14a3 was called from RX@0x1200968c[libjnidispatch.so]0x968c
+JNIEnv->GetMethodID(java/lang/Character.<init>(C)V) => 0xb8bf4dc0 was called from RX@0x120096b8[libjnidispatch.so]0x96b8
+JNIEnv->GetMethodID(java/lang/Byte.<init>(B)V) => 0xd850acc6 was called from RX@0x120096e4[libjnidispatch.so]0x96e4
+JNIEnv->GetMethodID(java/lang/Boolean.<init>(Z)V) => 0x13d20196 was called from RX@0x12009710[libjnidispatch.so]0x9710
+JNIEnv->GetMethodID(java/lang/Float.<init>(F)V) => 0xcd2ab1b6 was called from RX@0x1200973c[libjnidispatch.so]0x973c
+JNIEnv->GetMethodID(java/lang/Double.<init>(D)V) => 0xf1953c91 was called from RX@0x12009768[libjnidispatch.so]0x9768
+JNIEnv->GetMethodID(java/lang/Class.getComponentType()Ljava/lang/Class;) => 0x3ca9f18c was called from RX@0x12009798[libjnidispatch.so]0x9798
+JNIEnv->GetMethodID(java/lang/Object.toString()Ljava/lang/String;) => 0xd6cb375b was called from RX@0x120097c8[libjnidispatch.so]0x97c8
+JNIEnv->GetMethodID(java/lang/String.getBytes()[B) => 0x8b04c6b3 was called from RX@0x12009808[libjnidispatch.so]0x9808
+JNIEnv->GetMethodID(java/lang/String.getBytes(Ljava/lang/String;)[B) => 0x318b4ca9 was called from RX@0x12009834[libjnidispatch.so]0x9834
+JNIEnv->GetMethodID(java/lang/String.toCharArray()[C) => 0x2d1b163b was called from RX@0x12009864[libjnidispatch.so]0x9864
+JNIEnv->GetMethodID(java/lang/String.<init>([B)V) => 0xd5642694 was called from RX@0x12009898[libjnidispatch.so]0x9898
+JNIEnv->GetMethodID(java/lang/String.<init>([BLjava/lang/String;)V) => 0x782c535e was called from RX@0x120098c4[libjnidispatch.so]0x98c4
+JNIEnv->GetMethodID(java/lang/reflect/Method.getParameterTypes()[Ljava/lang/Class;) => 0x5a0a40b7 was called from RX@0x120098f4[libjnidispatch.so]0x98f4
+JNIEnv->GetMethodID(java/lang/reflect/Method.getReturnType()Ljava/lang/Class;) => 0x699638fa was called from RX@0x12009924[libjnidispatch.so]0x9924
+JNIEnv->GetMethodID(java/nio/Buffer.position()I) => 0x58d0a586 was called from RX@0x12009958[libjnidispatch.so]0x9958
+JNIEnv->GetMethodID(java/nio/ByteBuffer.array()[B) => 0xb5e5f360 was called from RX@0x12009984[libjnidispatch.so]0x9984
+JNIEnv->GetMethodID(java/nio/ByteBuffer.arrayOffset()I) => 0x7506617d was called from RX@0x120099b0[libjnidispatch.so]0x99b0
+JNIEnv->GetMethodID(java/nio/CharBuffer.array()[C) => 0x1882e6d3 was called from RX@0x120099ec[libjnidispatch.so]0x99ec
+JNIEnv->GetMethodID(java/nio/CharBuffer.arrayOffset()I) => 0xc011c54b was called from RX@0x12009a2c[libjnidispatch.so]0x9a2c
+JNIEnv->GetMethodID(java/nio/ShortBuffer.array()[S) => 0xaa5e7c8d was called from RX@0x12009a58[libjnidispatch.so]0x9a58
+JNIEnv->GetMethodID(java/nio/ShortBuffer.arrayOffset()I) => 0x834329e1 was called from RX@0x12009a80[libjnidispatch.so]0x9a80
+JNIEnv->GetMethodID(java/nio/IntBuffer.array()[I) => 0xce6e5f70 was called from RX@0x12009aac[libjnidispatch.so]0x9aac
+JNIEnv->GetMethodID(java/nio/IntBuffer.arrayOffset()I) => 0xcc3d1314 was called from RX@0x12009ad4[libjnidispatch.so]0x9ad4
+JNIEnv->GetMethodID(java/nio/LongBuffer.array()[J) => 0xdeb2a474 was called from RX@0x12009b00[libjnidispatch.so]0x9b00
+JNIEnv->GetMethodID(java/nio/LongBuffer.arrayOffset()I) => 0x9fa77f1 was called from RX@0x12009b28[libjnidispatch.so]0x9b28
+JNIEnv->GetMethodID(java/nio/FloatBuffer.array()[F) => 0x5fa75aa0 was called from RX@0x12009b54[libjnidispatch.so]0x9b54
+JNIEnv->GetMethodID(java/nio/FloatBuffer.arrayOffset()I) => 0xe5701fc1 was called from RX@0x12009b7c[libjnidispatch.so]0x9b7c
+JNIEnv->GetMethodID(java/nio/DoubleBuffer.array()[D) => 0x751965b9 was called from RX@0x12009bb4[libjnidispatch.so]0x9bb4
+JNIEnv->GetMethodID(java/nio/DoubleBuffer.arrayOffset()I) => 0x5a9fcd86 was called from RX@0x12009be4[libjnidispatch.so]0x9be4
+JNIEnv->GetFieldID(java/lang/Boolean.value Z) => 0x8a25b88c was called from RX@0x12009ea4[libjnidispatch.so]0x9ea4
+JNIEnv->GetFieldID(java/lang/Byte.value B) => 0x4f9df82c was called from RX@0x12009ed0[libjnidispatch.so]0x9ed0
+JNIEnv->GetFieldID(java/lang/Short.value S) => 0xa884abb1 was called from RX@0x12009efc[libjnidispatch.so]0x9efc
+JNIEnv->GetFieldID(java/lang/Character.value C) => 0x156a0d94 was called from RX@0x12009f28[libjnidispatch.so]0x9f28
+JNIEnv->GetFieldID(java/lang/Integer.value I) => 0x7322fc25 was called from RX@0x12009f54[libjnidispatch.so]0x9f54
+JNIEnv->GetFieldID(java/lang/Long.value J) => 0xbf027540 was called from RX@0x12009f80[libjnidispatch.so]0x9f80
+JNIEnv->GetFieldID(java/lang/Float.value F) => 0x71da9c4 was called from RX@0x12009fac[libjnidispatch.so]0x9fac
+JNIEnv->GetFieldID(java/lang/Double.value D) => 0xe8027c85 was called from RX@0x12009fd8[libjnidispatch.so]0x9fd8
+JNIEnv->FindClass(java/lang/System) was called from RX@0x12009ffc[libjnidispatch.so]0x9ffc
+JNIEnv->GetStaticMethodID(java/lang/System.getProperty(Ljava/lang/String;)Ljava/lang/String;) => 0x3e16b3f8 was called from RX@0x1200a028[libjnidispatch.so]0xa028
+JNIEnv->NewByteArray(13) was called from RX@0x12003ffc[libjnidispatch.so]0x3ffc
+JNIEnv->SetByteArrayRegion([B@0x00000000000000000000000000, 0, 13, RX@0x12013d70[libjnidispatch.so]0x13d70) was called from RX@0x12004024[libjnidispatch.so]0x4024
+JNIEnv->NewByteArray(4) was called from RX@0x12003f30[libjnidispatch.so]0x3f30
+JNIEnv->SetByteArrayRegion([B@0x00000000, 0, 4, RX@0x12012504[libjnidispatch.so]0x12504) was called from RX@0x12003f58[libjnidispatch.so]0x3f58
+JNIEnv->NewObject(class java/lang/String, <init>([B@0x75746638) => "utf8") was called from RX@0x12003f7c[libjnidispatch.so]0x3f7c
+JNIEnv->NewObject(class java/lang/String, <init>([B@0x66696c652e656e636f64696e67, "utf8") => "file.encoding") was called from RX@0x12004060[libjnidispatch.so]0x4060
+JNIEnv->CallStaticObjectMethod(class java/lang/System, getProperty("file.encoding") => "UTF-8") was called from RX@0x1200a064[libjnidispatch.so]0xa064
+JNIEnv->NewGlobalRef("UTF-8") was called from RX@0x1200a08c[libjnidispatch.so]0xa08c
+JNIEnv->FindClass(java/lang/Object) was called from RX@0x1200c4b8[libjnidispatch.so]0xc4b8
+JNIEnv->NewGlobalRef(class java/lang/Object) was called from RX@0x1200c4d8[libjnidispatch.so]0xc4d8
+Find native function Java_com_sun_jna_Native_malloc => RX@0x12007bc0[libjnidispatch.so]0x7bc0
+Find native function Java_com_sun_jna_Native_getNativeVersion => RX@0x12008b6c[libjnidispatch.so]0x8b6c
+JNIEnv->NewByteArray(5) was called from RX@0x12003ffc[libjnidispatch.so]0x3ffc
+JNIEnv->SetByteArrayRegion([B@0x0000000000, 0, 5, RX@0x120134b0[libjnidispatch.so]0x134b0) was called from RX@0x12004024[libjnidispatch.so]0x4024
+JNIEnv->NewByteArray(4) was called from RX@0x12003f30[libjnidispatch.so]0x3f30
+JNIEnv->SetByteArrayRegion([B@0x00000000, 0, 4, RX@0x12012504[libjnidispatch.so]0x12504) was called from RX@0x12003f58[libjnidispatch.so]0x3f58
+JNIEnv->NewObject(class java/lang/String, <init>([B@0x75746638) => "utf8") was called from RX@0x12003f7c[libjnidispatch.so]0x3f7c
+JNIEnv->NewObject(class java/lang/String, <init>([B@0x342e302e31, "utf8") => "4.0.1") was called from RX@0x12004060[libjnidispatch.so]0x4060
+Find native function Java_com_sun_jna_Native_getAPIChecksum => RX@0x12008b98[libjnidispatch.so]0x8b98
+JNIEnv->NewByteArray(32) was called from RX@0x12003ffc[libjnidispatch.so]0x3ffc
+JNIEnv->SetByteArrayRegion([B@0x0000000000000000000000000000000000000000000000000000000000000000, 0, 32, RX@0x120134b8[libjnidispatch.so]0x134b8) was called from RX@0x12004024[libjnidispatch.so]0x4024
+JNIEnv->NewByteArray(4) was called from RX@0x12003f30[libjnidispatch.so]0x3f30
+JNIEnv->SetByteArrayRegion([B@0x00000000, 0, 4, RX@0x12012504[libjnidispatch.so]0x12504) was called from RX@0x12003f58[libjnidispatch.so]0x3f58
+JNIEnv->NewObject(class java/lang/String, <init>([B@0x75746638) => "utf8") was called from RX@0x12003f7c[libjnidispatch.so]0x3f7c
+JNIEnv->NewObject(class java/lang/String, <init>([B@0x3161363034373436376235396538373438663937356530333031366365336439, "utf8") => "1a6047467b59e8748f975e03016ce3d9") was called from RX@0x12004060[libjnidispatch.so]0x4060
+Find native function Java_com_sun_jna_Native_sizeof => RX@0x12007bf0[libjnidispatch.so]0x7bf0
+sdk=23
+malloc_nonzero=true
+getNativeVersion=4.0.1
+getAPIChecksum=1a6047467b59e8748f975e03016ce3d9
+sizeof(0)=4
+instances=1

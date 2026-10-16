@@ -23,10 +23,11 @@ import java.util.HexFormat;
 import java.util.List;
 
 /**
- * Runs unidbg's own arm64 samples with the Unicorn2 backend and prints every result as hex,
+ * Runs unidbg's own samples with the Unicorn2 backend and prints every result as hex,
  * so minidbg can be checked against it byte for byte.
+ * jna and tmessages are arm64-v8a; jna32 and ttencrypt are armeabi-v7a.
  *
- * Usage: Baseline <jna|tmessages> <dir with the arm64-v8a samples> [instances] [verbose]
+ * Usage: Baseline <jna|tmessages|jna32|ttencrypt> <dir with that sample's .so> [instances] [verbose]
  */
 public class Baseline {
 
@@ -36,9 +37,10 @@ public class Baseline {
         int instances = args.length > 2 ? Integer.parseInt(args[2]) : 1;
         boolean verbose = args.length > 3 && Boolean.parseBoolean(args[3]);
 
+        boolean is32 = sample.equals("jna32") || sample.equals("ttencrypt");
         List<AndroidEmulator> emulators = new ArrayList<>();
         for (int i = 0; i < instances; i++) {
-            AndroidEmulator emulator = AndroidEmulatorBuilder.for64Bit()
+            AndroidEmulator emulator = (is32 ? AndroidEmulatorBuilder.for32Bit() : AndroidEmulatorBuilder.for64Bit())
                     .setProcessName("baseline")
                     .addBackendFactory(new Unicorn2Factory(false))
                     .build();
@@ -48,10 +50,11 @@ public class Baseline {
             vm.setDvmClassFactory(new ProxyClassFactory());
             vm.setVerbose(verbose);
             boolean print = i == instances - 1;
-            if (sample.equals("jna")) {
-                jna(emulator, vm, dir, print);
-            } else {
-                tmessages(emulator, vm, dir, print);
+            switch (sample) {
+                case "jna", "jna32" -> jna(emulator, vm, dir, print);
+                case "tmessages" -> tmessages(emulator, vm, dir, print);
+                case "ttencrypt" -> ttencrypt(emulator, vm, dir, print);
+                default -> throw new IllegalArgumentException("unknown sample: " + sample);
             }
             emulators.add(emulator);
         }
@@ -114,6 +117,17 @@ public class Baseline {
             System.out.println("aesCtr=" + hex.formatHex(ctr.getValue()));
             System.out.println("pbkdf2=" + hex.formatHex(dst.getValue()));
             System.out.println("pbkdf2_ms=" + pbkdf2Ms);
+        }
+    }
+
+    private static void ttencrypt(AndroidEmulator emulator, VM vm, File dir, boolean print) {
+        DalvikModule dm = vm.loadLibrary(new File(dir, "libttEncrypt.so"), false);
+        dm.callJNI_OnLoad(emulator);
+        DvmClass cUtils = vm.resolveClass("com/bytedance/frameworks/core/encrypt/TTEncryptUtils");
+        byte[] data = new byte[16];
+        ByteArray out = cUtils.callStaticJniMethodObject(emulator, "ttEncrypt([BI)[B", new ByteArray(vm, data), data.length);
+        if (print) {
+            System.out.println("ttEncrypt=" + HexFormat.of().formatHex(out.getValue()));
         }
     }
 }
