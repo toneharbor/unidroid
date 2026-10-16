@@ -1,0 +1,183 @@
+JNIEnv->FindClass(java/lang/NullPointerException) was called from RX@0x121fbdd0[libtmessages.29.so]0x1fbdd0
+JNIEnv->NewGlobalRef(class java/lang/NullPointerException) was called from RX@0x121fbd94[libtmessages.29.so]0x1fbd94
+JNIEnv->FindClass(java/lang/RuntimeException) was called from RX@0x121fbe0c[libtmessages.29.so]0x1fbe0c
+JNIEnv->NewGlobalRef(class java/lang/RuntimeException) was called from RX@0x121fbd94[libtmessages.29.so]0x1fbd94
+JNIEnv->FindClass(android/graphics/BitmapFactory$Options) was called from RX@0x121fbe44[libtmessages.29.so]0x1fbe44
+JNIEnv->NewGlobalRef(class android/graphics/BitmapFactory$Options) was called from RX@0x121fbd94[libtmessages.29.so]0x1fbd94
+JNIEnv->GetFieldID(android/graphics/BitmapFactory$Options.inJustDecodeBounds Z) => 0xc9e62e16 was called from RX@0x121fbe80[libtmessages.29.so]0x1fbe80
+JNIEnv->GetFieldID(android/graphics/BitmapFactory$Options.outHeight I) => 0x811dec2 was called from RX@0x121fbeb8[libtmessages.29.so]0x1fbeb8
+JNIEnv->GetFieldID(android/graphics/BitmapFactory$Options.outWidth I) => 0xc57c3609 was called from RX@0x121fbee8[libtmessages.29.so]0x1fbee8
+JNIEnv->FindClass(org/telegram/tgnet/NativeByteBuffer) was called from RX@0x122093c8[libtmessages.29.so]0x2093c8
+JNIEnv->RegisterNatives(org/telegram/tgnet/NativeByteBuffer, RW@0x1281a0d8[libtmessages.29.so]0x81a0d8, 5) was called from RX@0x1220a9ac[libtmessages.29.so]0x20a9ac
+RegisterNative(org/telegram/tgnet/NativeByteBuffer, native_getFreeBuffer(I)J, RX@0x12208e98[libtmessages.29.so]0x208e98)
+RegisterNative(org/telegram/tgnet/NativeByteBuffer, native_limit(J)I, RX@0x12208eb8[libtmessages.29.so]0x208eb8)
+RegisterNative(org/telegram/tgnet/NativeByteBuffer, native_position(J)I, RX@0x12208ec0[libtmessages.29.so]0x208ec0)
+RegisterNative(org/telegram/tgnet/NativeByteBuffer, native_reuse(J)V, RX@0x12208ec8[libtmessages.29.so]0x208ec8)
+RegisterNative(org/telegram/tgnet/NativeByteBuffer, native_getJavaByteBuffer(J)Ljava/nio/ByteBuffer;, RX@0x12208ed0[libtmessages.29.so]0x208ed0)
+JNIEnv->FindClass(org/telegram/tgnet/ConnectionsManager) was called from RX@0x122093c8[libtmessages.29.so]0x2093c8
+JNIEnv->RegisterNatives(org/telegram/tgnet/ConnectionsManager, RW@0x1281a150[libtmessages.29.so]0x81a150, 26) was called from RX@0x1220a9e0[libtmessages.29.so]0x20a9e0
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_getCurrentTimeMillis(I)J, RX@0x12208ed8[libtmessages.29.so]0x208ed8)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_getCurrentTime(I)I, RX@0x12208ef0[libtmessages.29.so]0x208ef0)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_isTestBackend(I)I, RX@0x12208f08[libtmessages.29.so]0x208f08)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_getTimeDifference(I)I, RX@0x12208f28[libtmessages.29.so]0x208f28)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_sendRequest(IJLorg/telegram/tgnet/RequestDelegateInternal;Lorg/telegram/tgnet/QuickAckDelegate;Lorg/telegram/tgnet/WriteToSocketDelegate;IIIZI)V, RX@0x1220a488[libtmessages.29.so]0x20a488)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_cancelRequest(IIZ)V, RX@0x12208f40[libtmessages.29.so]0x208f40)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_cleanUp(IZ)V, RX@0x12208f78[libtmessages.29.so]0x208f78)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_cancelRequestsForGuid(II)V, RX@0x12208fa4[libtmessages.29.so]0x208fa4)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_bindRequestToGuid(III)V, RX@0x12208fc8[libtmessages.29.so]0x208fc8)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_applyDatacenterAddress(IILjava/lang/String;I)V, RX@0x12209a3c[libtmessages.29.so]0x209a3c)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_setProxySettings(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V, RX@0x12209b20[libtmessages.29.so]0x209b20)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_getConnectionState(I)I, RX@0x12208ff8[libtmessages.29.so]0x208ff8)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_setUserId(II)V, RX@0x12209010[libtmessages.29.so]0x209010)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_init(IIIILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IZZI)V, RX@0x12209f94[libtmessages.29.so]0x209f94)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_setLangCode(ILjava/lang/String;)V, RX@0x12209dfc[libtmessages.29.so]0x209dfc)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_setSystemLangCode(ILjava/lang/String;)V, RX@0x12209ec8[libtmessages.29.so]0x209ec8)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_switchBackend(I)V, RX@0x12209034[libtmessages.29.so]0x209034)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_pauseNetwork(I)V, RX@0x1220904c[libtmessages.29.so]0x20904c)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_resumeNetwork(IZ)V, RX@0x12209064[libtmessages.29.so]0x209064)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_updateDcSettings(I)V, RX@0x12209090[libtmessages.29.so]0x209090)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_setUseIpv6(IZ)V, RX@0x122090b0[libtmessages.29.so]0x2090b0)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_setNetworkAvailable(IZIZ)V, RX@0x122090dc[libtmessages.29.so]0x2090dc)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_setPushConnectionEnabled(IZ)V, RX@0x12209120[libtmessages.29.so]0x209120)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_setJava(Z)V, RX@0x1220914c[libtmessages.29.so]0x20914c)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_applyDnsConfig(IJLjava/lang/String;)V, RX@0x12209d24[libtmessages.29.so]0x209d24)
+RegisterNative(org/telegram/tgnet/ConnectionsManager, native_checkProxy(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/telegram/tgnet/RequestTimeDelegate;)J, RX@0x1220a6cc[libtmessages.29.so]0x20a6cc)
+JNIEnv->FindClass(org/telegram/tgnet/RequestDelegateInternal) was called from RX@0x122093c8[libtmessages.29.so]0x2093c8
+JNIEnv->NewGlobalRef(class org/telegram/tgnet/RequestDelegateInternal) was called from RX@0x122093e4[libtmessages.29.so]0x2093e4
+JNIEnv->GetMethodID(org/telegram/tgnet/RequestDelegateInternal.run(JILjava/lang/String;I)V) => 0x5892d4b6 was called from RX@0x12209400[libtmessages.29.so]0x209400
+JNIEnv->FindClass(org/telegram/tgnet/RequestTimeDelegate) was called from RX@0x122093c8[libtmessages.29.so]0x2093c8
+JNIEnv->NewGlobalRef(class org/telegram/tgnet/RequestTimeDelegate) was called from RX@0x122093e4[libtmessages.29.so]0x2093e4
+JNIEnv->GetMethodID(org/telegram/tgnet/RequestTimeDelegate.run(J)V) => 0xbebeb490 was called from RX@0x12209400[libtmessages.29.so]0x209400
+JNIEnv->FindClass(org/telegram/tgnet/QuickAckDelegate) was called from RX@0x122093c8[libtmessages.29.so]0x2093c8
+JNIEnv->NewGlobalRef(class org/telegram/tgnet/QuickAckDelegate) was called from RX@0x122093e4[libtmessages.29.so]0x2093e4
+JNIEnv->GetMethodID(org/telegram/tgnet/QuickAckDelegate.run()V) => 0xe808b4e4 was called from RX@0x12209400[libtmessages.29.so]0x209400
+JNIEnv->FindClass(org/telegram/tgnet/WriteToSocketDelegate) was called from RX@0x122093c8[libtmessages.29.so]0x2093c8
+JNIEnv->NewGlobalRef(class org/telegram/tgnet/WriteToSocketDelegate) was called from RX@0x122093e4[libtmessages.29.so]0x2093e4
+JNIEnv->GetMethodID(org/telegram/tgnet/WriteToSocketDelegate.run()V) => 0x2bfb1585 was called from RX@0x12209400[libtmessages.29.so]0x209400
+JNIEnv->FindClass(org/telegram/tgnet/FileLoadOperationDelegate) was called from RX@0x122093c8[libtmessages.29.so]0x2093c8
+JNIEnv->NewGlobalRef(class org/telegram/tgnet/FileLoadOperationDelegate) was called from RX@0x122093e4[libtmessages.29.so]0x2093e4
+JNIEnv->GetMethodID(org/telegram/tgnet/FileLoadOperationDelegate.onFinished(Ljava/lang/String;)V) => 0xbe7c4ddb was called from RX@0x12209400[libtmessages.29.so]0x209400
+JNIEnv->GetMethodID(org/telegram/tgnet/FileLoadOperationDelegate.onFailed(I)V) => 0x7e65219d was called from RX@0x12209400[libtmessages.29.so]0x209400
+JNIEnv->GetMethodID(org/telegram/tgnet/FileLoadOperationDelegate.onProgressChanged(F)V) => 0x6b8175c0 was called from RX@0x12209400[libtmessages.29.so]0x209400
+JNIEnv->FindClass(org/telegram/tgnet/ConnectionsManager) was called from RX@0x122093c8[libtmessages.29.so]0x2093c8
+JNIEnv->NewGlobalRef(class org/telegram/tgnet/ConnectionsManager) was called from RX@0x122093e4[libtmessages.29.so]0x2093e4
+JNIEnv->GetStaticMethodID(org/telegram/tgnet/ConnectionsManager.onUnparsedMessageReceived(JI)V) => 0x5d0064e6 was called from RX@0x12209568[libtmessages.29.so]0x209568
+JNIEnv->GetStaticMethodID(org/telegram/tgnet/ConnectionsManager.onUpdate(I)V) => 0x9f782f67 was called from RX@0x12209568[libtmessages.29.so]0x209568
+JNIEnv->GetStaticMethodID(org/telegram/tgnet/ConnectionsManager.onSessionCreated(I)V) => 0x13f2990 was called from RX@0x12209568[libtmessages.29.so]0x209568
+JNIEnv->GetStaticMethodID(org/telegram/tgnet/ConnectionsManager.onLogout(I)V) => 0x9361c3a8 was called from RX@0x12209568[libtmessages.29.so]0x209568
+JNIEnv->GetStaticMethodID(org/telegram/tgnet/ConnectionsManager.onConnectionStateChanged(II)V) => 0xf9a7c164 was called from RX@0x12209568[libtmessages.29.so]0x209568
+JNIEnv->GetStaticMethodID(org/telegram/tgnet/ConnectionsManager.onInternalPushReceived(I)V) => 0x81914d96 was called from RX@0x12209568[libtmessages.29.so]0x209568
+JNIEnv->GetStaticMethodID(org/telegram/tgnet/ConnectionsManager.onUpdateConfig(JI)V) => 0x7c703979 was called from RX@0x12209568[libtmessages.29.so]0x209568
+JNIEnv->GetStaticMethodID(org/telegram/tgnet/ConnectionsManager.onBytesSent(III)V) => 0x46713c81 was called from RX@0x12209568[libtmessages.29.so]0x209568
+JNIEnv->GetStaticMethodID(org/telegram/tgnet/ConnectionsManager.onBytesReceived(III)V) => 0xff3568a was called from RX@0x12209568[libtmessages.29.so]0x209568
+JNIEnv->GetStaticMethodID(org/telegram/tgnet/ConnectionsManager.onRequestNewServerIpAndPort(II)V) => 0x9aa45aa8 was called from RX@0x12209568[libtmessages.29.so]0x209568
+JNIEnv->GetStaticMethodID(org/telegram/tgnet/ConnectionsManager.onProxyError()V) => 0xdff16a0b was called from RX@0x12209568[libtmessages.29.so]0x209568
+JNIEnv->GetStaticMethodID(org/telegram/tgnet/ConnectionsManager.getHostByName(Ljava/lang/String;I)Ljava/lang/String;) => 0x31d215ad was called from RX@0x12209568[libtmessages.29.so]0x209568
+JNIEnv->GetStaticMethodID(org/telegram/tgnet/ConnectionsManager.getInitFlags()I) => 0xb1c40fd6 was called from RX@0x12209568[libtmessages.29.so]0x209568
+JNIEnv->FindClass(org/telegram/messenger/voip/VoIPController) was called from RX@0x124d2ed8[libtmessages.29.so]0x4d2ed8
+JNIEnv->FindClass(org/telegram/messenger/voip/VoIPGroupController) was called from RX@0x124d2ef4[libtmessages.29.so]0x4d2ef4
+JNIEnv->FindClass(org/telegram/messenger/voip/AudioRecordJNI) was called from RX@0x124d2f3c[libtmessages.29.so]0x4d2f3c
+JNIEnv->FindClass(org/telegram/messenger/voip/AudioTrackJNI) was called from RX@0x124d2f54[libtmessages.29.so]0x4d2f54
+JNIEnv->FindClass(org/telegram/messenger/voip/VoIPServerConfig) was called from RX@0x124d2f70[libtmessages.29.so]0x4d2f70
+JNIEnv->FindClass(org/telegram/messenger/voip/Resampler) was called from RX@0x124d2f8c[libtmessages.29.so]0x4d2f8c
+JNIEnv->FindClass(org/telegram/messenger/voip/VideoSource) was called from RX@0x124d2fa8[libtmessages.29.so]0x4d2fa8
+JNIEnv->FindClass(org/telegram/messenger/voip/VideoRenderer) was called from RX@0x124d2fec[libtmessages.29.so]0x4d2fec
+JNIEnv->GetFieldID(org/telegram/messenger/voip/AudioRecordJNI.nativeInst J) => 0xf8cf498c was called from RX@0x124d3048[libtmessages.29.so]0x4d3048
+JNIEnv->GetFieldID(org/telegram/messenger/voip/AudioTrackJNI.nativeInst J) => 0x40c1191e was called from RX@0x124d3074[libtmessages.29.so]0x4d3074
+JNIEnv->FindClass(org/telegram/messenger/voip/AudioRecordJNI) was called from RX@0x124d3520[libtmessages.29.so]0x4d3520
+JNIEnv->NewGlobalRef(class org/telegram/messenger/voip/AudioRecordJNI) was called from RX@0x124d3538[libtmessages.29.so]0x4d3538
+JNIEnv->GetMethodID(org/telegram/messenger/voip/AudioRecordJNI.init(IIII)V) => 0xbc61b846 was called from RX@0x124d3574[libtmessages.29.so]0x4d3574
+JNIEnv->GetMethodID(org/telegram/messenger/voip/AudioRecordJNI.release()V) => 0xd782fc4d was called from RX@0x124d35a8[libtmessages.29.so]0x4d35a8
+JNIEnv->GetMethodID(org/telegram/messenger/voip/AudioRecordJNI.start()Z) => 0x692cc1d6 was called from RX@0x124d35e0[libtmessages.29.so]0x4d35e0
+JNIEnv->GetMethodID(org/telegram/messenger/voip/AudioRecordJNI.stop()V) => 0x4e7a6254 was called from RX@0x124d3614[libtmessages.29.so]0x4d3614
+JNIEnv->GetMethodID(org/telegram/messenger/voip/AudioRecordJNI.getEnabledEffectsMask()I) => 0x30475984 was called from RX@0x124d3644[libtmessages.29.so]0x4d3644
+JNIEnv->FindClass(org/telegram/messenger/voip/AudioTrackJNI) was called from RX@0x124d3664[libtmessages.29.so]0x4d3664
+JNIEnv->NewGlobalRef(class org/telegram/messenger/voip/AudioTrackJNI) was called from RX@0x124d367c[libtmessages.29.so]0x4d367c
+JNIEnv->GetMethodID(org/telegram/messenger/voip/AudioTrackJNI.init(IIII)V) => 0x2a0eae74 was called from RX@0x124d36ac[libtmessages.29.so]0x4d36ac
+JNIEnv->GetMethodID(org/telegram/messenger/voip/AudioTrackJNI.release()V) => 0x4667885f was called from RX@0x124d36d8[libtmessages.29.so]0x4d36d8
+JNIEnv->GetMethodID(org/telegram/messenger/voip/AudioTrackJNI.start()V) => 0x7d892a64 was called from RX@0x124d3704[libtmessages.29.so]0x4d3704
+JNIEnv->GetMethodID(org/telegram/messenger/voip/AudioTrackJNI.stop()V) => 0xdb859f82 was called from RX@0x124d3730[libtmessages.29.so]0x4d3730
+JNIEnv->GetMethodID(org/telegram/messenger/voip/VideoRenderer.decodeAndDisplay(Ljava/nio/ByteBuffer;IJ)V) => 0x63427bb5 was called from RX@0x124d376c[libtmessages.29.so]0x4d376c
+JNIEnv->GetMethodID(org/telegram/messenger/voip/VideoRenderer.reset(Ljava/lang/String;II[[B)V) => 0x123c9dad was called from RX@0x124d379c[libtmessages.29.so]0x4d379c
+JNIEnv->GetMethodID(org/telegram/messenger/voip/VideoRenderer.setStreamEnabled(Z)V) => 0x5338397d was called from RX@0x124d37cc[libtmessages.29.so]0x4d37cc
+JNIEnv->GetMethodID(org/telegram/messenger/voip/VoIPController.handleStateChange(I)V) => 0xe9aa25aa was called from RX@0x124d30e0[libtmessages.29.so]0x4d30e0
+JNIEnv->GetMethodID(org/telegram/messenger/voip/VoIPController.handleSignalBarsChange(I)V) => 0xe8b4260b was called from RX@0x124d3110[libtmessages.29.so]0x4d3110
+JNIEnv->GetMethodID(org/telegram/messenger/voip/VoIPController.groupCallKeyReceived([B)V) => 0x8212035c was called from RX@0x124d313c[libtmessages.29.so]0x4d313c
+JNIEnv->GetMethodID(org/telegram/messenger/voip/VoIPController.groupCallKeySent()V) => 0x67fb733e was called from RX@0x124d3168[libtmessages.29.so]0x4d3168
+JNIEnv->GetMethodID(org/telegram/messenger/voip/VoIPController.callUpgradeRequestReceived()V) => 0x32221f06 was called from RX@0x124d3198[libtmessages.29.so]0x4d3198
+JNIEnv->FindClass(org/telegram/messenger/voip/JNIUtilities) was called from RX@0x124d37f8[libtmessages.29.so]0x4d37f8
+JNIEnv->NewGlobalRef(class org/telegram/messenger/voip/JNIUtilities) was called from RX@0x124d380c[libtmessages.29.so]0x4d380c
+JNIEnv->RegisterNatives(org/telegram/messenger/voip/VoIPController, unidbg@0xe4fff460, 25) was called from RX@0x124d31ec[libtmessages.29.so]0x4d31ec
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeInit(Ljava/lang/String;)J, RX@0x124d1acc[libtmessages.29.so]0x4d1acc)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeStart(J)V, RX@0x124cfe30[libtmessages.29.so]0x4cfe30)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeConnect(J)V, RX@0x124cfe38[libtmessages.29.so]0x4cfe38)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeSetProxy(JLjava/lang/String;ILjava/lang/String;Ljava/lang/String;)V, RX@0x124d1118[libtmessages.29.so]0x4d1118)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeSetEncryptionKey(J[BZ)V, RX@0x124cfe40[libtmessages.29.so]0x4cfe40)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeSetRemoteEndpoints(J[Lorg/telegram/tgnet/TLRPC$TL_phoneConnection;ZZI)V, RX@0x124d3af8[libtmessages.29.so]0x4d3af8)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeSetNativeBufferSize(I)V, RX@0x124cfd4c[libtmessages.29.so]0x4cfd4c)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeRelease(J)V, RX@0x124d1504[libtmessages.29.so]0x4d1504)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeGetDebugString(J)Ljava/lang/String;, RX@0x124d0e80[libtmessages.29.so]0x4d0e80)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeSetNetworkType(JI)V, RX@0x124cfd68[libtmessages.29.so]0x4cfd68)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeSetMicMute(JZ)V, RX@0x124cfd8c[libtmessages.29.so]0x4cfd8c)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeSetConfig(JDDIZZZLjava/lang/String;Ljava/lang/String;Z)V, RX@0x124d1674[libtmessages.29.so]0x4d1674)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeDebugCtl(JII)V, RX@0x124cfebc[libtmessages.29.so]0x4cfebc)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeGetVersion()Ljava/lang/String;, RX@0x124cfecc[libtmessages.29.so]0x4cfecc)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeGetPreferredRelayID(J)J, RX@0x124cff00[libtmessages.29.so]0x4cff00)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeGetLastError(J)I, RX@0x124cff08[libtmessages.29.so]0x4cff08)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeGetStats(JLorg/telegram/messenger/voip/VoIPController$Stats;)V, RX@0x124cff10[libtmessages.29.so]0x4cff10)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeGetDebugLog(J)Ljava/lang/String;, RX@0x124d0d8c[libtmessages.29.so]0x4d0d8c)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeSetAudioOutputGainControlEnabled(JZ)V, RX@0x124d0080[libtmessages.29.so]0x4d0080)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeSetEchoCancellationStrength(JI)V, RX@0x124d0094[libtmessages.29.so]0x4d0094)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeGetPeerCapabilities(J)I, RX@0x124d00a0[libtmessages.29.so]0x4d00a0)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeSendGroupCallKey(J[B)V, RX@0x124d00a8[libtmessages.29.so]0x4d00a8)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeRequestCallUpgrade(J)V, RX@0x124d0114[libtmessages.29.so]0x4d0114)
+RegisterNative(org/telegram/messenger/voip/VoIPController, nativeNeedRate(J)Z, RX@0x124d011c[libtmessages.29.so]0x4d011c)
+RegisterNative(org/telegram/messenger/voip/VoIPController, getConnectionMaxLayer()I, RX@0x124cfdb8[libtmessages.29.so]0x4cfdb8)
+JNIEnv->GetMethodID(org/telegram/messenger/voip/VoIPGroupController.handleStateChange(I)V) => 0x3128dd4b was called from RX@0x124d3218[libtmessages.29.so]0x4d3218
+JNIEnv->GetMethodID(org/telegram/messenger/voip/VoIPGroupController.setParticipantAudioEnabled(IZ)V) => 0xc6276f8e was called from RX@0x124d3244[libtmessages.29.so]0x4d3244
+JNIEnv->GetMethodID(org/telegram/messenger/voip/VoIPGroupController.setSelfStreams([B)V) => 0xb0c35c1b was called from RX@0x124d3270[libtmessages.29.so]0x4d3270
+JNIEnv->RegisterNatives(org/telegram/messenger/voip/VoIPGroupController, unidbg@0xe4fff3a0, 8) was called from RX@0x124d32ac[libtmessages.29.so]0x4d32ac
+RegisterNative(org/telegram/messenger/voip/VoIPGroupController, nativeInit(I)J, RX@0x124d02fc[libtmessages.29.so]0x4d02fc)
+RegisterNative(org/telegram/messenger/voip/VoIPGroupController, nativeSetGroupCallInfo(J[B[B[B[B[BILjava/lang/String;Ljava/lang/String;I)V, RX@0x124d2170[libtmessages.29.so]0x4d2170)
+RegisterNative(org/telegram/messenger/voip/VoIPGroupController, nativeAddGroupCallParticipant(JI[B[B)V, RX@0x124d03c8[libtmessages.29.so]0x4d03c8)
+RegisterNative(org/telegram/messenger/voip/VoIPGroupController, nativeRemoveGroupCallParticipant(JI)V, RX@0x124d0508[libtmessages.29.so]0x4d0508)
+RegisterNative(org/telegram/messenger/voip/VoIPGroupController, nativeGetParticipantAudioLevel(JI)F, RX@0x124d0514[libtmessages.29.so]0x4d0514)
+RegisterNative(org/telegram/messenger/voip/VoIPGroupController, nativeSetParticipantVolume(JIF)V, RX@0x124d0520[libtmessages.29.so]0x4d0520)
+RegisterNative(org/telegram/messenger/voip/VoIPGroupController, getInitialStreams()[B, RX@0x124d052c[libtmessages.29.so]0x4d052c)
+RegisterNative(org/telegram/messenger/voip/VoIPGroupController, nativeSetParticipantStreams(JI[B)V, RX@0x124d05f8[libtmessages.29.so]0x4d05f8)
+JNIEnv->RegisterNatives(org/telegram/messenger/voip/AudioRecordJNI, unidbg@0xe4fff328, 1) was called from RX@0x124d32f8[libtmessages.29.so]0x4d32f8
+RegisterNative(org/telegram/messenger/voip/AudioRecordJNI, nativeCallback(Ljava/nio/ByteBuffer;)V, RX@0x124d0124[libtmessages.29.so]0x4d0124)
+JNIEnv->RegisterNatives(org/telegram/messenger/voip/AudioTrackJNI, unidbg@0xe4fff340, 1) was called from RX@0x124d3328[libtmessages.29.so]0x4d3328
+RegisterNative(org/telegram/messenger/voip/AudioTrackJNI, nativeCallback([B)V, RX@0x124d0164[libtmessages.29.so]0x4d0164)
+JNIEnv->RegisterNatives(org/telegram/messenger/voip/VoIPServerConfig, unidbg@0xe4fff358, 1) was called from RX@0x124d336c[libtmessages.29.so]0x4d336c
+RegisterNative(org/telegram/messenger/voip/VoIPServerConfig, nativeSetConfig(Ljava/lang/String;)V, RX@0x124d0f7c[libtmessages.29.so]0x4d0f7c)
+JNIEnv->RegisterNatives(org/telegram/messenger/voip/Resampler, unidbg@0xe4fff370, 2) was called from RX@0x124d33cc[libtmessages.29.so]0x4d33cc
+RegisterNative(org/telegram/messenger/voip/Resampler, convert44to48(Ljava/nio/ByteBuffer;Ljava/nio/ByteBuffer;)I, RX@0x124d01a4[libtmessages.29.so]0x4d01a4)
+RegisterNative(org/telegram/messenger/voip/Resampler, convert48to44(Ljava/nio/ByteBuffer;Ljava/nio/ByteBuffer;)I, RX@0x124d0250[libtmessages.29.so]0x4d0250)
+JNIEnv->RegisterNatives(org/telegram/messenger/voip/VideoSource, unidbg@0xe4fff3a0, 4) was called from RX@0x124d3484[libtmessages.29.so]0x4d3484
+RegisterNative(org/telegram/messenger/voip/VideoSource, nativeInit()J, RX@0x124d068c[libtmessages.29.so]0x4d068c)
+RegisterNative(org/telegram/messenger/voip/VideoSource, nativeRelease(J)V, RX@0x124cfdc0[libtmessages.29.so]0x4cfdc0)
+RegisterNative(org/telegram/messenger/voip/VideoSource, nativeSetVideoStreamParameters(J[Ljava/nio/ByteBuffer;II)V, RX@0x124d2694[libtmessages.29.so]0x4d2694)
+RegisterNative(org/telegram/messenger/voip/VideoSource, nativeSendFrame(JLjava/nio/ByteBuffer;III)V, RX@0x124d0934[libtmessages.29.so]0x4d0934)
+JNIEnv->RegisterNatives(org/telegram/messenger/voip/VideoRenderer, unidbg@0xe4fff3a0, 1) was called from RX@0x124d34c8[libtmessages.29.so]0x4d34c8
+RegisterNative(org/telegram/messenger/voip/VideoRenderer, nativeInit()J, RX@0x124d06e0[libtmessages.29.so]0x4d06e0)
+Find native function Java_org_telegram_messenger_Utilities_aesCbcEncryptionByteArray => RX@0x121fa14c[libtmessages.29.so]0x1fa14c
+JNIEnv->GetByteArrayElements(false) => [B@0x00000000000000000000000000000000 was called from RX@0x121fa1a4[libtmessages.29.so]0x1fa1a4
+JNIEnv->GetByteArrayElements(false) => [B@0x0000000000000000000000000000000000000000000000000000000000000000 was called from RX@0x121fa1c0[libtmessages.29.so]0x1fa1c0
+JNIEnv->GetByteArrayElements(false) => [B@0x00000000000000000000000000000000 was called from RX@0x121fa1dc[libtmessages.29.so]0x1fa1dc
+Find native function Java_org_telegram_messenger_Utilities_aesCtrDecryptionByteArray => RX@0x121f9f54[libtmessages.29.so]0x1f9f54
+JNIEnv->GetByteArrayElements(false) => [B@0x00000000000000000000000000000000 was called from RX@0x121f9fb4[libtmessages.29.so]0x1f9fb4
+JNIEnv->GetByteArrayElements(false) => [B@0x0000000000000000000000000000000000000000000000000000000000000000 was called from RX@0x121f9fd0[libtmessages.29.so]0x1f9fd0
+JNIEnv->GetByteArrayElements(false) => [B@0x00000000000000000000000000000000 was called from RX@0x121f9fec[libtmessages.29.so]0x1f9fec
+Find native function Java_org_telegram_messenger_Utilities_pbkdf2 => RX@0x121f9ca8[libtmessages.29.so]0x1f9ca8
+JNIEnv->GetByteArrayElements(false) => [B@0x313233343536 was called from RX@0x121f9cf0[libtmessages.29.so]0x1f9cf0
+JNIEnv->GetArrayLength([B@0x313233343536 => 6) was called from RX@0x121f9d08[libtmessages.29.so]0x1f9d08
+JNIEnv->GetByteArrayElements(false) => [B@0x0000000000000000 was called from RX@0x121f9d24[libtmessages.29.so]0x1f9d24
+JNIEnv->GetArrayLength([B@0x0000000000000000 => 8) was called from RX@0x121f9d3c[libtmessages.29.so]0x1f9d3c
+JNIEnv->GetByteArrayElements(false) => [B@0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 was called from RX@0x121f9d58[libtmessages.29.so]0x1f9d58
+JNIEnv->GetArrayLength([B@0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 => 64) was called from RX@0x121f9d70[libtmessages.29.so]0x1f9d70
+aesCbc=67671ce1fa91ddeb0f8fbbb366b531b4
+aesCtr=dc95c078a2408989ad48a21492842087
+pbkdf2=7e53e0b788ad3b5cb8990c35d6d65097f4c6580e337ac617a0903568ecb56e2d9b187e14a6a0e71a15840d42ac206d045badb04fbecba7a2852e1937552c3da2
+pbkdf2_ms=4479
+instances=1

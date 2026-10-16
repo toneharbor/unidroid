@@ -1,0 +1,12 @@
+minidbg
+
+minidbg ports ideas and logic from unidbg (https://github.com/zhkl0228/unidbg),
+which is licensed under the Apache License 2.0.
+
+rootfs/lib64 holds Android 6.0 (API 23) system libraries taken from unidbg's
+android/sdk23 resources. They come from the Android Open Source Project.
+libcpp.so and libstdcpp.so are stored under their real names, libc++.so and
+libstdc++.so.
+
+tests/fixtures/arm64-v8a holds two sample libraries from unidbg's test
+resources: libjnidispatch.so (JNA) and libtmessages.29.so (Telegram).
