@@ -81,8 +81,6 @@ pub(crate) struct JniState {
     scope: usize,
     env: u64,
     vm: u64,
-    buffers: HashMap<u64, usize>,
-    free_buffers: Vec<(u64, usize)>,
     weak: HashSet<Handle>,
     pending: Option<Handle>,
 }
@@ -357,25 +355,16 @@ impl Emulator {
         self.exception_result()?;
         result
     }
-    fn scratch(&mut self, bytes: &[u8]) -> Result<u64> {
-        let (ptr, size) = if let Some(i) = self
-            .jni
-            .free_buffers
-            .iter()
-            .position(|(_, size)| *size >= bytes.len())
-        {
-            self.jni.free_buffers.swap_remove(i)
-        } else {
-            (self.malloc(bytes.len())?, bytes.len())
-        };
-        self.write_bytes(ptr, bytes)?;
-        self.jni.buffers.insert(ptr, size);
-        Ok(ptr)
+    fn jni_allocator(&mut self, name: &str, argument: u64) -> Result<u64> {
+        let function = (0..self.modules.len())
+            .find_map(|i| self.local_symbol(Module(i), name))
+            .ok_or_else(|| format!("JNI buffer requires {name}: no loaded library exports it"))?;
+        self.nested_call(function, &[argument])
     }
-    fn release_scratch(&mut self, ptr: u64) {
-        if let Some(size) = self.jni.buffers.remove(&ptr) {
-            self.jni.free_buffers.push((ptr, size));
-        }
+    fn jni_buffer(&mut self, bytes: &[u8]) -> Result<u64> {
+        let ptr = self.jni_allocator("malloc", bytes.len() as u64)?;
+        self.write_bytes(ptr, bytes)?;
+        Ok(ptr)
     }
     fn jni_error(
         &self,
@@ -857,10 +846,10 @@ impl Emulator {
                 if b != 0 {
                     self.write_bytes(b, &[1])?;
                 }
-                self.scratch(&bytes)
+                self.jni_buffer(&bytes)
             }
             166 | 170 | 225 => {
-                self.release_scratch(b);
+                self.jni_allocator("free", b)?;
                 Ok(0)
             }
             167 => {
@@ -910,7 +899,7 @@ impl Emulator {
                 if b != 0 {
                     self.write_bytes(b, &[1])?;
                 }
-                self.scratch(&bytes)
+                self.jni_buffer(&bytes)
             }
             191..=198 | 223 => {
                 if c == 0 || c == 1 {
@@ -922,7 +911,7 @@ impl Emulator {
                     self.cpu()?.mem_read(b, bytes)?;
                 }
                 if c != 1 {
-                    self.release_scratch(b);
+                    self.jni_allocator("free", b)?;
                 }
                 Ok(0)
             }
@@ -1627,6 +1616,174 @@ fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn libc_emulator(arch: crate::Architecture) -> Result<(Emulator, Module)> {
+        let mut emu = Emulator::builder().build()?;
+        let libc = emu.load_library(format!("rootfs/{}/libc.so", arch.library_dir()))?;
+        Ok((emu, libc))
+    }
+
+    fn jni_call(emu: &mut Emulator, index: u64, args: &[u64]) -> Result<u64> {
+        let table = emu.read_pointer(emu.jni.env)?;
+        let function = emu.read_pointer(table + index * emu.pointer_size())?;
+        let mut words = vec![emu.jni.env];
+        words.extend_from_slice(args);
+        emu.call_function(function, &words)
+    }
+
+    fn string_chars_use_libc_heap(get: u64, release: u64, expected: &[u8]) -> Result<()> {
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let (mut emu, libc) = libc_emulator(arch)?;
+            let string = emu.new_string("a\0é😀");
+            let copy = emu.malloc(1)?;
+            let ptr = jni_call(&mut emu, get, &[string.0, copy])?;
+            assert_eq!(emu.read_bytes(ptr, expected.len())?, expected);
+            assert_eq!(emu.read_bytes(copy, 1)?, [1]);
+            let usable = emu.find_symbol(libc, "malloc_usable_size")?;
+            assert!(emu.call_function(usable, &[ptr])? >= expected.len() as u64);
+            jni_call(&mut emu, release, &[string.0, ptr])?;
+            let malloc = emu.find_symbol(libc, "malloc")?;
+            assert_eq!(emu.call_function(malloc, &[expected.len() as u64])?, ptr);
+            let free = emu.find_symbol(libc, "free")?;
+            emu.call_function(free, &[ptr])?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn get_string_utf_chars_uses_libc_heap() -> Result<()> {
+        string_chars_use_libc_heap(169, 170, b"a\xc0\x80\xc3\xa9\xed\xa0\xbd\xed\xb8\x80\0")
+    }
+
+    #[test]
+    fn get_string_chars_uses_libc_heap() -> Result<()> {
+        string_chars_use_libc_heap(165, 166, &[0x61, 0, 0, 0, 0xe9, 0, 0x3d, 0xd8, 0, 0xde])
+    }
+
+    #[test]
+    fn get_string_critical_uses_libc_heap() -> Result<()> {
+        string_chars_use_libc_heap(224, 225, &[0x61, 0, 0, 0, 0xe9, 0, 0x3d, 0xd8, 0, 0xde])
+    }
+
+    fn array_elements_use_libc_heap(get: u64, release: u64, kind: PrimitiveType) -> Result<()> {
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let (mut emu, libc) = libc_emulator(arch)?;
+            let malloc = emu.find_symbol(libc, "malloc")?;
+            let free = emu.find_symbol(libc, "free")?;
+            let usable = emu.find_symbol(libc, "malloc_usable_size")?;
+            let copy = emu.malloc(1)?;
+            let length = 3 * kind.size();
+            for mode in [0, 1, 2] {
+                let array = emu.new_primitive_array(kind, &vec![1; length]);
+                let ptr = jni_call(&mut emu, get, &[array.0, copy])?;
+                assert_eq!(emu.read_bytes(ptr, length)?, vec![1; length]);
+                assert_eq!(emu.read_bytes(copy, 1)?, [1]);
+                assert!(emu.call_function(usable, &[ptr])? >= length as u64);
+                emu.write_bytes(ptr, &vec![0; length])?;
+                jni_call(&mut emu, release, &[array.0, ptr, mode])?;
+                assert_eq!(
+                    emu.primitive_array(array),
+                    vec![u8::from(mode == 2); length]
+                );
+                if mode == 1 {
+                    let other = emu.call_function(malloc, &[length as u64])?;
+                    assert_ne!(other, ptr);
+                    emu.write_bytes(ptr, &vec![1; length])?;
+                    jni_call(&mut emu, release, &[array.0, ptr, 0])?;
+                    assert_eq!(emu.primitive_array(array), vec![1; length]);
+                    assert_eq!(emu.call_function(malloc, &[length as u64])?, ptr);
+                    emu.call_function(free, &[other])?;
+                } else {
+                    assert_eq!(emu.call_function(malloc, &[length as u64])?, ptr);
+                }
+                emu.call_function(free, &[ptr])?;
+                emu.release(array);
+            }
+        }
+        Ok(())
+    }
+
+    macro_rules! array_heap_test {
+        ($name:ident, $get:expr, $release:expr, $kind:ident) => {
+            #[test]
+            fn $name() -> Result<()> {
+                array_elements_use_libc_heap($get, $release, PrimitiveType::$kind)
+            }
+        };
+    }
+    array_heap_test!(get_boolean_array_elements_uses_libc_heap, 183, 191, Boolean);
+    array_heap_test!(get_byte_array_elements_uses_libc_heap, 184, 192, Byte);
+    array_heap_test!(get_char_array_elements_uses_libc_heap, 185, 193, Char);
+    array_heap_test!(get_short_array_elements_uses_libc_heap, 186, 194, Short);
+    array_heap_test!(get_int_array_elements_uses_libc_heap, 187, 195, Int);
+    array_heap_test!(get_long_array_elements_uses_libc_heap, 188, 196, Long);
+    array_heap_test!(get_float_array_elements_uses_libc_heap, 189, 197, Float);
+    array_heap_test!(get_double_array_elements_uses_libc_heap, 190, 198, Double);
+    array_heap_test!(get_primitive_array_critical_uses_libc_heap, 222, 223, Int);
+
+    #[test]
+    fn native_free_accepts_string_utf_chars() -> Result<()> {
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let (mut emu, libc) = libc_emulator(arch)?;
+            let string = emu.new_string("359250054370919||1551086094");
+            let ptr = jni_call(&mut emu, 169, &[string.0, 0])?;
+            let free = emu.find_symbol(libc, "free")?;
+            emu.call_function(free, &[ptr])?;
+            let malloc = emu.find_symbol(libc, "malloc")?;
+            let next = emu.call_function(malloc, &[26])?;
+            assert_eq!(next, ptr);
+            emu.write_bytes(next, &[0x42; 26])?;
+            assert_eq!(emu.read_bytes(next, 26)?, [0x42; 26]);
+            emu.call_function(free, &[next])?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn new_string_utf_decodes_modified_utf8() -> Result<()> {
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let (mut emu, _) = libc_emulator(arch)?;
+            let bytes = b"a\xc0\x80\xc3\xa9\xed\xa0\xbd\xed\xb8\x80\0";
+            let ptr = emu.malloc(bytes.len())?;
+            emu.write_bytes(ptr, bytes)?;
+            let string = jni_call(&mut emu, 167, &[ptr])?;
+            assert_eq!(emu.string(Handle(string)), "a\0é😀");
+            emu.free(ptr);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn jni_buffers_require_guest_malloc_and_free() -> Result<()> {
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            let string = emu.new_string("hello");
+            let array = emu.new_byte_array(&[1]);
+            for (get, release, handle) in [
+                (165, 166, string),
+                (169, 170, string),
+                (224, 225, string),
+                (184, 192, array),
+                (222, 223, array),
+            ] {
+                assert_eq!(
+                    jni_call(&mut emu, get, &[handle.0, 0])
+                        .unwrap_err()
+                        .to_string(),
+                    "JNI buffer requires malloc: no loaded library exports it"
+                );
+                assert_eq!(
+                    jni_call(&mut emu, release, &[handle.0, 0, 2])
+                        .unwrap_err()
+                        .to_string(),
+                    "JNI buffer requires free: no loaded library exports it"
+                );
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn arm32_mixed_variadic_v_and_a_calls_include_nonvirtual_stack_arguments() -> Result<()> {
         struct Handler;
@@ -2167,8 +2324,7 @@ mod tests {
     #[test]
     fn functions_taking_pointers_or_array_references_are_not_rejected() -> Result<()> {
         for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
-            let mut emu = Emulator::builder().build()?;
-            emu.setup_cpu(arch)?;
+            let (mut emu, _) = libc_emulator(arch)?;
             let p = emu.pointer_size();
             let table = emu.read_pointer(emu.jni.env)?;
             let text = emu.new_cstring("hello")?;
@@ -2236,8 +2392,7 @@ mod tests {
     #[test]
     fn primitive_arrays_commit_abort_and_regions_use_element_width() -> Result<()> {
         for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
-            let mut emu = Emulator::builder().build()?;
-            emu.setup_cpu(arch)?;
+            let (mut emu, _) = libc_emulator(arch)?;
             let p = emu.pointer_size();
             let table = emu.read_pointer(emu.jni.env)?;
             for (index, kind) in ARRAY_TYPES.iter().enumerate() {
@@ -2253,7 +2408,10 @@ mod tests {
                 emu.call_function(release, &[emu.jni.env, array.0, ptr, 2])?;
                 assert_eq!(emu.primitive_array(array), vec![0x42; 3 * width]);
                 let set_region = emu.read_pointer(table + (207 + index as u64) * p)?;
-                emu.call_function(set_region, &[emu.jni.env, array.0, 1, 1, ptr])?;
+                let region = emu.malloc(width)?;
+                emu.write_bytes(region, &vec![0x55; width])?;
+                emu.call_function(set_region, &[emu.jni.env, array.0, 1, 1, region])?;
+                emu.free(region);
                 let mut expected = vec![0x42; 3 * width];
                 expected[width..2 * width].fill(0x55);
                 assert_eq!(emu.primitive_array(array), expected);

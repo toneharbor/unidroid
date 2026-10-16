@@ -107,6 +107,7 @@ pub struct Emulator {
     regions: Vec<Region>,
     host: Vec<HostFunction>,
     overrides: HashMap<String, u64>,
+    symbol_aliases: HashMap<String, String>,
     rootfs: PathBuf,
     properties: HashMap<String, String>,
     verbose: bool,
@@ -144,6 +145,7 @@ impl Emulator {
             regions: Vec::new(),
             host: Vec::new(),
             overrides: HashMap::new(),
+            symbol_aliases: HashMap::new(),
             rootfs: builder.rootfs,
             properties: builder.properties,
             verbose: builder.verbose,
@@ -265,6 +267,9 @@ impl Emulator {
         self.write_bytes(address, &self.architecture().stub())?;
         self.host.push(function);
         Ok(address)
+    }
+    pub fn symbol_alias(&mut self, name: impl Into<String>, target: impl Into<String>) {
+        self.symbol_aliases.insert(name.into(), target.into());
     }
     pub fn load_library(&mut self, path: impl AsRef<Path>) -> Result<Module> {
         let module = self.load_image(path.as_ref())?;
@@ -432,8 +437,12 @@ impl Emulator {
                     } else {
                         base + symbol.value
                     }
-                } else if let Some(value) =
-                    (0..self.modules.len()).find_map(|i| self.local_symbol(Module(i), &symbol.name))
+                } else if let Some(value) = (0..self.modules.len())
+                    .find_map(|i| self.local_symbol(Module(i), &symbol.name))
+                    .or_else(|| {
+                        let target = self.symbol_aliases.get(&symbol.name)?;
+                        (0..self.modules.len()).find_map(|i| self.local_symbol(Module(i), target))
+                    })
                 {
                     value
                 } else if symbol.binding == 2 {
@@ -844,6 +853,55 @@ impl Emulator {
         self.regions = regions;
         self.cpu_mut()?
             .mem_protect(start, end - start, permissions)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/support/elf.rs"]
+mod test_elf;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn symbol_alias_binds_missing_imports_but_preserves_exports() -> Result<()> {
+        for binding in [0x10, 0x20] {
+            for exported in [false, true] {
+                let importer = test_elf::TestLibrary::new(false);
+                let mut bytes = std::fs::read(&importer.0)?;
+                // The synthetic ELF's fourth symbol is an undefined import named "weak".
+                bytes[0x1264] = binding;
+                std::fs::write(&importer.0, bytes)?;
+                let mut emu = Emulator::builder().build()?;
+                emu.symbol_alias("weak", "answer");
+                let exporter = test_elf::TestLibrary::new(false);
+                let expected = if exported {
+                    let mut bytes = std::fs::read(&exporter.0)?;
+                    // Export that name at the distinct "protect" function's address.
+                    bytes[0x1266] = 1;
+                    bytes[0x1268..0x1270].copy_from_slice(&0x240u64.to_le_bytes());
+                    std::fs::write(&exporter.0, bytes)?;
+                    let module = emu.load_library(&exporter.0)?;
+                    Some(emu.find_symbol(module, "weak")?)
+                } else {
+                    None
+                };
+                let module = emu.load_library(&importer.0)?;
+                let target = emu.find_symbol(module, "answer")?;
+                let data = emu.find_symbol(module, "data")?;
+                let bound = u64::from_le_bytes(emu.read_bytes(data + 32, 8)?.try_into().unwrap());
+                assert_eq!(bound, expected.unwrap_or(target));
+                if !exported {
+                    assert_eq!(emu.call_function(bound, &[])?, 42);
+                    assert!(emu.find_symbol(module, "weak").is_err());
+                    let name = emu.new_cstring("weak")?;
+                    let lookup = emu.find_symbol(module, "dlsym")?;
+                    assert_eq!(emu.call_function(lookup, &[0, name])?, 0);
+                }
+            }
+        }
         Ok(())
     }
 }

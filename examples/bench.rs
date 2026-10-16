@@ -1,5 +1,11 @@
 #[path = "../tests/support/jna.rs"]
 mod jna;
+#[path = "../tests/support/kanxue.rs"]
+mod kanxue;
+#[path = "../tests/support/qdreader.rs"]
+mod qdreader;
+#[path = "../tests/support/signutil.rs"]
+mod signutil;
 #[path = "../tests/support/tmessages.rs"]
 mod tmessages;
 #[path = "../tests/support/ttencrypt.rs"]
@@ -42,6 +48,22 @@ fn run() -> Result<()> {
             let out = ttencrypt::run(&mut emu, directory)?;
             if i + 1 == instances {
                 println!("ttEncrypt={out}");
+            }
+        } else if sample == "signutil" {
+            let out = signutil::run(&mut emu, directory)?;
+            if i + 1 == instances {
+                println!("sign={out}");
+            }
+        } else if sample == "qdreader" {
+            let out = qdreader::run(&mut emu, directory)?;
+            if i + 1 == instances {
+                println!("c={out}");
+            }
+        } else if sample == "kanxue" {
+            let out = kanxue::run(&mut emu, directory)?;
+            if i + 1 == instances {
+                println!("found={}", out.found);
+                println!("tries={}", out.tries);
             }
         } else {
             let out = tmessages::run(&mut emu, directory)?;

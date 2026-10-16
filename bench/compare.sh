@@ -15,7 +15,7 @@ if [[ ! -f $BASE/cp.txt || ! -d $BASE/target/classes ]]; then
 fi
 cargo build -q --release --example bench
 
-UNIDBG=("$JAVA_HOME/bin/java" -cp "$BASE/target/classes:$(cat $BASE/cp.txt)" baseline.Baseline)
+UNIDBG=("$JAVA_HOME/bin/java" --add-opens java.base/java.util=ALL-UNNAMED -cp "$BASE/target/classes:$(cat $BASE/cp.txt)" baseline.Baseline)
 MINIDBG=(target/release/examples/bench)
 
 # Runs a command with its stdout saved to $1, prints "<seconds> <MB>".
@@ -34,17 +34,17 @@ measure() {
 uo=$(mktemp)
 mo=$(mktemp)
 trap 'rm -f "$uo" "$mo"' EXIT
-printf "%-10s %4s | %16s | %16s | %s\n" sample n "unidbg" "minidbg" "same output"
-for sample in jna tmessages jna32 ttencrypt; do
+printf "%-11s %4s | %16s | %16s | %s\n" sample n "unidbg" "minidbg" "same output"
+for sample in jna tmessages jna32 ttencrypt tmessages32 signutil qdreader kanxue; do
     case "$sample" in
         jna|tmessages) SAMPLES=tests/fixtures/arm64-v8a ;;
-        jna32|ttencrypt) SAMPLES=tests/fixtures/armeabi-v7a ;;
+        *) SAMPLES=tests/fixtures/armeabi-v7a ;;
     esac
     for n in "${COUNTS[@]}"; do
         read -r ut um <<< "$(measure "$uo" "${UNIDBG[@]}" "$sample" "$SAMPLES" "$n")"
         read -r mt mm <<< "$(measure "$mo" "${MINIDBG[@]}" "$sample" "$SAMPLES" "$n")"
         same=no
         if [[ -s $uo && -s $mo ]] && diff <(grep -v '^pbkdf2_ms=' "$uo") <(grep -v '^pbkdf2_ms=' "$mo") > /dev/null; then same=yes; fi
-        printf "%-10s %4d | %6.1f MB %6.2fs | %6.1f MB %6.2fs | %s\n" "$sample" "$n" "$um" "$ut" "$mm" "$mt" "$same"
+        printf "%-11s %4d | %6.1f MB %6.2fs | %6.1f MB %6.2fs | %s\n" "$sample" "$n" "$um" "$ut" "$mm" "$mt" "$same"
     done
 done

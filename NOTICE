@@ -11,5 +11,7 @@ their real names, libc++.so and libstdc++.so.
 tests/fixtures/arm64-v8a holds two sample libraries from unidbg's test
 resources: libjnidispatch.so (JNA) and libtmessages.29.so (Telegram).
 
-tests/fixtures/armeabi-v7a holds two more from the same place:
-libjnidispatch.so (JNA, 32-bit) and libttEncrypt.so (ByteDance ttEncrypt).
+tests/fixtures/armeabi-v7a holds more from the same place:
+libjnidispatch.so (JNA, 32-bit), libttEncrypt.so (ByteDance ttEncrypt),
+libtmessages.29.so (Telegram, 32-bit), libsignutil.so (Anjuke SignUtil),
+libd-lib.so (QDReader) and libnative-lib.so (a Kanxue crackme).
