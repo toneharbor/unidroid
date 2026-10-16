@@ -1,8 +1,10 @@
+mod arch;
 mod elf;
 mod jni;
 mod syscalls;
 pub use jni::{Handle, JniCall, JniHandler, JniValue, PrimitiveType};
 
+use arch::Architecture;
 use elf::Image;
 use std::{
     collections::HashMap,
@@ -11,11 +13,12 @@ use std::{
     sync::Arc,
 };
 use unicorn_engine::{
-    RegisterARM64 as Reg, Unicorn,
-    unicorn_const::{Arch, ControlType, Mode, Prot, uc_ctl, uc_error},
+    Unicorn,
+    unicorn_const::{ControlType, Prot, uc_ctl, uc_error},
 };
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+const NO_LIBRARY: &str = "no library loaded yet: the first load_library picks arm64 or arm32";
 const PAGE: u64 = 4096;
 const TRAMPOLINE: u64 = 0x10000;
 const TRAMPOLINE_SIZE: u64 = 0x10000;
@@ -97,7 +100,9 @@ impl EmulatorBuilder {
 
 pub struct Emulator {
     // Unicorn must be destroyed before the Arc-backed host pointers it uses.
-    uc: Unicorn<'static, Option<u32>>,
+    uc: Option<Unicorn<'static, Option<u32>>>,
+    cache_size: u32,
+    arch: Option<Architecture>,
     modules: Vec<Loaded>,
     regions: Vec<Region>,
     host: Vec<HostFunction>,
@@ -131,28 +136,10 @@ impl Emulator {
         }
     }
     fn build(builder: EmulatorBuilder) -> Result<Self> {
-        let mut uc = Unicorn::new_with_data(Arch::ARM64, Mode::LITTLE_ENDIAN, None)?;
-        // Set before the first CPU access: this allocates Unicorn's TCG cache.
-        let status = unsafe {
-            uc_ctl(
-                uc.get_handle(),
-                ControlType(ControlType::TCG_BUFFER_SIZE.0 | ControlType::IO_WRITE.0 | (1 << 26)),
-                builder.cache_size,
-            )
-        };
-        if status != uc_error::OK {
-            return Err(status.into());
-        }
-        uc.reg_write(Reg::CPACR_EL1, 3 << 20)?;
-        uc.add_intr_hook(|uc, interrupt| {
-            *uc.get_data_mut() = Some(interrupt);
-            let _ = uc.emu_stop();
-        })?;
-        uc.mem_map(TRAMPOLINE, TRAMPOLINE_SIZE, Prot::READ | Prot::EXEC)?;
-        uc.mem_map(RETURN, PAGE, Prot::READ | Prot::EXEC)?;
-        uc.mem_map(STACK, STACK_SIZE, Prot::READ | Prot::WRITE)?;
-        let mut emu = Self {
-            uc,
+        Ok(Self {
+            uc: None,
+            arch: None,
+            cache_size: builder.cache_size,
             modules: Vec::new(),
             regions: Vec::new(),
             host: Vec::new(),
@@ -174,10 +161,35 @@ impl Emulator {
             files: HashMap::new(),
             next_fd: 3,
             jni: jni::JniState::default(),
+        })
+    }
+    fn setup_cpu(&mut self, arch: Architecture) -> Result<()> {
+        let (cpu_arch, mode) = arch.cpu();
+        let mut uc = Unicorn::new_with_data(cpu_arch, mode, None)?;
+        // Set before the first CPU access: this allocates Unicorn's TCG cache.
+        let status = unsafe {
+            uc_ctl(
+                uc.get_handle(),
+                ControlType(ControlType::TCG_BUFFER_SIZE.0 | ControlType::IO_WRITE.0 | (1 << 26)),
+                self.cache_size,
+            )
         };
-        emu.setup_tls(&builder.process_name)?;
-        let property = emu.stub(HostFunction::Property)?;
-        emu.overrides
+        if status != uc_error::OK {
+            return Err(status.into());
+        }
+        arch.enable_fp(&mut uc)?;
+        uc.add_intr_hook(|uc, interrupt| {
+            *uc.get_data_mut() = Some(interrupt);
+            let _ = uc.emu_stop();
+        })?;
+        uc.mem_map(TRAMPOLINE, TRAMPOLINE_SIZE, Prot::READ | Prot::EXEC)?;
+        uc.mem_map(RETURN, PAGE, Prot::READ | Prot::EXEC)?;
+        uc.mem_map(STACK, STACK_SIZE, Prot::READ | Prot::WRITE)?;
+        self.uc = Some(uc);
+        self.arch = Some(arch);
+        self.setup_tls(&self.process_name.clone())?;
+        let property = self.stub(HostFunction::Property)?;
+        self.overrides
             .insert("__system_property_get".into(), property);
         for name in [
             "dlopen",
@@ -187,14 +199,21 @@ impl Emulator {
             "dladdr",
             "dl_iterate_phdr",
         ] {
-            let address = emu.stub(HostFunction::Dl(name))?;
-            emu.overrides.insert(name.into(), address);
+            let address = self.stub(HostFunction::Dl(name))?;
+            self.overrides.insert(name.into(), address);
         }
-        emu.setup_jni()?;
-        emu.dlerror_buf = emu.malloc(emu.dlerror_capacity)?;
-        Ok(emu)
+        self.setup_jni()?;
+        self.dlerror_buf = self.malloc(self.dlerror_capacity)?;
+        Ok(())
+    }
+    fn cpu(&self) -> Result<&Unicorn<'static, Option<u32>>> {
+        self.uc.as_ref().ok_or_else(|| NO_LIBRARY.into())
+    }
+    fn cpu_mut(&mut self) -> Result<&mut Unicorn<'static, Option<u32>>> {
+        self.uc.as_mut().ok_or_else(|| NO_LIBRARY.into())
     }
     fn setup_tls(&mut self, process: &str) -> Result<()> {
+        let p = self.pointer_size();
         let tls = INITIAL_SP + 0x1000;
         let thread = tls + 0x400;
         let kab = tls + 0x800;
@@ -204,11 +223,11 @@ impl Emulator {
         let name = tls + 0xc00;
         self.write_bytes(name, process.as_bytes())?;
         self.write_bytes(name + process.len() as u64, &[0])?;
-        self.write_u64(argv, name)?;
-        self.write_u64(kab, 1)?;
-        self.write_u64(kab + 8, argv)?;
-        self.write_u64(kab + 16, envp)?;
-        self.write_u64(kab + 24, auxv)?;
+        self.write_pointer(argv, name)?;
+        self.write_pointer(kab, 1)?;
+        self.write_pointer(kab + p, argv)?;
+        self.write_pointer(kab + 2 * p, envp)?;
+        self.write_pointer(kab + 3 * p, auxv)?;
         let mut cursor = name + page_up(process.len() as u64 + 1);
         for (i, value) in [
             "ANDROID_DATA=/data",
@@ -219,20 +238,21 @@ impl Emulator {
         .iter()
         .enumerate()
         {
-            self.write_u64(envp + i as u64 * 8, cursor)?;
+            self.write_pointer(envp + i as u64 * p, cursor)?;
             self.write_bytes(cursor, value.as_bytes())?;
             cursor += value.len() as u64 + 1;
         }
-        self.write_u64(auxv, 25)?;
-        self.write_u64(auxv + 8, tls + 0xe00)?;
-        self.write_u64(auxv + 16, 6)?;
-        self.write_u64(auxv + 24, PAGE)?;
-        self.write_u64(tls, tls)?;
-        self.write_u64(tls + 8, thread)?;
-        self.write_u64(tls + 24, kab)?;
-        self.write_bytes(thread + 16, &1234u32.to_le_bytes())?;
-        self.uc.reg_write(Reg::TPIDR_EL0, tls)?;
-        self.uc.reg_write(Reg::SP, INITIAL_SP)?;
+        self.write_pointer(auxv, 25)?;
+        self.write_pointer(auxv + p, tls + 0xe00)?;
+        self.write_pointer(auxv + 2 * p, 6)?;
+        self.write_pointer(auxv + 3 * p, PAGE)?;
+        self.write_pointer(tls, tls)?;
+        self.write_pointer(tls + p, thread)?;
+        self.write_pointer(tls + 3 * p, kab)?;
+        self.write_bytes(thread + 2 * p, &1234u32.to_le_bytes())?;
+        let reg = self.architecture().tls();
+        self.cpu_mut()?.reg_write(reg, tls)?;
+        self.set_sp(INITIAL_SP)?;
         Ok(())
     }
     fn stub(&mut self, function: HostFunction) -> Result<u64> {
@@ -242,7 +262,7 @@ impl Emulator {
             );
         }
         let address = TRAMPOLINE + self.host.len() as u64 * 8;
-        self.write_bytes(address, &[1, 0, 0, 0xd4, 0xc0, 3, 0x5f, 0xd6])?;
+        self.write_bytes(address, &self.architecture().stub())?;
         self.host.push(function);
         Ok(address)
     }
@@ -256,10 +276,21 @@ impl Emulator {
     }
     fn load_image(&mut self, path: &Path) -> Result<Module> {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let image = Image::open(path)?;
+        if self.uc.is_none() {
+            self.setup_cpu(image.arch)?;
+        }
+        if image.arch != self.architecture() {
+            return Err(format!(
+                "cannot load {name}: it is {} but this emulator runs {}",
+                image.arch.name(),
+                self.architecture().name()
+            )
+            .into());
+        }
         if let Some(i) = self.modules.iter().position(|m| m.name == name) {
             return Ok(Module(i));
         }
-        let image = Image::open(path)?;
         let base = self.next_module;
         self.next_module += (image.size + 0xffff) & !0xffff;
         for segment in &image.segments {
@@ -274,7 +305,7 @@ impl Emulator {
                         && r.offset < page_up(segment.p_vaddr + segment.p_memsz)
                 });
             if private {
-                self.uc.mem_map(start, end - start, permissions)?;
+                self.cpu_mut()?.mem_map(start, end - start, permissions)?;
                 let offset = segment.p_offset as usize;
                 self.write_bytes(
                     base + segment.p_vaddr,
@@ -284,7 +315,7 @@ impl Emulator {
                 let file_offset = page_down(segment.p_offset) as usize;
                 // The Arc keeps this read-only mmap alive until after uc_close.
                 unsafe {
-                    self.uc.mem_map_ptr(
+                    self.cpu_mut()?.mem_map_ptr(
                         start,
                         end - start,
                         permissions,
@@ -300,15 +331,16 @@ impl Emulator {
         }
         let id = Module(self.modules.len());
         let path_ptr = self.new_cstring(&path.to_string_lossy())?;
-        let info_ptr = self.malloc(32)?;
+        let p = self.pointer_size();
+        let info_ptr = self.malloc((4 * p) as usize)?;
         let first = &image.segments[0];
-        self.write_u64(info_ptr, base)?;
-        self.write_u64(info_ptr + 8, path_ptr)?;
-        self.write_u64(
-            info_ptr + 16,
+        self.write_pointer(info_ptr, base)?;
+        self.write_pointer(info_ptr + p, path_ptr)?;
+        self.write_pointer(
+            info_ptr + 2 * p,
             base + first.p_vaddr - first.p_offset + image.phoff,
         )?;
-        self.write_u64(info_ptr + 24, image.phnum as u64)?;
+        self.write_bytes(info_ptr + 3 * p, &image.phnum.to_le_bytes())?;
         self.modules.push(Loaded {
             name: name.clone(),
             image: image.clone(),
@@ -321,7 +353,10 @@ impl Emulator {
             dl_references: 0,
         });
         for needed in &image.needed {
-            let path = self.rootfs.join("lib64").join(needed);
+            let path = self
+                .rootfs
+                .join(self.architecture().library_dir())
+                .join(needed);
             if path.is_file() {
                 let dep = self.load_image(&path)?;
                 self.modules[id.0].dependencies.push(dep);
@@ -373,7 +408,19 @@ impl Emulator {
             if kind == 0 {
                 continue;
             }
-            let value = if kind == 1027 {
+            let Some((relative, implicit)) = image.arch.relocation(kind) else {
+                return Err(format!(
+                    "unsupported relocation type {kind} in {} at offset 0x{:x}",
+                    self.modules[module.0].name, relocation.offset
+                )
+                .into());
+            };
+            let addend = if implicit {
+                self.read_pointer(base + relocation.offset)? as i64
+            } else {
+                relocation.addend
+            };
+            let value = if relative {
                 base
             } else {
                 let symbol = &image.symbols[(relocation.info >> 32) as usize];
@@ -402,17 +449,8 @@ impl Emulator {
                     value
                 }
             }
-            .wrapping_add_signed(relocation.addend);
-            match kind {
-                257 | 1025..=1027 => self.write_u64(base + relocation.offset, value)?,
-                _ => {
-                    return Err(format!(
-                        "unsupported relocation type {kind} in {} at offset 0x{:x}",
-                        self.modules[module.0].name, relocation.offset
-                    )
-                    .into());
-                }
-            }
+            .wrapping_add_signed(addend);
+            self.write_pointer(base + relocation.offset, value)?;
         }
         self.modules[module.0].relocated = true;
         Ok(())
@@ -431,14 +469,15 @@ impl Emulator {
             self.call_function(base + image.init, &[])?;
         }
         for i in 0..image.init_count {
-            let address = self.read_u64(base + image.init_array + i * 8)?;
-            if address != 0 && address != u64::MAX {
+            let address = self.read_pointer(base + image.init_array + i * self.pointer_size())?;
+            if address != 0 && address != self.architecture().pointer_mask() {
                 self.call_function(address, &[])?;
             }
         }
         Ok(())
     }
     pub fn malloc(&mut self, size: usize) -> Result<u64> {
+        self.cpu()?;
         let size = (size.max(1) as u64 + 15) & !15;
         let address = if let Some(index) = self
             .free_blocks
@@ -455,8 +494,9 @@ impl Emulator {
             self.heap = self.heap.checked_add(size).ok_or(uc_error::NOMEM)?;
             if self.heap > self.heap_end {
                 let end = page_up(self.heap);
-                self.uc
-                    .mem_map(self.heap_end, end - self.heap_end, Prot::READ | Prot::WRITE)?;
+                let start = self.heap_end;
+                self.cpu_mut()?
+                    .mem_map(start, end - start, Prot::READ | Prot::WRITE)?;
                 self.heap_end = end;
             }
             self.heap_high_water = self.heap_high_water.max(self.heap);
@@ -517,7 +557,7 @@ impl Emulator {
         Ok(ptr)
     }
     pub fn read_bytes(&self, address: u64, size: usize) -> Result<Vec<u8>> {
-        Ok(self.uc.mem_read_as_vec(address, size)?)
+        Ok(self.cpu()?.mem_read_as_vec(address, size)?)
     }
     pub fn write_bytes(&mut self, address: u64, bytes: &[u8]) -> Result<()> {
         // Unicorn's host write API bypasses guest permissions. Never let it
@@ -529,9 +569,9 @@ impl Emulator {
         {
             return Err(uc_error::WRITE_PROT.into());
         }
-        self.uc.mem_write(address, bytes)?;
+        self.cpu_mut()?.mem_write(address, bytes)?;
         if !bytes.is_empty() {
-            self.uc
+            self.cpu_mut()?
                 .ctl_remove_cache(address, address + bytes.len() as u64)?;
         }
         Ok(())
@@ -557,9 +597,6 @@ impl Emulator {
         }
         Ok(String::from_utf8_lossy(&value).into_owned())
     }
-    fn reg(&self, index: usize) -> Result<u64> {
-        Ok(self.uc.reg_read(Reg::X0 as i32 + index as i32)?)
-    }
     fn location(&self, address: u64) -> String {
         self.modules
             .iter()
@@ -570,37 +607,29 @@ impl Emulator {
             )
     }
     pub fn call_function(&mut self, function: u64, args: &[u64]) -> Result<u64> {
-        let sp = self.uc.reg_read(Reg::SP)?;
-        let call_sp = (sp - args.len().saturating_sub(8) as u64 * 8) & !15;
-        for (i, value) in args.iter().enumerate() {
-            if i < 8 {
-                self.uc.reg_write(Reg::X0 as i32 + i as i32, *value)?;
-            } else {
-                self.write_u64(call_sp + (i - 8) as u64 * 8, *value)?;
-            }
-        }
-        self.uc.reg_write(Reg::SP, call_sp)?;
-        self.uc.reg_write(Reg::LR, RETURN)?;
+        let sp = self.place_arguments(args.iter().map(|&bits| (b'L', bits)))?;
         let result = self.run(function, &mut ());
-        self.uc.reg_write(Reg::SP, sp)?;
+        self.set_sp(sp)?;
         result
     }
     fn run(&mut self, mut pc: u64, handler: &mut dyn JniHandler) -> Result<u64> {
         loop {
-            *self.uc.get_data_mut() = None;
-            if let Err(error) = self.uc.emu_start(pc, RETURN, 0, 0) {
+            *self.cpu_mut()?.get_data_mut() = None;
+            if let Err(error) = self.cpu_mut()?.emu_start(pc, RETURN, 0, 0) {
                 return Err(self.emulation_error(error));
             }
-            pc = self.uc.reg_read(Reg::PC)?;
-            let Some(interrupt) = *self.uc.get_data() else {
+            let (restart, location) = self.restart_pc()?;
+            pc = restart;
+            let Some(interrupt) = *self.cpu()?.get_data() else {
                 return self.reg(0);
             };
             if interrupt != 2 {
                 return Err(self.emulation_error(uc_error::EXCEPTION));
             }
-            let result = if (TRAMPOLINE..RETURN).contains(&pc.saturating_sub(4)) {
-                let function = self.host[((pc - 4 - TRAMPOLINE) / 8) as usize].clone();
-                self.host_function(function, handler)?
+            if (TRAMPOLINE..RETURN).contains(&location) {
+                let function = self.host[((location - TRAMPOLINE) / 8) as usize].clone();
+                let result = self.host_function(function, handler)?;
+                self.write_host_result(result)?;
             } else {
                 let args = [
                     self.reg(0)?,
@@ -610,14 +639,18 @@ impl Emulator {
                     self.reg(4)?,
                     self.reg(5)?,
                 ];
-                self.syscall(self.reg(8)?, args, pc - 4)?
-            };
-            self.uc.reg_write(Reg::X0, result)?;
+                let result = self.syscall(
+                    self.reg(self.architecture().syscall_register())?,
+                    args,
+                    location,
+                )?;
+                self.write_reg(0, result)?;
+            }
         }
     }
     fn emulation_error(&self, error: uc_error) -> Box<dyn std::error::Error> {
-        let pc = self.uc.reg_read(Reg::PC).unwrap_or(0);
-        let lr = self.uc.reg_read(Reg::LR).unwrap_or(0);
+        let pc = self.pc().unwrap_or(0);
+        let lr = self.lr().unwrap_or(0);
         format!(
             "emulation stopped: {error} at {} (pc=0x{pc:x}, lr=0x{lr:x})",
             self.location(pc)
@@ -642,16 +675,16 @@ impl Emulator {
             }
             HostFunction::Unresolved { symbol, module } => Err(format!(
                 "call to unresolved symbol {symbol} imported by {module} from {}",
-                self.location(self.uc.reg_read(Reg::LR)?)
+                self.location(self.lr()?)
             )
             .into()),
             HostFunction::Dl(name) => self.dl_function(name),
         }
     }
     fn nested_call(&mut self, function: u64, args: &[u64]) -> Result<u64> {
-        let context = self.uc.context_init()?;
+        let context = self.cpu()?.context_init()?;
         let value = self.call_function(function, args);
-        self.uc.context_restore(&context)?;
+        self.cpu_mut()?.context_restore(&context)?;
         value
     }
     fn dl_function(&mut self, name: &str) -> Result<u64> {
@@ -677,32 +710,35 @@ impl Emulator {
                 let path = if !path.contains("..") && full.is_file() {
                     full
                 } else {
-                    self.rootfs.join("lib64").join(name.as_ref())
+                    self.rootfs
+                        .join(self.architecture().library_dir())
+                        .join(name.as_ref())
                 };
                 if !path.is_file() {
                     self.set_dlerror(&format!("dlopen failed: library \"{name}\" not found"))?;
                     return Ok(0);
                 }
-                let context = self.uc.context_init()?;
+                let context = self.cpu()?.context_init()?;
                 let result = self.load_library(path);
-                self.uc.context_restore(&context)?;
+                self.cpu_mut()?.context_restore(&context)?;
                 let module = result?;
                 self.modules[module.0].dl_references += 1;
                 Ok(module.0 as u64 + 1)
             }
             "dlsym" => {
                 let symbol = self.cstring(b)?;
-                let value = if a == 0 {
+                let value = if a == self.architecture().rtld_default() {
                     (0..self.modules.len()).find_map(|i| self.local_symbol(Module(i), &symbol))
-                } else if a == u64::MAX {
-                    let caller = self.uc.reg_read(Reg::LR)?;
+                } else if a == self.architecture().rtld_next() {
+                    let caller = self.lr()?;
                     let start = self
                         .modules
                         .iter()
                         .position(|m| caller >= m.base && caller < m.base + m.image.size)
                         .map_or(0, |i| i + 1);
                     (start..self.modules.len()).find_map(|i| self.local_symbol(Module(i), &symbol))
-                } else if a <= self.modules.len() as u64
+                } else if a != 0
+                    && a <= self.modules.len() as u64
                     && self.modules[(a - 1) as usize].dl_references != 0
                 {
                     self.search_symbol(Module((a - 1) as usize), &symbol, &mut Vec::new())
@@ -737,8 +773,9 @@ impl Emulator {
                     return Ok(0);
                 };
                 let path = self.modules[i].path_ptr;
-                self.write_u64(b, path)?;
-                self.write_u64(b + 8, self.modules[i].base)?;
+                let p = self.pointer_size();
+                self.write_pointer(b, path)?;
+                self.write_pointer(b + p, self.modules[i].base)?;
                 let symbol = self.modules[i]
                     .image
                     .symbols
@@ -755,13 +792,14 @@ impl Emulator {
                         )
                     });
                 let (name, address) = symbol.unwrap_or((0, 0));
-                self.write_u64(b + 16, name)?;
-                self.write_u64(b + 24, address)?;
+                self.write_pointer(b + 2 * p, name)?;
+                self.write_pointer(b + 3 * p, address)?;
                 Ok(1)
             }
             "dl_iterate_phdr" => {
                 for i in 0..self.modules.len() {
-                    let result = self.nested_call(a, &[self.modules[i].info_ptr, 32, b])?;
+                    let result = self
+                        .nested_call(a, &[self.modules[i].info_ptr, 4 * self.pointer_size(), b])?;
                     if result != 0 {
                         return Ok(result);
                     }
@@ -779,8 +817,8 @@ impl Emulator {
             let hi = end.min(region.end);
             if lo < hi && region.shared && permissions.0 & Prot::WRITE.0 != 0 {
                 let bytes = self.read_bytes(lo, (hi - lo) as usize)?;
-                self.uc.mem_unmap(lo, hi - lo)?;
-                self.uc.mem_map(lo, hi - lo, permissions)?;
+                self.cpu_mut()?.mem_unmap(lo, hi - lo)?;
+                self.cpu_mut()?.mem_map(lo, hi - lo, permissions)?;
                 self.write_bytes(lo, &bytes)?;
                 if region.start < lo {
                     regions.push(Region {
@@ -804,7 +842,8 @@ impl Emulator {
             }
         }
         self.regions = regions;
-        self.uc.mem_protect(start, end - start, permissions)?;
+        self.cpu_mut()?
+            .mem_protect(start, end - start, permissions)?;
         Ok(())
     }
 }

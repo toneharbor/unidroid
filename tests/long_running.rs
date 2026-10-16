@@ -38,7 +38,9 @@ fn loader_service_calls_do_not_grow_the_api_heap() -> Result<()> {
 
 #[test]
 fn api_heap_reuses_and_coalesces_freed_blocks() -> Result<()> {
+    let library = elf::TestLibrary::new(false);
     let mut emu = Emulator::builder().build()?;
+    emu.load_library(&library.0)?;
     let first = emu.malloc(32)?;
     let second = emu.malloc(48)?;
     emu.free(first);

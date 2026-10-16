@@ -1,4 +1,4 @@
-use crate::{Emulator, HostFunction, Module, RETURN, Reg, Result};
+use crate::{Emulator, HostFunction, Module, Result};
 use std::{
     any::Any,
     cell::RefCell,
@@ -39,6 +39,7 @@ impl PrimitiveType {
         }
     }
 }
+const MEMBER_ID_BASE: u64 = 0x8000_0000;
 const ARRAY_TYPES: [PrimitiveType; 8] = [
     PrimitiveType::Boolean,
     PrimitiveType::Byte,
@@ -88,8 +89,19 @@ pub(crate) struct JniState {
 
 impl Emulator {
     fn insert_ref(&mut self, object: Rc<RefCell<Object>>, scope: usize) -> Handle {
-        self.jni.next_handle += 1;
-        let handle = Handle(self.jni.next_handle);
+        let handle = loop {
+            self.jni.next_handle = self.jni.next_handle % (MEMBER_ID_BASE - 1) + 1;
+            let handle = Handle(self.jni.next_handle);
+            if !self.jni.objects.contains_key(&handle)
+                && !self
+                    .jni
+                    .classes
+                    .values()
+                    .any(|(remembered, _)| *remembered == handle)
+            {
+                break handle;
+            }
+        };
         self.jni.objects.insert(handle, Reference { object, scope });
         handle
     }
@@ -174,7 +186,7 @@ impl Emulator {
     fn reference_error(&self, function: &str, handle: u64) -> Box<dyn std::error::Error> {
         format!(
             "invalid JNI reference 0x{handle:x} in {function} from {}",
-            self.location(self.uc.reg_read(Reg::LR).unwrap_or(0))
+            self.location(self.lr().unwrap_or(0))
         )
         .into()
     }
@@ -189,21 +201,13 @@ impl Emulator {
             .ok_or_else(|| self.reference_error(function, handle))
     }
     fn require_member(&self, function: &str, id: u64) -> Result<Member> {
-        if id < 0x100000000 {
-            return Err(format!(
-                "invalid JNI id 0x{id:x} in {function} from {}",
-                self.location(self.uc.reg_read(Reg::LR).unwrap_or(0))
-            )
-            .into());
-        }
-        self.jni
-            .members
-            .get((id - 0x100000000) as usize)
+        id.checked_sub(MEMBER_ID_BASE)
+            .and_then(|index| self.jni.members.get(index as usize))
             .cloned()
             .ok_or_else(|| {
                 format!(
                     "invalid JNI id 0x{id:x} in {function} from {}",
-                    self.location(self.uc.reg_read(Reg::LR).unwrap_or(0))
+                    self.location(self.lr().unwrap_or(0))
                 )
                 .into()
             })
@@ -257,28 +261,33 @@ impl Emulator {
         self.insert_ref(object, scope)
     }
     pub(crate) fn setup_jni(&mut self) -> Result<()> {
-        let table = self.malloc(233 * 8)?;
+        let p = self.pointer_size();
+        let table = self.malloc(233 * p as usize)?;
         for index in 0..233 {
             let stub = self.stub(HostFunction::Jni(index))?;
-            self.write_u64(table + index as u64 * 8, stub)?;
+            self.write_pointer(table + index as u64 * p, stub)?;
         }
-        self.jni.env = self.malloc(8)?;
-        self.write_u64(self.jni.env, table)?;
-        let table = self.malloc(8 * 8)?;
+        self.jni.env = self.malloc(p as usize)?;
+        self.write_pointer(self.jni.env, table)?;
+        let table = self.malloc(8 * p as usize)?;
         for index in 0..8 {
             let stub = self.stub(HostFunction::Vm(index))?;
-            self.write_u64(table + index as u64 * 8, stub)?;
+            self.write_pointer(table + index as u64 * p, stub)?;
         }
-        self.jni.vm = self.malloc(8)?;
-        self.write_u64(self.jni.vm, table)?;
+        self.jni.vm = self.malloc(p as usize)?;
+        self.write_pointer(self.jni.vm, table)?;
         Ok(())
     }
     pub fn call_jni_onload(&mut self, module: Module, handler: &mut dyn JniHandler) -> Result<u64> {
+        self.cpu()?;
         let function = self.find_symbol(module, "JNI_OnLoad")?;
         self.invoke_jni(
             function,
-            &[JniValue::Long(self.jni.vm as i64), JniValue::Long(0)],
-            b'J',
+            &[
+                JniValue::Object(Handle(self.jni.vm)),
+                JniValue::Object(Handle(0)),
+            ],
+            b'I',
             handler,
         )
         .map(JniValue::bits)
@@ -301,6 +310,7 @@ impl Emulator {
         method: &str,
         args: &[JniValue],
     ) -> Result<JniValue> {
+        self.cpu()?;
         let (name, signature) = method.split_at(method.find('(').unwrap());
         let key = (class.to_owned(), method.to_owned());
         let function = if let Some(function) = self.jni.natives.get(&key) {
@@ -316,7 +326,7 @@ impl Emulator {
                 })
                 .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?
         };
-        let mut values = vec![JniValue::Long(self.jni.env as i64), receiver.into()];
+        let mut values = vec![JniValue::Object(Handle(self.jni.env)), receiver.into()];
         values.extend_from_slice(args);
         let result_type = signature.as_bytes()[signature.find(')').unwrap() + 1];
         self.invoke_jni(function, &values, result_type, handler)
@@ -330,39 +340,11 @@ impl Emulator {
     ) -> Result<JniValue> {
         let old_scope = self.jni.scope;
         self.jni.scope = old_scope.max(1) + 1;
-        let sp = self.uc.reg_read(Reg::SP)?;
-        let mut gp = 0;
-        let mut fp = 0;
-        let mut stack = Vec::new();
-        for &value in args {
-            let floating = matches!(value, JniValue::Float(_) | JniValue::Double(_));
-            if floating && fp < 8 {
-                self.uc.reg_write(Reg::D0 as i32 + fp, value.bits())?;
-                fp += 1;
-            } else if !floating && gp < 8 {
-                self.uc.reg_write(Reg::X0 as i32 + gp, value.bits())?;
-                gp += 1;
-            } else {
-                stack.push(value.bits());
-            }
-        }
-        let call_sp = (sp - stack.len() as u64 * 8) & !15;
-        for (i, value) in stack.iter().enumerate() {
-            self.write_u64(call_sp + i as u64 * 8, *value)?;
-        }
-        self.uc.reg_write(Reg::SP, call_sp)?;
-        self.uc.reg_write(Reg::LR, RETURN)?;
-        let result = self.run(function, handler).and_then(|bits| {
-            Ok(decode(
-                kind,
-                if kind == b'F' || kind == b'D' {
-                    self.uc.reg_read(Reg::D0)?
-                } else {
-                    bits
-                },
-            ))
-        });
-        self.uc.reg_write(Reg::SP, sp)?;
+        let sp = self.place_arguments(args.iter().map(|&value| (value.kind(), value.bits())))?;
+        let result = self
+            .run(function, handler)
+            .and_then(|_| Ok(decode(kind, self.result_bits(kind)?)));
+        self.set_sp(sp)?;
         if let Ok(JniValue::Object(handle)) = result
             && let Some(reference) = self.jni.objects.get_mut(&handle)
         {
@@ -404,21 +386,21 @@ impl Emulator {
     ) -> Box<dyn std::error::Error> {
         format!(
             "unhandled JNI call: {function} {class}->{name}{signature} from {}",
-            self.location(self.uc.reg_read(Reg::LR).unwrap_or(0))
+            self.location(self.lr().unwrap_or(0))
         )
         .into()
     }
     fn unsupported_jni(&self, name: &str) -> Box<dyn std::error::Error> {
         format!(
             "unsupported JNIEnv function {name} from {}",
-            self.location(self.uc.reg_read(Reg::LR).unwrap_or(0))
+            self.location(self.lr().unwrap_or(0))
         )
         .into()
     }
     fn unsupported_vm(&self, name: &str) -> Box<dyn std::error::Error> {
         format!(
             "unsupported JavaVM function {name} from {}",
-            self.location(self.uc.reg_read(Reg::LR).unwrap_or(0))
+            self.location(self.lr().unwrap_or(0))
         )
         .into()
     }
@@ -451,60 +433,19 @@ impl Emulator {
         variant: usize,
         start: usize,
     ) -> Result<Vec<JniValue>> {
-        let mut gp = start;
-        let mut fp = 0;
-        let mut stack = self.uc.reg_read(Reg::SP)?;
-        let ptr = if variant != 0 { self.reg(start)? } else { 0 };
-        let mut gr_top = 0;
-        let mut vr_top = 0;
-        let mut gr_off = 0i32;
-        let mut vr_off = 0i32;
-        if variant == 1 {
-            stack = self.read_u64(ptr)?;
-            gr_top = self.read_u64(ptr + 8)?;
-            vr_top = self.read_u64(ptr + 16)?;
-            gr_off = i32::from_le_bytes(self.read_bytes(ptr + 24, 4)?.try_into().unwrap());
-            vr_off = i32::from_le_bytes(self.read_bytes(ptr + 28, 4)?.try_into().unwrap());
-        }
-        let mut args = Vec::new();
-        for (i, kind) in argument_types(signature).into_iter().enumerate() {
-            let floating = kind == b'F' || kind == b'D';
-            let bits = if variant == 2 {
-                self.read_u64(ptr + i as u64 * 8)?
-            } else if variant == 1 {
-                if floating && vr_off < 0 {
-                    let p = vr_top.wrapping_add_signed(vr_off as i64);
-                    vr_off += 16;
-                    self.read_u64(p)?
-                } else if !floating && gr_off < 0 {
-                    let p = gr_top.wrapping_add_signed(gr_off as i64);
-                    gr_off += 8;
-                    self.read_u64(p)?
+        let kinds = argument_types(signature);
+        let bits = self.argument_bits(&kinds, variant, start)?;
+        Ok(kinds
+            .into_iter()
+            .zip(bits)
+            .map(|(kind, bits)| {
+                if kind == b'F' && variant != 2 {
+                    JniValue::Float(f64::from_bits(bits) as f32)
                 } else {
-                    let value = self.read_u64(stack)?;
-                    stack += 8;
-                    value
+                    decode(kind, bits)
                 }
-            } else if floating && fp < 8 {
-                let value = self.uc.reg_read(Reg::D0 as i32 + fp)?;
-                fp += 1;
-                value
-            } else if !floating && gp < 8 {
-                let value = self.reg(gp)?;
-                gp += 1;
-                value
-            } else {
-                let value = self.read_u64(stack)?;
-                stack += 8;
-                value
-            };
-            args.push(if kind == b'F' && variant != 2 {
-                JniValue::Float(f64::from_bits(bits) as f32)
-            } else {
-                decode(kind, bits)
-            });
-        }
-        Ok(args)
+            })
+            .collect())
     }
     pub(crate) fn jni_function(
         &mut self,
@@ -578,7 +519,7 @@ impl Emulator {
             };
             eprintln!(
                 "JNIEnv->{function}({details}) from {}",
-                self.location(self.uc.reg_read(Reg::LR)?)
+                self.location(self.lr()?)
             );
         }
         match index {
@@ -628,7 +569,7 @@ impl Emulator {
             18 => Err(format!(
                 "FatalError from native code: {} at {}",
                 self.cstring(a)?,
-                self.location(self.uc.reg_read(Reg::LR)?)
+                self.location(self.lr()?)
             )
             .into()),
             27 => Ok(self
@@ -653,7 +594,7 @@ impl Emulator {
             }
             228 => Ok(if self.jni.pending.is_some() { 1 } else { 0 }),
             172 => {
-                let length = a as i64;
+                let length = a as i32 as i64;
                 if length < 0 {
                     self.pending_exception("java/lang/NegativeArraySizeException", None);
                     Ok(0)
@@ -671,7 +612,7 @@ impl Emulator {
                     let Object::ObjectArray(values, _) = &*object.borrow() else {
                         return Err(self.reference_error(&function, a));
                     };
-                    let index = b as i64;
+                    let index = b as i32 as i64;
                     if index < 0 || index as usize >= values.len() {
                         self.pending_exception("java/lang/ArrayIndexOutOfBoundsException", None);
                         return Ok(0);
@@ -686,7 +627,7 @@ impl Emulator {
                 let Object::ObjectArray(values, _) = &mut *object.borrow_mut() else {
                     return Err(self.reference_error(&function, a));
                 };
-                let index = b as i64;
+                let index = b as i32 as i64;
                 if index < 0 || index as usize >= values.len() {
                     self.pending_exception("java/lang/ArrayIndexOutOfBoundsException", None);
                 } else {
@@ -694,7 +635,10 @@ impl Emulator {
                 }
                 Ok(0)
             }
-            229 => Ok(self.insert_object(Object::DirectBuffer(a, b as i64)).0),
+            229 => {
+                let capacity = self.argument(2, b'J')? as i64;
+                Ok(self.insert_object(Object::DirectBuffer(a, capacity)).0)
+            }
             230 => {
                 let object = self.require_object(&function, a)?;
                 let Object::DirectBuffer(ptr, _) = *object.borrow() else {
@@ -729,16 +673,7 @@ impl Emulator {
                 self.jni.objects.retain(|_, v| v.scope < scope);
                 self.jni.scope = scope.saturating_sub(1).max(2);
                 if let Some(object) = object {
-                    self.jni.next_handle += 1;
-                    let handle = Handle(self.jni.next_handle);
-                    self.jni.objects.insert(
-                        handle,
-                        Reference {
-                            object,
-                            scope: self.jni.scope,
-                        },
-                    );
-                    Ok(handle.0)
+                    Ok(self.insert_ref(object, self.jni.scope).0)
                 } else {
                     Ok(0)
                 }
@@ -793,7 +728,7 @@ impl Emulator {
                 if let Some(id) = self.jni.member_ids.get(&key) {
                     return Ok(*id);
                 }
-                let id = self.jni.members.len() as u64 + 0x100000000;
+                let id = self.jni.members.len() as u64 + MEMBER_ID_BASE;
                 self.jni.members.push(Member {
                     class,
                     name,
@@ -820,11 +755,7 @@ impl Emulator {
                 };
                 let args = if operation == 4 || operation == 5 {
                     let kind = member.signature.as_bytes()[0];
-                    let bits = if kind == b'F' || kind == b'D' {
-                        self.uc.reg_read(Reg::D0)?
-                    } else {
-                        c
-                    };
+                    let bits = self.argument(3, kind)?;
                     vec![decode(kind, bits)]
                 } else if operation == 2 || operation == 3 {
                     Vec::new()
@@ -845,7 +776,7 @@ impl Emulator {
                         call.name,
                         call.signature,
                         call.args,
-                        self.location(self.uc.reg_read(Reg::LR)?)
+                        self.location(self.lr()?)
                     );
                 }
                 let result = if constructor {
@@ -882,13 +813,11 @@ impl Emulator {
                 let value = result.ok_or_else(|| {
                     self.jni_error(&function, &member.class, &member.name, &member.signature)
                 })?;
-                if matches!(value, JniValue::Float(_) | JniValue::Double(_)) {
-                    self.uc.reg_write(Reg::D0, value.bits())?;
-                }
+                self.write_jni_result(value)?;
                 Ok(value.bits())
             }
             163 => {
-                let length = b as i64;
+                let length = b as i32 as i64;
                 if length < 0 {
                     self.pending_exception("java/lang/NegativeArraySizeException", None);
                     return Ok(0);
@@ -965,7 +894,7 @@ impl Emulator {
                 }
             }
             175..=182 => {
-                let length = a as i64;
+                let length = a as i32 as i64;
                 if length < 0 {
                     self.pending_exception("java/lang/NegativeArraySizeException", None);
                     Ok(0)
@@ -990,7 +919,7 @@ impl Emulator {
                     let Object::Array(_, bytes) = &mut *object else {
                         unreachable!()
                     };
-                    self.uc.mem_read(b, bytes)?;
+                    self.cpu()?.mem_read(b, bytes)?;
                 }
                 if c != 1 {
                     self.release_scratch(b);
@@ -1003,8 +932,8 @@ impl Emulator {
                     Object::Array(kind, bytes) => (*kind as PrimitiveType, bytes.len()),
                     _ => return Err(self.reference_error(&function, a)),
                 };
-                let start = b as i64;
-                let count = c as i64;
+                let start = b as i32 as i64;
+                let count = c as i32 as i64;
                 if start < 0
                     || count < 0
                     || (start as usize).saturating_add(count as usize) * width.size() > total
@@ -1014,7 +943,7 @@ impl Emulator {
                 }
                 let start = start as usize * width.size();
                 let length = count as usize * width.size();
-                let ptr = self.reg(4)?;
+                let ptr = self.argument(4, b'L')?;
                 let mut object = object.borrow_mut();
                 let Object::Array(_, bytes) = &mut *object else {
                     unreachable!()
@@ -1022,17 +951,19 @@ impl Emulator {
                 if index < 207 {
                     self.write_bytes(ptr, &bytes[start..start + length])?;
                 } else {
-                    self.uc.mem_read(ptr, &mut bytes[start..start + length])?;
+                    self.cpu()?
+                        .mem_read(ptr, &mut bytes[start..start + length])?;
                 }
                 Ok(0)
             }
             215 => {
                 let class = self.class_name(Handle(a));
                 for i in 0..c {
-                    let entry = b + i * 24;
-                    let name = self.cstring(self.read_u64(entry)?)?;
-                    let signature = self.cstring(self.read_u64(entry + 8)?)?;
-                    let ptr = self.read_u64(entry + 16)?;
+                    let p = self.pointer_size();
+                    let entry = b + i * 3 * p;
+                    let name = self.cstring(self.read_pointer(entry)?)?;
+                    let signature = self.cstring(self.read_pointer(entry + p)?)?;
+                    let ptr = self.read_pointer(entry + 2 * p)?;
                     self.jni
                         .natives
                         .insert((class.clone(), format!("{name}{signature}")), ptr);
@@ -1045,7 +976,7 @@ impl Emulator {
                 Ok(0)
             }
             219 => {
-                self.write_u64(a, self.jni.vm)?;
+                self.write_pointer(a, self.jni.vm)?;
                 Ok(0)
             }
             220 | 221 => {
@@ -1053,8 +984,8 @@ impl Emulator {
                 let Object::String(value) = &*object.borrow() else {
                     return Err(self.reference_error(&function, a));
                 };
-                let start = b as i64;
-                let length = c as i64;
+                let start = b as i32 as i64;
+                let length = c as i32 as i64;
                 if start < 0
                     || length < 0
                     || (start as usize).saturating_add(length as usize) > value.len()
@@ -1068,7 +999,7 @@ impl Emulator {
                 } else {
                     units.iter().flat_map(|c| c.to_le_bytes()).collect()
                 };
-                self.write_bytes(self.reg(4)?, &bytes)?;
+                self.write_bytes(self.argument(4, b'L')?, &bytes)?;
                 Ok(0)
             }
             232 => Ok(self.jni.objects.get(&Handle(a)).map_or(0, |v| {
@@ -1087,7 +1018,7 @@ impl Emulator {
         match index {
             3 => Err(self.unsupported_vm("DestroyJavaVM")),
             4 | 6 | 7 => {
-                self.write_u64(self.reg(1)?, self.jni.env)?;
+                self.write_pointer(self.reg(1)?, self.jni.env)?;
                 Ok(0)
             }
             5 => Ok(0),
@@ -1287,6 +1218,14 @@ impl From<i64> for JniValue {
     }
 }
 impl JniValue {
+    pub(crate) fn kind(self) -> u8 {
+        match self {
+            Self::Long(_) => b'J',
+            Self::Float(_) => b'F',
+            Self::Double(_) => b'D',
+            _ => b'L',
+        }
+    }
     pub fn object(self) -> Handle {
         if let Self::Object(v) = self {
             v
@@ -1689,6 +1628,398 @@ fn dispatch(
 mod tests {
     use super::*;
     #[test]
+    fn arm32_mixed_variadic_v_and_a_calls_include_nonvirtual_stack_arguments() -> Result<()> {
+        struct Handler;
+        impl JniHandler for Handler {
+            fn call_long_method(&mut self, _: &mut Emulator, call: &JniCall<'_>) -> Option<i64> {
+                assert_eq!(
+                    call.args,
+                    [
+                        JniValue::Long(0x1122_3344_5566_7788),
+                        JniValue::Int(-7),
+                        JniValue::Long(-2),
+                        JniValue::Float(3.5),
+                        JniValue::Double(9.5)
+                    ]
+                );
+                Some(0x8877_6655_4433_2211u64 as i64)
+            }
+            fn call_static_long_method(
+                &mut self,
+                emu: &mut Emulator,
+                call: &JniCall<'_>,
+            ) -> Option<i64> {
+                self.call_long_method(emu, call)
+            }
+        }
+        let mut emu = Emulator::builder().build()?;
+        emu.setup_cpu(crate::Architecture::Arm32)?;
+        let class = emu.class("example/Mixed");
+        let name = emu.new_cstring("mixed")?;
+        let sig = emu.new_cstring("(JIJFD)J")?;
+        let table = emu.read_pointer(emu.jni.env)?;
+        let memory = emu.malloc(64)?;
+        let va = memory + 4; // The first jlong must align this address up to 8.
+        for (offset, value) in [
+            (8, 0x1122_3344_5566_7788),
+            (24, (-2i64) as u64),
+            (32, 3.5f64.to_bits()),
+            (40, 9.5f64.to_bits()),
+        ] {
+            emu.write_u64(memory + offset, value)?;
+        }
+        emu.write_pointer(memory + 16, (-7i32) as u64)?;
+        let slots = emu.malloc(40)?;
+        for (i, value) in [
+            0x1122_3344_5566_7788,
+            (-7i32) as u64,
+            (-2i64) as u64,
+            3.5f32.to_bits() as u64,
+            9.5f64.to_bits(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            emu.write_u64(slots + i as u64 * 8, value)?;
+        }
+        for base in [52, 82, 132] {
+            let nonvirtual = base == 82;
+            let get_id = emu.read_pointer(table + if base == 132 { 113 * 4 } else { 33 * 4 })?;
+            let id = emu.call_function(get_id, &[emu.jni.env, class.0, name, sig])?;
+            for variant in 0..3 {
+                let mut words = vec![emu.jni.env, class.0];
+                if nonvirtual {
+                    words.push(class.0);
+                }
+                words.push(id);
+                if variant == 0 {
+                    if !nonvirtual {
+                        words.push(0xdead_beef);
+                    } // r3 is skipped for jlong.
+                    words.extend([
+                        0x5566_7788,
+                        0x1122_3344,
+                        0xffff_fff9,
+                        0xdead_beef,
+                        0xffff_fffe,
+                        0xffff_ffff,
+                        0,
+                        0x400c_0000,
+                        0,
+                        0x4023_0000,
+                    ]);
+                } else {
+                    words.push(if variant == 1 { va } else { slots });
+                }
+                let args: Vec<_> = words
+                    .into_iter()
+                    .map(|word| JniValue::Int(word as i32))
+                    .collect();
+                let function = emu.read_pointer(table + (base + variant) * 4)?;
+                assert_eq!(
+                    emu.invoke_jni(function, &args, b'J', &mut Handler)?,
+                    JniValue::Long(0x8877_6655_4433_2211u64 as i64)
+                );
+                assert_eq!(emu.reg(0)?, 0x4433_2211);
+                assert_eq!(emu.reg(1)?, 0x8877_6655);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn arm32_native_arguments_use_even_register_pairs_and_aligned_stack_slots() -> Result<()> {
+        let mut emu = Emulator::builder().build()?;
+        emu.setup_cpu(crate::Architecture::Arm32)?;
+        let code = crate::RETURN + 0x100;
+        // mov r0,r2; mov r1,r3; bx lr
+        emu.write_bytes(
+            code,
+            &[0xe1a00002u32, 0xe1a01003, 0xe12fff1e]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect::<Vec<_>>(),
+        )?;
+        assert_eq!(
+            emu.invoke_jni(
+                code,
+                &[JniValue::Int(9), JniValue::Long(0x1122_3344_5566_7788)],
+                b'J',
+                &mut ()
+            )?,
+            JniValue::Long(0x1122_3344_5566_7788)
+        );
+        let args = [
+            JniValue::Int(1),
+            JniValue::Int(2),
+            JniValue::Int(3),
+            JniValue::Long(0x1122_3344_5566_7788),
+            JniValue::Float(3.5),
+            JniValue::Double(9.5),
+            JniValue::Int(7),
+        ];
+        // ldr r0,[sp,#offset]; ldr r1,[sp,#offset+4]; bx lr
+        for (offset, kind, expected) in [
+            (0, b'J', args[3]),
+            (8, b'F', args[4]),
+            (16, b'D', args[5]),
+            (24, b'I', args[6]),
+        ] {
+            emu.write_bytes(
+                code,
+                &[
+                    0xe59d0000u32 | offset,
+                    0xe59d1000 | (offset + 4),
+                    0xe12fff1e,
+                ]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect::<Vec<_>>(),
+            )?;
+            assert_eq!(emu.invoke_jni(code, &args, kind, &mut ())?, expected);
+        }
+        // ldr r0,[sp]; bx lr: the fifth raw argument is one truncated word.
+        emu.write_bytes(
+            code,
+            &[0xe59d0000u32, 0xe12fff1e]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect::<Vec<_>>(),
+        )?;
+        assert_eq!(
+            emu.call_function(code, &[1, 2, 3, 4, 0x1234_5678_ffff_ffff])?,
+            0xffff_ffff
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn arm32_field_values_and_double_results_follow_softfp() -> Result<()> {
+        struct Handler(JniValue);
+        impl Handler {
+            fn check(&self, call: &JniCall<'_>) -> Option<()> {
+                assert_eq!(call.args, [self.0]);
+                Some(())
+            }
+        }
+        impl JniHandler for Handler {
+            fn set_long_field(&mut self, _: &mut Emulator, c: &JniCall<'_>) -> Option<()> {
+                self.check(c)
+            }
+            fn set_static_long_field(&mut self, _: &mut Emulator, c: &JniCall<'_>) -> Option<()> {
+                self.check(c)
+            }
+            fn set_float_field(&mut self, _: &mut Emulator, c: &JniCall<'_>) -> Option<()> {
+                self.check(c)
+            }
+            fn set_static_float_field(&mut self, _: &mut Emulator, c: &JniCall<'_>) -> Option<()> {
+                self.check(c)
+            }
+            fn set_double_field(&mut self, _: &mut Emulator, c: &JniCall<'_>) -> Option<()> {
+                self.check(c)
+            }
+            fn set_static_double_field(&mut self, _: &mut Emulator, c: &JniCall<'_>) -> Option<()> {
+                self.check(c)
+            }
+            fn get_double_field(&mut self, _: &mut Emulator, _: &JniCall<'_>) -> Option<f64> {
+                Some(9.5)
+            }
+            fn get_static_double_field(
+                &mut self,
+                _: &mut Emulator,
+                _: &JniCall<'_>,
+            ) -> Option<f64> {
+                Some(9.5)
+            }
+        }
+        let mut emu = Emulator::builder().build()?;
+        emu.setup_cpu(crate::Architecture::Arm32)?;
+        let class = emu.class("example/Fields");
+        let table = emu.read_pointer(emu.jni.env)?;
+        let name = emu.new_cstring("value")?;
+        for static_field in [false, true] {
+            for (signature, index, value) in [
+                ("J", 110, JniValue::Long(0x1122_3344_5566_7788)),
+                ("F", 111, JniValue::Float(3.5)),
+                ("D", 112, JniValue::Double(9.5)),
+            ] {
+                let signature = emu.new_cstring(signature)?;
+                let get_id =
+                    emu.read_pointer(table + if static_field { 144 * 4 } else { 94 * 4 })?;
+                let id = emu.call_function(get_id, &[emu.jni.env, class.0, name, signature])?;
+                let mut words = vec![emu.jni.env, class.0, id];
+                if index != 111 {
+                    words.push(0xdead_beef);
+                }
+                words.push(value.bits() & 0xffff_ffff);
+                if index != 111 {
+                    words.push(value.bits() >> 32);
+                }
+                let args: Vec<_> = words
+                    .into_iter()
+                    .map(|word| JniValue::Int(word as i32))
+                    .collect();
+                let setter =
+                    emu.read_pointer(table + (index + if static_field { 50 } else { 0 }) * 4)?;
+                emu.invoke_jni(setter, &args, b'V', &mut Handler(value))?;
+                if index == 112 {
+                    let getter =
+                        emu.read_pointer(table + if static_field { 153 * 4 } else { 103 * 4 })?;
+                    assert_eq!(
+                        emu.invoke_jni(
+                            getter,
+                            &[Handle(emu.jni.env).into(), class.into(), Handle(id).into()],
+                            b'D',
+                            &mut Handler(value)
+                        )?,
+                        value
+                    );
+                    assert_eq!(emu.reg(0)?, 0);
+                    assert_eq!(emu.reg(1)?, 0x4023_0000);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn arm32_direct_buffers_use_a_register_pair_for_capacity() -> Result<()> {
+        let mut emu = Emulator::builder().build()?;
+        emu.setup_cpu(crate::Architecture::Arm32)?;
+        let table = emu.read_pointer(emu.jni.env)?;
+        let memory = emu.malloc(16)?;
+        let buffer = emu.call_function(
+            emu.read_pointer(table + 229 * 4)?,
+            &[emu.jni.env, memory, 0x89ab_cdef, 0x1234_5678],
+        )?;
+        let capacity = emu.read_pointer(table + 231 * 4)?;
+        assert_eq!(
+            emu.invoke_jni(
+                capacity,
+                &[Handle(emu.jni.env).into(), Handle(buffer).into()],
+                b'J',
+                &mut ()
+            )?,
+            JniValue::Long(0x1234_5678_89ab_cdef)
+        );
+        assert_eq!(emu.reg(0)?, 0x89ab_cdef);
+        assert_eq!(emu.reg(1)?, 0x1234_5678);
+        Ok(())
+    }
+
+    #[test]
+    fn arm32_vm_pointers_write_four_bytes_and_native_entries_keep_thumb_bits() -> Result<()> {
+        let mut emu = Emulator::builder().build()?;
+        emu.setup_cpu(crate::Architecture::Arm32)?;
+        let env_table = emu.read_pointer(emu.jni.env)?;
+        let vm_table = emu.read_pointer(emu.jni.vm)?;
+        let out = emu.malloc(8)?;
+        for index in [4, 6, 7] {
+            emu.write_bytes(out, &[0xa5; 8])?;
+            let function = emu.read_pointer(vm_table + index * 4)?;
+            assert_eq!(emu.call_function(function, &[emu.jni.vm, out, 0x10006])?, 0);
+            assert_eq!(emu.read_pointer(out)?, emu.jni.env);
+            assert_eq!(emu.read_bytes(out + 4, 4)?, [0xa5; 4]);
+        }
+        emu.write_bytes(out, &[0xa5; 8])?;
+        let get_vm = emu.read_pointer(env_table + 219 * 4)?;
+        assert_eq!(emu.call_function(get_vm, &[emu.jni.env, out])?, 0);
+        assert_eq!(emu.read_pointer(out)?, emu.jni.vm);
+        assert_eq!(emu.read_bytes(out + 4, 4)?, [0xa5; 4]);
+
+        let class = emu.class("example/Native");
+        let entries = emu.malloc(24)?;
+        let sig = emu.new_cstring("()I")?;
+        let code = crate::RETURN + 0x100;
+        // Thumb: movs r0,#42; bx lr; movs r0,#7; bx lr.
+        emu.write_bytes(code, &[0x2a, 0x20, 0x70, 0x47, 7, 0x20, 0x70, 0x47])?;
+        for (i, name) in ["one", "two"].into_iter().enumerate() {
+            let name = emu.new_cstring(name)?;
+            let entry = entries + i as u64 * 12;
+            emu.write_pointer(entry, name)?;
+            emu.write_pointer(entry + 4, sig)?;
+            emu.write_pointer(entry + 8, (code + i as u64 * 4) | 1)?;
+        }
+        let register = emu.read_pointer(env_table + 215 * 4)?;
+        assert_eq!(
+            emu.call_function(register, &[emu.jni.env, class.0, entries, 2])?,
+            0
+        );
+        assert_eq!(
+            emu.call_static_jni_method(&mut (), "example/Native", "one()I", &[])?
+                .int(),
+            42
+        );
+        assert_eq!(
+            emu.call_static_jni_method(&mut (), "example/Native", "two()I", &[])?
+                .int(),
+            7
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn string_regions_use_a_fifth_argument_and_signed_jni_lengths() -> Result<()> {
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            let table = emu.read_pointer(emu.jni.env)?;
+            let string = emu.new_string("aéz");
+            let out = emu.malloc(8)?;
+            for (index, expected) in [(220, [0xe9, 0]), (221, [0xc3, 0xa9])] {
+                emu.write_bytes(out, &[0xa5; 8])?;
+                let function = emu.read_pointer(table + index * emu.pointer_size())?;
+                emu.call_function(function, &[emu.jni.env, string.0, 1, 1, out])?;
+                assert_eq!(emu.read_bytes(out, 2)?, expected);
+                assert_eq!(emu.read_bytes(out + 2, 6)?, [0xa5; 6]);
+            }
+            let new_string = emu.read_pointer(table + 163 * emu.pointer_size())?;
+            assert_eq!(
+                emu.call_function(new_string, &[emu.jni.env, 0, u64::MAX])?,
+                0
+            );
+            let check = emu.read_pointer(table + 228 * emu.pointer_size())?;
+            assert_eq!(emu.call_function(check, &[emu.jni.env])?, 1);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn handles_wrap_without_reusing_live_or_remembered_class_ids() -> Result<()> {
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            let live = emu.new_string("live");
+            let class = emu.class("example/Remembered");
+            emu.release(class);
+            let free = emu.new_string("released");
+            emu.release(free);
+            emu.jni.next_handle = 0x7fff_fffe;
+            assert_eq!(emu.new_string("last"), Handle(0x7fff_ffff));
+            assert_eq!(emu.new_string("wrapped"), free);
+            assert_eq!(emu.string(live), "live");
+            assert_eq!(emu.class("example/Remembered"), class);
+
+            let table = emu.read_pointer(emu.jni.env)?;
+            let name = emu.new_cstring("field")?;
+            let signature = emu.new_cstring("J")?;
+            let id = emu.call_function(
+                emu.read_pointer(table + 94 * emu.pointer_size())?,
+                &[emu.jni.env, class.0, name, signature],
+            )?;
+            assert_eq!(id, 0x8000_0000);
+            let push = emu.read_pointer(table + 19 * emu.pointer_size())?;
+            let pop = emu.read_pointer(table + 20 * emu.pointer_size())?;
+            emu.call_function(push, &[emu.jni.env, 16])?;
+            emu.jni.next_handle = 0x7fff_ffff;
+            let result = emu.call_function(pop, &[emu.jni.env, live.0])?;
+            assert_eq!(result, 4);
+            assert_eq!(emu.string(Handle(result)), "live");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn jni_a_and_v_and_variadic_calls_decode_the_same_arguments() -> Result<()> {
         struct Handler {
             array: Handle,
@@ -1712,58 +2043,76 @@ mod tests {
                 Some(9.5)
             }
         }
-        let mut emu = Emulator::builder().build()?;
-        let class = emu.class("example/Math");
-        let array = emu.new_byte_array(&[1, 2]);
-        let name = emu.new_cstring("calculate")?;
-        let sig = emu.new_cstring("(I[BFJ)D")?;
-        let table = emu.read_u64(emu.jni.env)?;
-        let id_function = emu.read_u64(table + 113 * 8)?;
-        let id = emu.call_function(id_function, &[emu.jni.env, class.0, name, sig])?;
-        let slots = emu.malloc(32)?;
-        for (i, bits) in [
-            (-7i32) as u64,
-            array.0,
-            3.5f32.to_bits() as u64,
-            (-2i64) as u64,
-        ]
-        .iter()
-        .enumerate()
-        {
-            emu.write_u64(slots + i as u64 * 8, *bits)?;
-        }
-        let saved = emu.malloc(40)?;
-        emu.write_u64(saved, (-7i32) as u64)?;
-        emu.write_u64(saved + 8, array.0)?;
-        emu.write_u64(saved + 16, (-2i64) as u64)?;
-        emu.write_u64(saved + 24, 3.5f64.to_bits())?;
-        let va = emu.malloc(32)?;
-        emu.write_u64(va, 0)?;
-        emu.write_u64(va + 8, saved + 24)?;
-        emu.write_u64(va + 16, saved + 40)?;
-        emu.write_bytes(va + 24, &(-24i32).to_le_bytes())?;
-        emu.write_bytes(va + 28, &(-16i32).to_le_bytes())?;
-        for variant in 0..3 {
-            let function = emu.read_u64(table + (138 + variant) * 8)?;
-            let mut args = vec![
-                JniValue::Long(emu.jni.env as i64),
-                class.into(),
-                JniValue::Long(id as i64),
-            ];
-            if variant == 0 {
-                args.extend([
-                    (-7).into(),
-                    array.into(),
-                    JniValue::Double(3.5),
-                    JniValue::Long(-2),
-                ]);
-            } else {
-                args.push(JniValue::Long(if variant == 1 { va } else { slots } as i64));
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            let p = emu.pointer_size();
+            let class = emu.class("example/Math");
+            let array = emu.new_byte_array(&[1, 2]);
+            let name = emu.new_cstring("calculate")?;
+            let sig = emu.new_cstring("(I[BFJ)D")?;
+            let table = emu.read_pointer(emu.jni.env)?;
+            let id_function = emu.read_pointer(table + 113 * p)?;
+            let id = emu.call_function(id_function, &[emu.jni.env, class.0, name, sig])?;
+            let slots = emu.malloc(32)?;
+            for (i, bits) in [
+                (-7i32) as u64,
+                array.0,
+                3.5f32.to_bits() as u64,
+                (-2i64) as u64,
+            ]
+            .iter()
+            .enumerate()
+            {
+                emu.write_u64(slots + i as u64 * 8, *bits)?;
             }
-            assert_eq!(
-                emu.invoke_jni(function, &args, b'D', &mut Handler { array })?,
-                JniValue::Double(9.5)
-            );
+            let va = if arch == crate::Architecture::Arm32 {
+                let va = emu.malloc(24)?;
+                emu.write_pointer(va, (-7i32) as u64)?;
+                emu.write_pointer(va + 4, array.0)?;
+                emu.write_u64(va + 8, 3.5f64.to_bits())?;
+                emu.write_u64(va + 16, (-2i64) as u64)?;
+                va
+            } else {
+                let saved = emu.malloc(40)?;
+                emu.write_u64(saved, (-7i32) as u64)?;
+                emu.write_u64(saved + 8, array.0)?;
+                emu.write_u64(saved + 16, (-2i64) as u64)?;
+                emu.write_u64(saved + 24, 3.5f64.to_bits())?;
+                let va = emu.malloc(32)?;
+                emu.write_u64(va, 0)?;
+                emu.write_u64(va + 8, saved + 24)?;
+                emu.write_u64(va + 16, saved + 40)?;
+                emu.write_bytes(va + 24, &(-24i32).to_le_bytes())?;
+                emu.write_bytes(va + 28, &(-16i32).to_le_bytes())?;
+                va
+            };
+            for variant in 0..3 {
+                let function = emu.read_pointer(table + (138 + variant) * p)?;
+                let mut args = vec![
+                    JniValue::Object(Handle(emu.jni.env)),
+                    class.into(),
+                    JniValue::Object(Handle(id)),
+                ];
+                if variant == 0 {
+                    args.extend([
+                        (-7).into(),
+                        array.into(),
+                        JniValue::Double(3.5),
+                        JniValue::Long(-2),
+                    ]);
+                } else {
+                    args.push(JniValue::Object(Handle(if variant == 1 {
+                        va
+                    } else {
+                        slots
+                    })));
+                }
+                assert_eq!(
+                    emu.invoke_jni(function, &args, b'D', &mut Handler { array })?,
+                    JniValue::Double(9.5)
+                );
+            }
         }
         Ok(())
     }
@@ -1782,106 +2131,143 @@ mod tests {
                 Some(())
             }
         }
-        let mut emu = Emulator::builder().build()?;
-        let class = emu.class("example/Factory");
-        let name = emu.new_cstring("create")?;
-        let sig = emu.new_cstring("()V")?;
-        let table = emu.read_u64(emu.jni.env)?;
-        let get_id = emu.read_u64(table + 113 * 8)?;
-        let method = emu.call_function(get_id, &[emu.jni.env, class.0, name, sig])?;
-        let function = emu.read_u64(table + 141 * 8)?;
-        let mut handler = Handler::default();
-        emu.invoke_jni(
-            function,
-            &[
-                JniValue::Long(emu.jni.env as i64),
-                class.into(),
-                JniValue::Long(method as i64),
-            ],
-            b'V',
-            &mut handler,
-        )?;
-        assert_eq!(*emu.user_value::<u32>(handler.0).unwrap(), 42);
-        emu.release(handler.0);
-        let reference_type = emu.read_u64(table + 232 * 8)?;
-        assert_eq!(
-            emu.call_function(reference_type, &[emu.jni.env, handler.0.0])?,
-            0
-        );
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            let p = emu.pointer_size();
+            let class = emu.class("example/Factory");
+            let name = emu.new_cstring("create")?;
+            let sig = emu.new_cstring("()V")?;
+            let table = emu.read_pointer(emu.jni.env)?;
+            let get_id = emu.read_pointer(table + 113 * p)?;
+            let method = emu.call_function(get_id, &[emu.jni.env, class.0, name, sig])?;
+            let function = emu.read_pointer(table + 141 * p)?;
+            let mut handler = Handler::default();
+            emu.invoke_jni(
+                function,
+                &[
+                    JniValue::Object(Handle(emu.jni.env)),
+                    class.into(),
+                    JniValue::Object(Handle(method)),
+                ],
+                b'V',
+                &mut handler,
+            )?;
+            assert_eq!(*emu.user_value::<u32>(handler.0).unwrap(), 42);
+            emu.release(handler.0);
+            let reference_type = emu.read_pointer(table + 232 * p)?;
+            assert_eq!(
+                emu.call_function(reference_type, &[emu.jni.env, handler.0.0])?,
+                0
+            );
+        }
         Ok(())
     }
 
     #[test]
     fn functions_taking_pointers_or_array_references_are_not_rejected() -> Result<()> {
-        let mut emu = Emulator::builder().build()?;
-        let table = emu.read_u64(emu.jni.env)?;
-        let text = emu.new_cstring("hello")?;
-        let string = emu.call_function(emu.read_u64(table + 167 * 8)?, &[emu.jni.env, text])?;
-        assert_eq!(emu.string(Handle(string)), "hello");
-        let array = emu.new_byte_array(&[1, 2, 3]);
-        let ptr = emu.call_function(emu.read_u64(table + 222 * 8)?, &[emu.jni.env, array.0, 0])?;
-        emu.write_bytes(ptr, &[9])?;
-        emu.call_function(
-            emu.read_u64(table + 223 * 8)?,
-            &[emu.jni.env, array.0, ptr, 0],
-        )?;
-        assert_eq!(emu.byte_array(array), [9, 2, 3]);
-        let memory = emu.malloc(16)?;
-        let buffer =
-            emu.call_function(emu.read_u64(table + 229 * 8)?, &[emu.jni.env, memory, 16])?;
-        assert_eq!(
-            emu.call_function(emu.read_u64(table + 230 * 8)?, &[emu.jni.env, buffer])?,
-            memory
-        );
-        assert_eq!(
-            emu.call_function(emu.read_u64(table + 231 * 8)?, &[emu.jni.env, buffer])?,
-            16
-        );
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            let p = emu.pointer_size();
+            let table = emu.read_pointer(emu.jni.env)?;
+            let text = emu.new_cstring("hello")?;
+            let string =
+                emu.call_function(emu.read_pointer(table + 167 * p)?, &[emu.jni.env, text])?;
+            assert_eq!(emu.string(Handle(string)), "hello");
+            let array = emu.new_byte_array(&[1, 2, 3]);
+            let ptr = emu.call_function(
+                emu.read_pointer(table + 222 * p)?,
+                &[emu.jni.env, array.0, 0],
+            )?;
+            emu.write_bytes(ptr, &[9])?;
+            emu.call_function(
+                emu.read_pointer(table + 223 * p)?,
+                &[emu.jni.env, array.0, ptr, 0],
+            )?;
+            assert_eq!(emu.byte_array(array), [9, 2, 3]);
+            let memory = emu.malloc(16)?;
+            let buffer = emu
+                .invoke_jni(
+                    emu.read_pointer(table + 229 * p)?,
+                    &[
+                        Handle(emu.jni.env).into(),
+                        Handle(memory).into(),
+                        JniValue::Long(16),
+                    ],
+                    b'L',
+                    &mut (),
+                )?
+                .object()
+                .0;
+            assert_eq!(
+                emu.call_function(emu.read_pointer(table + 230 * p)?, &[emu.jni.env, buffer])?,
+                memory
+            );
+            assert_eq!(
+                emu.call_function(emu.read_pointer(table + 231 * p)?, &[emu.jni.env, buffer])?,
+                16
+            );
+        }
         Ok(())
     }
 
     #[test]
     fn class_identity_survives_local_reference_cleanup() -> Result<()> {
-        let mut emu = Emulator::builder().build()?;
-        emu.jni.scope = 2;
-        let local = emu.class("example/Test");
-        let global = emu.alias(local, 1);
-        emu.release(local);
-        let again = emu.class("example/Test");
-        let table = emu.read_u64(emu.jni.env)?;
-        let is_same = emu.read_u64(table + 24 * 8)?;
-        assert_eq!(
-            emu.call_function(is_same, &[emu.jni.env, again.0, global.0])?,
-            1
-        );
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            let p = emu.pointer_size();
+            emu.jni.scope = 2;
+            let local = emu.class("example/Test");
+            let global = emu.alias(local, 1);
+            emu.release(local);
+            let again = emu.class("example/Test");
+            let table = emu.read_pointer(emu.jni.env)?;
+            let is_same = emu.read_pointer(table + 24 * p)?;
+            assert_eq!(
+                emu.call_function(is_same, &[emu.jni.env, again.0, global.0])?,
+                1
+            );
+        }
         Ok(())
     }
 
     #[test]
     fn primitive_arrays_commit_abort_and_regions_use_element_width() -> Result<()> {
-        let mut emu = Emulator::builder().build()?;
-        let table = emu.read_u64(emu.jni.env)?;
-        for (index, kind) in ARRAY_TYPES.iter().enumerate() {
-            let width = kind.size();
-            let array = emu.new_primitive_array(*kind, &vec![0; 3 * width]);
-            let get = emu.read_u64(table + (183 + index as u64) * 8)?;
-            let release = emu.read_u64(table + (191 + index as u64) * 8)?;
-            let ptr = emu.call_function(get, &[emu.jni.env, array.0, 0])?;
-            emu.write_bytes(ptr, &vec![0x42; 3 * width])?;
-            emu.call_function(release, &[emu.jni.env, array.0, ptr, 1])?;
-            assert_eq!(emu.primitive_array(array), vec![0x42; 3 * width]);
-            emu.write_bytes(ptr, &vec![0x55; 3 * width])?;
-            emu.call_function(release, &[emu.jni.env, array.0, ptr, 2])?;
-            assert_eq!(emu.primitive_array(array), vec![0x42; 3 * width]);
-            let set_region = emu.read_u64(table + (207 + index as u64) * 8)?;
-            emu.call_function(set_region, &[emu.jni.env, array.0, 1, 1, ptr])?;
-            let mut expected = vec![0x42; 3 * width];
-            expected[width..2 * width].fill(0x55);
-            assert_eq!(emu.primitive_array(array), expected);
-            let ptr = emu.call_function(get, &[emu.jni.env, array.0, 0])?;
-            emu.write_bytes(ptr, &vec![0x66; 3 * width])?;
-            emu.call_function(release, &[emu.jni.env, array.0, ptr, 0])?;
-            assert_eq!(emu.primitive_array(array), vec![0x66; 3 * width]);
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            let p = emu.pointer_size();
+            let table = emu.read_pointer(emu.jni.env)?;
+            for (index, kind) in ARRAY_TYPES.iter().enumerate() {
+                let width = kind.size();
+                let array = emu.new_primitive_array(*kind, &vec![0; 3 * width]);
+                let get = emu.read_pointer(table + (183 + index as u64) * p)?;
+                let release = emu.read_pointer(table + (191 + index as u64) * p)?;
+                let ptr = emu.call_function(get, &[emu.jni.env, array.0, 0])?;
+                emu.write_bytes(ptr, &vec![0x42; 3 * width])?;
+                emu.call_function(release, &[emu.jni.env, array.0, ptr, 1])?;
+                assert_eq!(emu.primitive_array(array), vec![0x42; 3 * width]);
+                emu.write_bytes(ptr, &vec![0x55; 3 * width])?;
+                emu.call_function(release, &[emu.jni.env, array.0, ptr, 2])?;
+                assert_eq!(emu.primitive_array(array), vec![0x42; 3 * width]);
+                let set_region = emu.read_pointer(table + (207 + index as u64) * p)?;
+                emu.call_function(set_region, &[emu.jni.env, array.0, 1, 1, ptr])?;
+                let mut expected = vec![0x42; 3 * width];
+                expected[width..2 * width].fill(0x55);
+                assert_eq!(emu.primitive_array(array), expected);
+                let get_region = emu.read_pointer(table + (199 + index as u64) * p)?;
+                let out = emu.malloc(width + 4)?;
+                emu.write_bytes(out, &vec![0xa5; width + 4])?;
+                emu.call_function(get_region, &[emu.jni.env, array.0, 1, 1, out])?;
+                assert_eq!(emu.read_bytes(out, width)?, vec![0x55; width]);
+                assert_eq!(emu.read_bytes(out + width as u64, 4)?, [0xa5; 4]);
+                let ptr = emu.call_function(get, &[emu.jni.env, array.0, 0])?;
+                emu.write_bytes(ptr, &vec![0x66; 3 * width])?;
+                emu.call_function(release, &[emu.jni.env, array.0, ptr, 0])?;
+                assert_eq!(emu.primitive_array(array), vec![0x66; 3 * width]);
+            }
         }
         Ok(())
     }
@@ -1896,73 +2282,82 @@ mod tests {
 
     #[test]
     fn object_arrays_exceptions_and_bad_ids_are_safe() -> Result<()> {
-        let mut emu = Emulator::builder().build()?;
-        let table = emu.read_u64(emu.jni.env)?;
-        let class = emu.class("java/lang/String");
-        let initial = emu.new_string("x");
-        let array = emu.call_function(
-            emu.read_u64(table + 172 * 8)?,
-            &[emu.jni.env, 3, class.0, initial.0],
-        )?;
-        assert_eq!(
-            emu.call_function(emu.read_u64(table + 171 * 8)?, &[emu.jni.env, array])?,
-            3
-        );
-        let second = emu.new_string("y");
-        emu.call_function(
-            emu.read_u64(table + 174 * 8)?,
-            &[emu.jni.env, array, 1, second.0],
-        )?;
-        let element =
-            emu.call_function(emu.read_u64(table + 173 * 8)?, &[emu.jni.env, array, 1])?;
-        assert_eq!(emu.string(Handle(element)), "y");
-        let throw_new = emu.read_u64(table + 14 * 8)?;
-        let message = emu.new_cstring("bad input")?;
-        assert_eq!(
-            emu.call_function(throw_new, &[emu.jni.env, class.0, message])?,
-            0
-        );
-        assert_eq!(
-            emu.call_function(emu.read_u64(table + 228 * 8)?, &[emu.jni.env])?,
-            1
-        );
-        let exception = emu.call_function(emu.read_u64(table + 15 * 8)?, &[emu.jni.env])?;
-        assert_ne!(exception, 0);
-        emu.call_function(emu.read_u64(table + 17 * 8)?, &[emu.jni.env])?;
-        assert_eq!(
-            emu.call_function(emu.read_u64(table + 228 * 8)?, &[emu.jni.env])?,
-            0
-        );
-        let invalid = emu
-            .call_function(emu.read_u64(table + 171 * 8)?, &[emu.jni.env, 0])
-            .unwrap_err()
-            .to_string();
-        assert!(invalid.starts_with("invalid JNI reference 0x0 in GetArrayLength"));
-        let invalid_id = emu
-            .call_function(
-                emu.read_u64(table + 141 * 8)?,
-                &[emu.jni.env, class.0, 0x1234],
-            )
-            .unwrap_err()
-            .to_string();
-        assert!(invalid_id.starts_with("invalid JNI id 0x1234 in CallStaticVoidMethod"));
-        let weak = emu.call_function(emu.read_u64(table + 226 * 8)?, &[emu.jni.env, class.0])?;
-        assert_eq!(
-            emu.call_function(emu.read_u64(table + 232 * 8)?, &[emu.jni.env, weak])?,
-            3
-        );
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            let p = emu.pointer_size();
+            let table = emu.read_pointer(emu.jni.env)?;
+            let class = emu.class("java/lang/String");
+            let initial = emu.new_string("x");
+            let array = emu.call_function(
+                emu.read_pointer(table + 172 * p)?,
+                &[emu.jni.env, 3, class.0, initial.0],
+            )?;
+            assert_eq!(
+                emu.call_function(emu.read_pointer(table + 171 * p)?, &[emu.jni.env, array])?,
+                3
+            );
+            let second = emu.new_string("y");
+            emu.call_function(
+                emu.read_pointer(table + 174 * p)?,
+                &[emu.jni.env, array, 1, second.0],
+            )?;
+            let element =
+                emu.call_function(emu.read_pointer(table + 173 * p)?, &[emu.jni.env, array, 1])?;
+            assert_eq!(emu.string(Handle(element)), "y");
+            let throw_new = emu.read_pointer(table + 14 * p)?;
+            let message = emu.new_cstring("bad input")?;
+            assert_eq!(
+                emu.call_function(throw_new, &[emu.jni.env, class.0, message])?,
+                0
+            );
+            assert_eq!(
+                emu.call_function(emu.read_pointer(table + 228 * p)?, &[emu.jni.env])?,
+                1
+            );
+            let exception = emu.call_function(emu.read_pointer(table + 15 * p)?, &[emu.jni.env])?;
+            assert_ne!(exception, 0);
+            emu.call_function(emu.read_pointer(table + 17 * p)?, &[emu.jni.env])?;
+            assert_eq!(
+                emu.call_function(emu.read_pointer(table + 228 * p)?, &[emu.jni.env])?,
+                0
+            );
+            let invalid = emu
+                .call_function(emu.read_pointer(table + 171 * p)?, &[emu.jni.env, 0])
+                .unwrap_err()
+                .to_string();
+            assert!(invalid.starts_with("invalid JNI reference 0x0 in GetArrayLength"));
+            let invalid_id = emu
+                .call_function(
+                    emu.read_pointer(table + 141 * p)?,
+                    &[emu.jni.env, class.0, 0x1234],
+                )
+                .unwrap_err()
+                .to_string();
+            assert!(invalid_id.starts_with("invalid JNI id 0x1234 in CallStaticVoidMethod"));
+            let weak =
+                emu.call_function(emu.read_pointer(table + 226 * p)?, &[emu.jni.env, class.0])?;
+            assert_eq!(
+                emu.call_function(emu.read_pointer(table + 232 * p)?, &[emu.jni.env, weak])?,
+                3
+            );
+        }
         Ok(())
     }
 
     #[test]
     fn unsupported_jni_functions_have_stable_errors() -> Result<()> {
-        let mut emu = Emulator::builder().build()?;
-        let table = emu.read_u64(emu.jni.env)?;
-        let error = emu
-            .call_function(emu.read_u64(table + 5 * 8)?, &[emu.jni.env, 0, 0, 0])
-            .unwrap_err()
-            .to_string();
-        assert!(error.starts_with("unsupported JNIEnv function DefineClass"));
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            let p = emu.pointer_size();
+            let table = emu.read_pointer(emu.jni.env)?;
+            let error = emu
+                .call_function(emu.read_pointer(table + 5 * p)?, &[emu.jni.env, 0, 0, 0])
+                .unwrap_err()
+                .to_string();
+            assert!(error.starts_with("unsupported JNIEnv function DefineClass"));
+        }
         Ok(())
     }
 

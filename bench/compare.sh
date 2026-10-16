@@ -7,7 +7,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}"
-SAMPLES=tests/fixtures/arm64-v8a
 BASE=bench/unidbg-baseline
 if (($#)); then COUNTS=("$@"); else COUNTS=(1 4); fi
 
@@ -36,7 +35,11 @@ uo=$(mktemp)
 mo=$(mktemp)
 trap 'rm -f "$uo" "$mo"' EXIT
 printf "%-10s %4s | %16s | %16s | %s\n" sample n "unidbg" "minidbg" "same output"
-for sample in jna tmessages; do
+for sample in jna tmessages jna32 ttencrypt; do
+    case "$sample" in
+        jna|tmessages) SAMPLES=tests/fixtures/arm64-v8a ;;
+        jna32|ttencrypt) SAMPLES=tests/fixtures/armeabi-v7a ;;
+    esac
     for n in "${COUNTS[@]}"; do
         read -r ut um <<< "$(measure "$uo" "${UNIDBG[@]}" "$sample" "$SAMPLES" "$n")"
         read -r mt mm <<< "$(measure "$mo" "${MINIDBG[@]}" "$sample" "$SAMPLES" "$n")"

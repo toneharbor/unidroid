@@ -2,6 +2,8 @@
 mod jna;
 #[path = "../tests/support/tmessages.rs"]
 mod tmessages;
+#[path = "../tests/support/ttencrypt.rs"]
+mod ttencrypt;
 use minidbg::{Emulator, Result};
 use std::path::Path;
 
@@ -27,7 +29,7 @@ fn run() -> Result<()> {
             builder = builder.translation_cache_size(size.to_string_lossy().parse()?);
         }
         let mut emu = builder.build()?;
-        if sample == "jna" {
+        if sample == "jna" || sample == "jna32" {
             let out = jna::run(&mut emu, directory)?;
             if i + 1 == instances {
                 println!("sdk={}", out.sdk);
@@ -35,6 +37,11 @@ fn run() -> Result<()> {
                 println!("getNativeVersion={}", out.version);
                 println!("getAPIChecksum={}", out.checksum);
                 println!("sizeof(0)={}", out.size);
+            }
+        } else if sample == "ttencrypt" {
+            let out = ttencrypt::run(&mut emu, directory)?;
+            if i + 1 == instances {
+                println!("ttEncrypt={out}");
             }
         } else {
             let out = tmessages::run(&mut emu, directory)?;

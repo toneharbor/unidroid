@@ -1,4 +1,4 @@
-use crate::Result;
+use crate::{Result, arch::Architecture};
 use goblin::elf::{
     Elf,
     program_header::{PT_LOAD, ProgramHeader},
@@ -13,6 +13,7 @@ use std::{
 
 pub(crate) struct Image {
     pub bytes: Mmap,
+    pub arch: Architecture,
     pub segments: Vec<ProgramHeader>,
     pub dynstr: u64,
     pub symbols: Vec<Symbol>,
@@ -48,12 +49,18 @@ impl Image {
         // Library files must remain unchanged for the lifetime of the process.
         let bytes = unsafe { MmapOptions::new().map(&file)? };
         let elf = Elf::parse(&bytes)?;
-        if elf.header.e_machine != 183 || !elf.is_64 || !elf.little_endian {
+        let arch = match (elf.header.e_machine, elf.is_64) {
+            (183, true) => Architecture::Arm64,
+            (40, false) => Architecture::Arm32,
+            _ => return Err(std::io::Error::from(std::io::ErrorKind::InvalidData).into()),
+        };
+        if !elf.little_endian {
             return Err(std::io::Error::from(std::io::ErrorKind::InvalidData).into());
         }
         let mut relocations: Vec<_> = elf
             .dynrelas
             .iter()
+            .chain(elf.dynrels.iter())
             .chain(elf.pltrelocs.iter())
             .map(|r| Relocation {
                 offset: r.r_offset,
@@ -69,7 +76,7 @@ impl Image {
                 .find(|d| d.d_tag == tag)
                 .map_or(0, |d| d.d_val)
         };
-        let packed = tag(0x60000011);
+        let packed = tag(arch.packed_rel_tag());
         if packed != 0 {
             let seg = elf
                 .program_headers
@@ -79,9 +86,16 @@ impl Image {
                 })
                 .unwrap();
             let start = (seg.p_offset + packed - seg.p_vaddr) as usize;
-            relocations.extend(android_relocations(
-                &bytes[start..start + tag(0x60000012) as usize],
-            )?);
+            relocations.extend(
+                android_relocations(
+                    &bytes[start..start + tag(arch.packed_rel_tag() + 1) as usize],
+                )?
+                .into_iter()
+                .map(|mut r| {
+                    r.info = arch.relocation_info(r.info);
+                    r
+                }),
+            );
         }
         let symbols: Vec<_> = elf
             .dynsyms
@@ -113,6 +127,7 @@ impl Image {
             .max()
             .unwrap();
         let image = Self {
+            arch,
             segments,
             dynstr: tag(5),
             symbols,
@@ -121,7 +136,7 @@ impl Image {
             relocations,
             init: tag(12),
             init_array: tag(25),
-            init_count: tag(27) / 8,
+            init_count: tag(27) / arch.pointer_size(),
             size,
             phoff: elf.header.e_phoff,
             phnum: elf.header.e_phnum,

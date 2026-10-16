@@ -1,6 +1,6 @@
 # minidbg
 
-A low-memory unidbg. It runs Android arm64 `.so` files on a computer, no phone needed. The most common use is calling an app's signing or encryption functions.
+A low-memory unidbg. It runs Android `.so` files on a computer, no phone needed. Both 64-bit (`arm64-v8a`) and 32-bit (`armeabi-v7a`) work. The most common use is calling an app's signing or encryption functions.
 
 It's written in Rust on top of Unicorn, the same CPU emulator unidbg uses. There's no Java VM.
 
@@ -13,6 +13,9 @@ Both run unidbg's own sample `.so` files and give exactly the same results. Meas
 | JNA `libjnidispatch.so`, 1 instance | 91 MB | 7.9 MB |
 | Telegram `libtmessages.29.so`, 1 instance | 131 MB | 15.4 MB |
 | Telegram, 4 instances in one process | 258 MB | 26.6 MB |
+| JNA `libjnidispatch.so`, 32-bit, 1 instance | 93 MB | 9.1 MB |
+| ttEncrypt `libttEncrypt.so`, 32-bit, 1 instance | 92 MB | 8.8 MB |
+| ttEncrypt, 32-bit, 4 instances in one process | 106 MB | 20.4 MB |
 
 It's also about 3x faster. Telegram's PBKDF2 at 100,000 iterations: unidbg about 4.5 s, minidbg about 1.4 s.
 
@@ -47,7 +50,7 @@ let mut emu = Emulator::builder()
     .verbose(true)                        // Print every JNI call, handy while setting up
     .build()?;
 
-let m = emu.load_library("libfoo.so")?;
+let m = emu.load_library("libfoo.so")?;  // 32-bit or 64-bit: the file decides
 let mut env = Env;
 emu.call_jni_onload(m, &mut env)?;
 
@@ -71,13 +74,17 @@ unhandled JNI call: CallStaticObjectMethodV java/lang/System->getProperty(Ljava/
 
 Add the matching method to `JniHandler` and run again. It's the same idea as setting up the environment in unidbg.
 
+32-bit or 64-bit is picked by the first library you load. There's no setting for it. Load that library before `malloc`, `read_bytes`, `write_bytes` or `call_function`; before it, they return an error. One emulator runs one kind: loading a 64-bit library after a 32-bit one is an error.
+
+On 32-bit, `call_function` passes each argument as one 32-bit word and returns only `r0`. To pass a 64-bit value, give it as two words, low word first. If it would start at an odd word position (counting from 0), put a `0` word in front of it. `call_static_jni_method` and `call_jni_method` handle this for you.
+
 Objects you create (strings, arrays, `malloc` memory) live until you free them with `release` / `free`. In a long-running service, remember to free them.
 
 ## What it does and doesn't support
 
 Supported:
 
-- Android arm64 (`arm64-v8a`), using Android 6.0 (API 23) system libraries
+- Android arm64 (`arm64-v8a`) and 32-bit ARM (`armeabi-v7a`, both ARM and Thumb code), using Android 6.0 (API 23) system libraries
 - Loading a `.so` and its dependencies, relocation (including Android packed relocations), running constructors
 - libdl (`dlopen` / `dlsym` and the rest), system properties, the common syscalls
 - JNI: classes, methods, fields, strings, arrays, exceptions, global and local references, `RegisterNatives`
@@ -85,7 +92,6 @@ Supported:
 
 Not supported:
 
-- 32-bit `armeabi-v7a`
 - iOS
 - Guest threads: `pthread_create` fails
 - Debugger, inline hooks
@@ -96,7 +102,7 @@ A dependency missing from rootfs (such as `libEGL.so`) only prints a warning. If
 ## Directories
 
 - `src/`: the emulator
-- `rootfs/lib64/`: Android 6.0 system libraries, from unidbg
+- `rootfs/lib/`, `rootfs/lib64/`: Android 6.0 system libraries (32-bit and 64-bit), from unidbg
 - `tests/`: tests, including one per sample, checked byte for byte against unidbg
 - `bench/`: the unidbg comparison program and script
 
