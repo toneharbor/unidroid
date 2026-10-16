@@ -6,7 +6,7 @@ It's written in Rust on top of Unicorn, the same CPU emulator unidbg uses. There
 
 ## How much it saves
 
-Both run unidbg's own sample `.so` files and give exactly the same results. Measured on an Apple Silicon Mac, peak memory (max RSS):
+Both run nine of unidbg's own sample `.so` files and give exactly the same results. Measured on an Apple Silicon Mac, peak memory (max RSS):
 
 | sample | unidbg 0.9.9 | minidbg |
 |---|---|---|
@@ -16,8 +16,14 @@ Both run unidbg's own sample `.so` files and give exactly the same results. Meas
 | JNA `libjnidispatch.so`, 32-bit, 1 instance | 93 MB | 9.1 MB |
 | ttEncrypt `libttEncrypt.so`, 32-bit, 1 instance | 92 MB | 8.8 MB |
 | ttEncrypt, 32-bit, 4 instances in one process | 106 MB | 20.4 MB |
+| Telegram `libtmessages.29.so`, 32-bit, 1 instance | 128 MB | 16.0 MB |
+| Anjuke SignUtil `libsignutil.so`, 32-bit, 1 instance | 94 MB | 10.5 MB |
+| QDReader `libd-lib.so`, 32-bit, 1 instance | 97 MB | 11.8 MB |
+| Kanxue crackme `libnative-lib.so`, 32-bit, 1 instance | 317 MB | 11.4 MB |
+| Kanxue crackme, 32-bit, 4 instances in one process | 411 MB | 25.7 MB |
+| Thread test `libthread-lib.so`, 32-bit, 1 instance | 99 MB | 12.4 MB |
 
-It's also about 3x faster. Telegram's PBKDF2 at 100,000 iterations: unidbg about 4.5 s, minidbg about 1.4 s.
+It's also about 3x faster. Telegram's PBKDF2 at 100,000 iterations: unidbg about 4.5 s, minidbg about 1.4 s. The Kanxue crackme tries 64,589 inputs: unidbg about 3 s, minidbg about 1 s.
 
 Why it's smaller:
 
@@ -80,6 +86,15 @@ On 32-bit, `call_function` passes each argument as one 32-bit word and returns o
 
 Objects you create (strings, arrays, `malloc` memory) live until you free them with `release` / `free`. In a long-running service, remember to free them.
 
+If a library needs a function that rootfs has under another name, point it there before loading. For example, Android 6.0's libcrypto has no `DES_set_key_unchecked`, only `DES_set_key`:
+
+```rust
+emu.symbol_alias("DES_set_key_unchecked", "DES_set_key");
+emu.load_library("libd-lib.so")?;
+```
+
+The alias is used only when no loaded library has the real name.
+
 ## What it does and doesn't support
 
 Supported:
@@ -87,13 +102,15 @@ Supported:
 - Android arm64 (`arm64-v8a`) and 32-bit ARM (`armeabi-v7a`, both ARM and Thumb code), using Android 6.0 (API 23) system libraries
 - Loading a `.so` and its dependencies, relocation (including Android packed relocations), running constructors
 - libdl (`dlopen` / `dlsym` and the rest), system properties, the common syscalls
-- JNI: classes, methods, fields, strings, arrays, exceptions, global and local references, `RegisterNatives`
+- JNI: classes, methods, fields, strings, arrays, exceptions, global and local references, `RegisterNatives`. Strings and arrays handed to native code come from libc's own `malloc`, as on a phone, so native code may `free` them.
+- Guest threads (`pthread_create`, `pthread_join`, and the futex waits behind locks). They take turns on one CPU and switch every 10,000 instructions, like unidbg. A thread that is still running when your call returns keeps going during your next call. An instance that never starts a thread pays nothing for this.
+- The 32-bit ARM kernel helpers at `0xffff0f60`–`0xffff0fff`, which old libraries and Android 6.0's own libc use
 - Several instances in one process
 
 Not supported:
 
 - iOS
-- Guest threads: `pthread_create` fails
+- Signals and `fork`
 - Debugger, inline hooks
 - File access outside `rootfs`. `/dev/urandom` is allowed. Every other path is "not found".
 

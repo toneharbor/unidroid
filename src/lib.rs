@@ -2,6 +2,7 @@ mod arch;
 mod elf;
 mod jni;
 mod syscalls;
+mod threads;
 pub use jni::{Handle, JniCall, JniHandler, JniValue, PrimitiveType};
 
 use arch::Architecture;
@@ -125,6 +126,7 @@ pub struct Emulator {
     files: HashMap<u64, File>,
     next_fd: u64,
     jni: jni::JniState,
+    threads: threads::Threads,
 }
 impl Emulator {
     pub fn builder() -> EmulatorBuilder {
@@ -163,6 +165,7 @@ impl Emulator {
             files: HashMap::new(),
             next_fd: 3,
             jni: jni::JniState::default(),
+            threads: threads::Threads::default(),
         })
     }
     fn setup_cpu(&mut self, arch: Architecture) -> Result<()> {
@@ -187,6 +190,51 @@ impl Emulator {
         uc.mem_map(TRAMPOLINE, TRAMPOLINE_SIZE, Prot::READ | Prot::EXEC)?;
         uc.mem_map(RETURN, PAGE, Prot::READ | Prot::EXEC)?;
         uc.mem_map(STACK, STACK_SIZE, Prot::READ | Prot::WRITE)?;
+        if arch == Architecture::Arm32 {
+            uc.mem_map(0xffff0000, PAGE, Prot::READ | Prot::EXEC)?;
+            // Linux's cmpxchg64 occupies two slots (0xf60..0xf9f). Preserve r1
+            // as well as the scratch callee-saved registers used for the values.
+            for (address, words) in [
+                (
+                    0xffff0f60,
+                    &[
+                        0xe92d00f2u32, // push {r1,r4-r7}
+                        0xe1c040d0,    // ldrd r4,r5,[r0]
+                        0xe1c160d0,    // ldrd r6,r7,[r1]
+                        0xe1b20f9f,    // retry: ldrexd r0,r1,[r2]
+                        0xe0303004,    // eors r3,r0,r4
+                        0x00313005,    // eorseq r3,r1,r5
+                        0x01a23f96,    // strexdeq r3,r6,r7,[r2]
+                        0x03330001,    // teqeq r3,#1
+                        0x0afffff9,    // beq retry
+                        0xe2730000,    // rsbs r0,r3,#0 (success => C set)
+                        0xe8bd00f2,    // pop {r1,r4-r7}
+                        0xe12fff1e,    // bx lr
+                    ][..],
+                ),
+                (
+                    0xffff0fc0,
+                    &[
+                        0xe1923f9f, // retry: ldrex r3,[r2]
+                        0xe0533000, // subs r3,r3,r0
+                        0x01823f91, // strexeq r3,r1,[r2]
+                        0x03330001, // teqeq r3,#1
+                        0x0afffffa, // beq retry
+                        0xe2730000, // rsbs r0,r3,#0 (success => C set)
+                        0xe12fff1e, // bx lr
+                    ][..],
+                ),
+            ] {
+                for (i, word) in words.iter().enumerate() {
+                    uc.mem_write(address + i as u64 * 4, &word.to_le_bytes())?;
+                }
+            }
+            // All guest accesses run on one CPU, so the memory barrier just returns.
+            uc.mem_write(0xffff0fa0, &0xe12fff1eu32.to_le_bytes())?; // bx lr
+            uc.mem_write(0xffff0fe0, &0xee1d0f70u32.to_le_bytes())?; // mrc p15,0,r0,c13,c0,3
+            uc.mem_write(0xffff0fe4, &0xe12fff1eu32.to_le_bytes())?; // bx lr
+            uc.mem_write(0xffff0ffc, &5u32.to_le_bytes())?;
+        }
         self.uc = Some(uc);
         self.arch = Some(arch);
         self.setup_tls(&self.process_name.clone())?;
@@ -251,7 +299,7 @@ impl Emulator {
         self.write_pointer(tls, tls)?;
         self.write_pointer(tls + p, thread)?;
         self.write_pointer(tls + 3 * p, kab)?;
-        self.write_bytes(thread + 2 * p, &1234u32.to_le_bytes())?;
+        self.write_bytes(thread + 2 * p, &threads::MAIN_TID.to_le_bytes())?;
         let reg = self.architecture().tls();
         self.cpu_mut()?.reg_write(reg, tls)?;
         self.set_sp(INITIAL_SP)?;
@@ -621,24 +669,57 @@ impl Emulator {
         self.set_sp(sp)?;
         result
     }
-    fn run(&mut self, mut pc: u64, handler: &mut dyn JniHandler) -> Result<u64> {
+    fn run(&mut self, pc: u64, handler: &mut dyn JniHandler) -> Result<u64> {
+        self.threads.depth += 1;
+        let result = self.run_loop(pc, handler);
+        self.threads.depth -= 1;
+        if self.threads.depth == 0 && result.is_err() {
+            self.restore_main_thread()?;
+        }
+        result
+    }
+    fn run_loop(&mut self, mut pc: u64, handler: &mut dyn JniHandler) -> Result<u64> {
+        let outermost = self.threads.depth == 1;
         loop {
+            let count = if outermost && self.threads.has_runnable() {
+                threads::SLICE_INSTRUCTIONS
+            } else {
+                0
+            };
             *self.cpu_mut()?.get_data_mut() = None;
-            if let Err(error) = self.cpu_mut()?.emu_start(pc, RETURN, 0, 0) {
+            if let Err(error) = self.cpu_mut()?.emu_start(pc, RETURN, 0, count) {
                 return Err(self.emulation_error(error));
             }
             let (restart, location) = self.restart_pc()?;
             pc = restart;
             let Some(interrupt) = *self.cpu()?.get_data() else {
-                return self.reg(0);
+                if pc & !1 == RETURN {
+                    if !outermost || self.threads.tid() == threads::MAIN_TID {
+                        return self.reg(0);
+                    }
+                    return Err(format!(
+                        "guest thread {} returned to RETURN at {}",
+                        self.threads.tid(),
+                        self.location(pc)
+                    )
+                    .into());
+                }
+                pc = self.switch_thread(pc)?;
+                continue;
             };
             if interrupt != 2 {
                 return Err(self.emulation_error(uc_error::EXCEPTION));
             }
             if (TRAMPOLINE..RETURN).contains(&location) {
                 let function = self.host[((location - TRAMPOLINE) / 8) as usize].clone();
-                let result = self.host_function(function, handler)?;
-                self.write_host_result(result)?;
+                let result = self.host_function(function, handler);
+                // A nested callback can exit the current child. Unwind its host
+                // calls before switching, even when the nested call returned an error.
+                if outermost && matches!(self.threads.action, threads::Action::Exit) {
+                    pc = self.switch_thread(pc)?;
+                    continue;
+                }
+                self.write_host_result(result?)?;
             } else {
                 let args = [
                     self.reg(0)?,
@@ -654,6 +735,9 @@ impl Emulator {
                     location,
                 )?;
                 self.write_reg(0, result)?;
+            }
+            if outermost && !matches!(self.threads.action, threads::Action::Continue) {
+                pc = self.switch_thread(pc)?;
             }
         }
     }
@@ -864,6 +948,92 @@ mod test_elf;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arm32_kuser_barrier_tls_and_version_work_without_threads() -> Result<()> {
+        let mut emu = Emulator::builder().build()?;
+        emu.load_library("rootfs/lib/libc.so")?;
+        assert_eq!(emu.call_function(0xffff0fa0, &[42])?, 42);
+        let tls = emu.cpu()?.reg_read(emu.architecture().tls())?;
+        assert_eq!(emu.call_function(0xffff0fe0, &[])?, tls);
+        assert_eq!(emu.read_bytes(0xffff0ffc, 4)?, 5u32.to_le_bytes());
+        let region = emu
+            .cpu()?
+            .mem_regions()?
+            .into_iter()
+            .find(|region| region.begin == 0xffff0000)
+            .unwrap();
+        assert_eq!(region.end, 0xffff0fff);
+        assert_eq!(region.perms, (Prot::READ | Prot::EXEC).0);
+        Ok(())
+    }
+
+    #[test]
+    fn arm32_kuser_cmpxchg_results_carry_and_registers() -> Result<()> {
+        use unicorn_engine::RegisterARM;
+
+        let mut emu = Emulator::builder().build()?;
+        emu.load_library("rootfs/lib/libc.so")?;
+        let old = 0x1234_5678_89ab_cdefu64;
+        let new = 0xfedc_ba98_7654_3210u64;
+        let old_ptr = emu.malloc(8)?;
+        let new_ptr = emu.malloc(8)?;
+        let target = emu.malloc(16)?;
+        emu.write_u64(old_ptr, old)?;
+        emu.write_u64(new_ptr, new)?;
+        for (helper, width) in [(0xffff0fc0, 4), (0xffff0f60, 8)] {
+            let args = if width == 4 {
+                [old as u32 as u64, new as u32 as u64, target]
+            } else {
+                [old_ptr, new_ptr, target]
+            };
+            let mismatches: &[u64] = if width == 4 {
+                &[0, 1]
+            } else {
+                &[0, 1, 1 << 32]
+            };
+            for &mismatch in mismatches {
+                let before = old ^ mismatch;
+                emu.write_bytes(target, &[0xa5; 16])?;
+                emu.write_bytes(target, &before.to_le_bytes()[..width])?;
+                for reg in 4..12 {
+                    emu.write_reg(reg, 0x12340000 + reg as u64)?;
+                }
+                let sp = emu.sp()?;
+                let cpsr = emu.cpu()?.reg_read(RegisterARM::CPSR)?;
+                // Start with the opposite C flag, so both outcomes must set it.
+                emu.cpu_mut()?.reg_write(
+                    RegisterARM::CPSR,
+                    (cpsr & !(1 << 29)) | if mismatch == 0 { 0 } else { 1 << 29 },
+                )?;
+                let result = emu.call_function(helper, &args)?;
+                assert_eq!(result == 0, mismatch == 0, "helper=0x{helper:x}");
+                assert_eq!(
+                    emu.cpu()?.reg_read(RegisterARM::CPSR)? & (1 << 29) != 0,
+                    mismatch == 0
+                );
+                let expected = if mismatch == 0 { new } else { before };
+                assert_eq!(
+                    emu.read_bytes(target, width)?,
+                    expected.to_le_bytes()[..width]
+                );
+                assert_eq!(
+                    emu.read_bytes(target + width as u64, 16 - width)?,
+                    vec![0xa5; 16 - width]
+                );
+                assert_eq!(emu.reg(1)?, args[1]);
+                assert_eq!(emu.reg(2)?, target);
+                for reg in 4..12 {
+                    assert_eq!(emu.reg(reg)?, 0x12340000 + reg as u64);
+                }
+                assert_eq!(emu.sp()?, sp);
+                assert_eq!(emu.lr()?, RETURN);
+                assert_eq!(emu.read_u64(old_ptr)?, old);
+                assert_eq!(emu.read_u64(new_ptr)?, new);
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn symbol_alias_binds_missing_imports_but_preserves_exports() -> Result<()> {

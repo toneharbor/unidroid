@@ -35,7 +35,7 @@ uo=$(mktemp)
 mo=$(mktemp)
 trap 'rm -f "$uo" "$mo"' EXIT
 printf "%-11s %4s | %16s | %16s | %s\n" sample n "unidbg" "minidbg" "same output"
-for sample in jna tmessages jna32 ttencrypt tmessages32 signutil qdreader kanxue; do
+for sample in jna tmessages jna32 ttencrypt tmessages32 signutil qdreader kanxue thread; do
     case "$sample" in
         jna|tmessages) SAMPLES=tests/fixtures/arm64-v8a ;;
         *) SAMPLES=tests/fixtures/armeabi-v7a ;;

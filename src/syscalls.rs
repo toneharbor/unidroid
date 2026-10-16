@@ -112,12 +112,19 @@ impl Emulator {
                 }
                 _ => errno(22),
             },
-            98 => match a[1] & 127 {
-                1 | 10 => 0,
-                0 | 9 => errno(11),
-                _ => errno(38),
-            },
-            99 | 124 | 233 => 0,
+            93 | 94 => self.exit_thread(a[0], nr == 94, pc)?,
+            96 => self.threads.set_tid_address(a[0]),
+            98 => self.futex(a, pc)?,
+            101 | 115 | 124 => {
+                if self.threads.depth == 1 && self.threads.has_runnable() {
+                    self.threads.action = crate::threads::Action::Yield;
+                }
+                0
+            }
+            99 | 132 | 135 | 233 => 0,
+            172 => crate::threads::MAIN_TID as u64,
+            178 => self.threads.tid() as u64,
+            220 => self.clone_thread(a)?,
             113 | 169 => {
                 let mut time = libc::timespec {
                     tv_sec: 0,

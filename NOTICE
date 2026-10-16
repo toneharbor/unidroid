@@ -14,4 +14,5 @@ resources: libjnidispatch.so (JNA) and libtmessages.29.so (Telegram).
 tests/fixtures/armeabi-v7a holds more from the same place:
 libjnidispatch.so (JNA, 32-bit), libttEncrypt.so (ByteDance ttEncrypt),
 libtmessages.29.so (Telegram, 32-bit), libsignutil.so (Anjuke SignUtil),
-libd-lib.so (QDReader) and libnative-lib.so (a Kanxue crackme).
+libd-lib.so (QDReader), libnative-lib.so (a Kanxue crackme) and
+libthread-lib.so (unidbg's thread test).

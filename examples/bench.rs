@@ -6,6 +6,8 @@ mod kanxue;
 mod qdreader;
 #[path = "../tests/support/signutil.rs"]
 mod signutil;
+#[path = "../tests/support/thread.rs"]
+mod thread;
 #[path = "../tests/support/tmessages.rs"]
 mod tmessages;
 #[path = "../tests/support/ttencrypt.rs"]
@@ -43,6 +45,11 @@ fn run() -> Result<()> {
                 println!("getNativeVersion={}", out.version);
                 println!("getAPIChecksum={}", out.checksum);
                 println!("sizeof(0)={}", out.size);
+            }
+        } else if sample == "thread" {
+            let out = thread::run(&mut emu, directory)?;
+            if i + 1 == instances {
+                println!("stringFromJNI={out}");
             }
         } else if sample == "ttencrypt" {
             let out = ttencrypt::run(&mut emu, directory)?;
