@@ -3,6 +3,12 @@ name = "minidbg"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+description = "A low-memory unidbg: run Android arm64 and armv7 .so files on a computer, in Rust on Unicorn."
+repository = "https://github.com/zhoupb01/minidbg"
+readme = "README.md"
+keywords = ["android", "emulator", "unicorn", "jni", "unidbg"]
+categories = ["emulators", "development-tools"]
+include = ["/src", "/README.md", "/LICENSE", "/NOTICE", "/Cargo.toml"]
 
 [profile.release]
 lto = true

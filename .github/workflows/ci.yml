@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --release
+      - run: cargo build --release
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+      - name: Check examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='sign: 1000ed2f7e5ecd00bb4a6454e1d487b7dc7500040002000acc'
+          python_output="$(python3 examples/python/signutil.py)"
+          node_output="$(node examples/ts/signutil.ts)"
+          if [[ "$python_output" != "$expected" ]]; then
+            printf 'Python example output was not exactly expected:\n%s\n' "$python_output" >&2
+            exit 1
+          fi
+          if [[ "$node_output" != "$expected" ]]; then
+            printf 'TypeScript example output was not exactly expected:\n%s\n' "$node_output" >&2
+            exit 1
+          fi

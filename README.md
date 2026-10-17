@@ -1,5 +1,7 @@
 # minidbg
 
+[![CI](https://github.com/zhoupb01/minidbg/actions/workflows/ci.yml/badge.svg)](https://github.com/zhoupb01/minidbg/actions/workflows/ci.yml)
+
 A low-memory unidbg. It runs Android `.so` files on a computer, no phone needed. Both 64-bit (`arm64-v8a`) and 32-bit (`armeabi-v7a`) work. The most common use is calling an app's signing or encryption functions.
 
 It's written in Rust on top of Unicorn, the same CPU emulator unidbg uses. There's no Java VM. Use it as a Rust library, or from any other language through the `minidbg` command.
@@ -34,6 +36,14 @@ Why it's smaller:
 Re-measure: `bench/compare.sh 1 4`. It runs unidbg and minidbg side by side and checks that their outputs match. It needs Java 21 and Maven.
 
 ## Usage
+
+Add it to a Rust project:
+
+```bash
+cargo add minidbg
+```
+
+The crate doesn't include `rootfs`. Copy the `rootfs` directory from this repository, or take it from a release download.
 
 ```rust
 use minidbg::{Emulator, JniHandler, JniCall, Handle, JniValue};
@@ -97,7 +107,7 @@ The alias is used only when no loaded library has the real name.
 
 ## The `minidbg` command
 
-For other languages (TypeScript, Python, Go, ...) there's a command-line program. Build it once:
+For other languages (TypeScript, Python, Go, ...) there's a command-line program. Download it from [Releases](https://github.com/zhoupb01/minidbg/releases): there are builds for Linux (x86_64, arm64) and macOS (Apple Silicon). Each download has `rootfs` inside. Or build it yourself:
 
 ```bash
 cargo build --release
@@ -169,6 +179,12 @@ A full working example in TypeScript, with no npm packages: [examples/ts/signuti
 
 ```bash
 node examples/ts/signutil.ts
+```
+
+The same example in Python, also with nothing to install: [examples/python/signutil.py](examples/python/signutil.py).
+
+```bash
+python3 examples/python/signutil.py
 ```
 
 The same program works for local testing and inside an HTTP service: the service starts `minidbg serve` and answers the Java calls the same way. One `serve` process runs one instance, one command at a time. For calls in parallel, start several.
@@ -251,7 +267,7 @@ A dependency missing from rootfs (such as `libEGL.so`) only prints a warning. If
 ## Directories
 
 - `src/`: the emulator, and the `minidbg` command (`main.rs`, `serve.rs`)
-- `examples/ts/`: using the command from TypeScript
+- `examples/ts/`, `examples/python/`: using the command from TypeScript and Python
 - `rootfs/lib/`, `rootfs/lib64/`: Android 6.0 system libraries (32-bit and 64-bit), from unidbg
 - `tests/`: tests, including one per sample, checked byte for byte against unidbg
 - `bench/`: the unidbg comparison program and script
