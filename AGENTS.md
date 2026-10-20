@@ -1,6 +1,6 @@
-# minidbg
+# unidroid
 
-A low-memory unidbg in Rust on Unicorn: it runs Android arm64 and armv7 `.so` files on a computer. `README.md` covers the library API, the `minidbg` command and the `serve` protocol.
+A low-memory unidbg in Rust on Unicorn: it runs Android arm64 and armv7 `.so` files on a computer. `README.md` covers the library API, the `unidroid` command and the `serve` protocol.
 
 ## Rules
 
@@ -8,7 +8,7 @@ A low-memory unidbg in Rust on Unicorn: it runs Android arm64 and armv7 `.so` fi
 - Match unidbg byte for byte. Each sample under `tests/` is checked against unidbg 0.9.9's output, and `bench/compare.sh` re-runs the comparison. unidbg needs Java 21; newer JDKs crash its Unicorn binding.
 - Committed tests use only committed fixtures, `rootfs/`, the synthetic ELF in `tests/support/elf.rs`, or code bytes written into guest memory. A test of JNI or CPU behaviour loops over both architectures.
 - Errors from guest code name where it happened (`... from libfoo.so+0x1234`, via `Emulator::location`).
-- When the library API, a `minidbg` option or a `serve` command changes, update `README.md` in the same change.
+- When the library API, a `unidroid` option or a `serve` command changes, update `README.md` in the same change.
 - Stage files by path. Some local fixture folders hold proprietary libraries and captured keys; they stay out of git.
 
 ## Checks

@@ -5,7 +5,7 @@ import sys
 
 child = subprocess.Popen(
     [
-        os.environ.get("MINIDBG", "target/release/minidbg"),
+        os.environ.get("UNIDROID", "target/release/unidroid"),
         "serve",
         "--rootfs",
         "rootfs",

@@ -21,7 +21,7 @@ jobs:
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     env:
-      ARCHIVE: minidbg-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+      ARCHIVE: unidroid-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -30,14 +30,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "minidbg") | .version')"
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "unidroid") | .version')"
           if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
             echo "tag $GITHUB_REF_NAME does not match package version $version" >&2
             exit 1
           fi
-          package="minidbg-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          package="unidroid-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir "$package"
-          cp target/release/minidbg LICENSE NOTICE README.md "$package/"
+          cp target/release/unidroid LICENSE NOTICE README.md "$package/"
           cp -R rootfs "$package/"
           tar -czf "$ARCHIVE" "$package"
           if command -v sha256sum >/dev/null 2>&1; then

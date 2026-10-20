@@ -1,16 +1,16 @@
-# minidbg
+# unidroid
 
-[![CI](https://github.com/zhoupb01/minidbg/actions/workflows/ci.yml/badge.svg)](https://github.com/zhoupb01/minidbg/actions/workflows/ci.yml)
+[![CI](https://github.com/zhoupb01/unidroid/actions/workflows/ci.yml/badge.svg)](https://github.com/zhoupb01/unidroid/actions/workflows/ci.yml)
 
 A low-memory unidbg. It runs Android `.so` files on a computer, no phone needed. Both 64-bit (`arm64-v8a`) and 32-bit (`armeabi-v7a`) work. The most common use is calling an app's signing or encryption functions.
 
-It's written in Rust on top of Unicorn, the same CPU emulator unidbg uses. There's no Java VM. Use it as a Rust library, or from any other language through the `minidbg` command.
+It's written in Rust on top of Unicorn, the same CPU emulator unidbg uses. There's no Java VM. Use it as a Rust library, or from any other language through the `unidroid` command.
 
 ## How much it saves
 
 Both run nine of unidbg's own sample `.so` files and give exactly the same results. Measured on an Apple Silicon Mac, peak memory (max RSS):
 
-| sample | unidbg 0.9.9 | minidbg |
+| sample | unidbg 0.9.9 | unidroid |
 |---|---|---|
 | JNA `libjnidispatch.so`, 1 instance | 91 MB | 7.8 MB |
 | Telegram `libtmessages.29.so`, 1 instance | 131 MB | 15.6 MB |
@@ -25,7 +25,7 @@ Both run nine of unidbg's own sample `.so` files and give exactly the same resul
 | Kanxue crackme, 32-bit, 4 instances in one process | 411 MB | 56.5 MB |
 | Thread test `libthread-lib.so`, 32-bit, 1 instance | 99 MB | 12.3 MB |
 
-It's also about 3x faster. Telegram's PBKDF2 at 100,000 iterations: unidbg about 4.5 s, minidbg about 1.4 s. The Kanxue crackme tries 64,589 inputs: unidbg about 3 s, minidbg about 0.6 s.
+It's also about 3x faster. Telegram's PBKDF2 at 100,000 iterations: unidbg about 4.5 s, unidroid about 1.4 s. The Kanxue crackme tries 64,589 inputs: unidbg about 3 s, unidroid about 0.6 s.
 
 Why it's smaller:
 
@@ -33,20 +33,20 @@ Why it's smaller:
 - A library's read-only parts (code, constants) are never copied. They're mapped straight from the file. Code that never runs never uses memory.
 - Several instances in one process share a single copy of that read-only code. Each instance keeps only its own writable data.
 
-Re-measure: `bench/compare.sh 1 4`. It runs unidbg and minidbg side by side and checks that their outputs match. It needs Java 21 and Maven.
+Re-measure: `bench/compare.sh 1 4`. It runs unidbg and unidroid side by side and checks that their outputs match. It needs Java 21 and Maven.
 
 ## Usage
 
 Add it to a Rust project:
 
 ```bash
-cargo add minidbg
+cargo add unidroid
 ```
 
 The crate doesn't include `rootfs`. Copy the `rootfs` directory from this repository, or take it from a release download.
 
 ```rust
-use minidbg::{Emulator, JniHandler, JniCall, Handle, JniValue};
+use unidroid::{Emulator, JniHandler, JniCall, Handle, JniValue};
 
 // Setting up the environment: whatever Java the .so asks for, you answer here.
 struct Env;
@@ -107,7 +107,7 @@ emu.load_library("libd-lib.so")?;
 
 The alias is used only when no loaded library has the real name.
 
-There are no Java classes, so minidbg doesn't know which class extends which. If a library calls `GetSuperclass`, or registers a native method on a parent class and you call it through a child class, tell minidbg the parents first:
+There are no Java classes, so unidroid doesn't know which class extends which. If a library calls `GetSuperclass`, or registers a native method on a parent class and you call it through a child class, tell unidroid the parents first:
 
 ```rust
 emu.superclass("com/example/Sign", "com/example/Base");
@@ -116,20 +116,20 @@ emu.superclass("com/example/Base", "java/lang/Object");
 
 Now `GetSuperclass` answers, and `call_static_jni_method(.., "com/example/Sign", ..)` also finds a native method registered on `com/example/Base`. Without it, `GetSuperclass` stops and says which class to declare.
 
-## The `minidbg` command
+## The `unidroid` command
 
-For other languages (TypeScript, Python, Go, ...) there's a command-line program. Download it from [Releases](https://github.com/zhoupb01/minidbg/releases): there are builds for Linux (x86_64, arm64) and macOS (Apple Silicon). Each download has `rootfs` inside. Or build it yourself:
+For other languages (TypeScript, Python, Go, ...) there's a command-line program. Download it from [Releases](https://github.com/zhoupb01/unidroid/releases): there are builds for Linux (x86_64, arm64) and macOS (Apple Silicon). Each download has `rootfs` inside. Or build it yourself:
 
 ```bash
 cargo build --release
 ```
 
-It lands at `target/release/minidbg`. It has two subcommands.
+It lands at `target/release/unidroid`. It has two subcommands.
 
 ### `inspect`: look at a library first
 
 ```bash
-target/release/minidbg inspect --rootfs rootfs libfoo.so
+target/release/unidroid inspect --rootfs rootfs libfoo.so
 ```
 
 No code needed. It prints what the library is, which libraries it needs, its `Java_` functions, and whether it has `JNI_OnLoad`. Then it runs `JNI_OnLoad` and prints each Java call it makes (on stderr). It stops at the first one, because nothing answers it yet. Last, it lists the methods registered through `RegisterNatives`. Now you know what to call and which Java calls you'll have to answer.
@@ -153,14 +153,14 @@ This one asks Java nothing in `JNI_OnLoad`, so it runs to the end. Its two Java 
 ### `serve`: drive it from your program
 
 ```bash
-target/release/minidbg serve --rootfs rootfs
+target/release/unidroid serve --rootfs rootfs
 ```
 
 Your program starts this as a child process. Then the two talk through stdin and stdout, one JSON object per line. Logs go to stderr, so they never mix with the messages.
 
-You send commands. minidbg answers each one with `{"ok": ...}` or `{"error": "..."}`. When the library calls Java in the middle of a command, minidbg sends a `{"jni": ...}` question instead, and you answer it. This is the same job `JniHandler` does in Rust, written in your own language:
+You send commands. unidroid answers each one with `{"ok": ...}` or `{"error": "..."}`. When the library calls Java in the middle of a command, unidroid sends a `{"jni": ...}` question instead, and you answer it. This is the same job `JniHandler` does in Rust, written in your own language:
 
-Part of a real run of the SignUtil example (`→` you send, `←` minidbg replies; some lines left out):
+Part of a real run of the SignUtil example (`→` you send, `←` unidroid replies; some lines left out):
 
 ```
 → {"cmd":"load","path":"tests/fixtures/armeabi-v7a/libsignutil.so"}
@@ -198,7 +198,7 @@ The same example in Python, also with nothing to install: [examples/python/signu
 python3 examples/python/signutil.py
 ```
 
-The same program works for local testing and inside an HTTP service: the service starts `minidbg serve` and answers the Java calls the same way. One `serve` process runs one instance, one command at a time. For calls in parallel, start several.
+The same program works for local testing and inside an HTTP service: the service starts `unidroid serve` and answers the Java calls the same way. One `serve` process runs one instance, one command at a time. For calls in parallel, start several.
 
 Options, the same for both subcommands:
 
@@ -282,7 +282,7 @@ A dependency found in neither place (such as `libEGL.so`) only prints a warning.
 
 ## Directories
 
-- `src/`: the emulator, and the `minidbg` command (`main.rs`, `serve.rs`)
+- `src/`: the emulator, and the `unidroid` command (`main.rs`, `serve.rs`)
 - `examples/ts/`, `examples/python/`: using the command from TypeScript and Python
 - `rootfs/lib/`, `rootfs/lib64/`: Android 6.0 system libraries (32-bit and 64-bit), from unidbg
 - `tests/`: tests, including one per sample, checked byte for byte against unidbg

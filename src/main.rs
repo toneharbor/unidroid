@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use goblin::elf::{Elf, sym};
-use minidbg::{Emulator, Result};
 use std::{fs, path::PathBuf, process::ExitCode};
+use unidroid::{Emulator, Result};
 
 #[derive(Parser)]
 struct Cli {
@@ -150,7 +150,7 @@ fn run() -> Result<ExitCode> {
     match Cli::parse().command {
         Command::Serve { options } => {
             let mut emu = options.build(false)?;
-            minidbg::serve::serve(&mut emu, std::io::stdin().lock(), std::io::stdout().lock())?;
+            unidroid::serve::serve(&mut emu, std::io::stdin().lock(), std::io::stdout().lock())?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Inspect { options, lib } => inspect(options, lib),

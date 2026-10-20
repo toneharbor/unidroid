@@ -1,5 +1,5 @@
-use minidbg::{Emulator, Handle, JniCall, JniHandler, Result};
 use std::path::Path;
+use unidroid::{Emulator, Handle, JniCall, JniHandler, Result};
 
 struct SignHandler {
     entries: [(Handle, Handle); 2],

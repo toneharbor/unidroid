@@ -19,7 +19,7 @@ struct Client {
 }
 impl Client {
     fn start() -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_minidbg"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_unidroid"))
             .args(["serve", "--rootfs", "rootfs"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

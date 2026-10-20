@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs unidbg and minidbg on the same samples, checks the outputs match,
+# Runs unidbg and unidroid on the same samples, checks the outputs match,
 # and prints peak memory (max RSS) and wall time for each.
 #
 # Usage: bench/compare.sh [instances...]   (default: 1 4)
@@ -16,7 +16,7 @@ fi
 cargo build -q --release --example bench
 
 UNIDBG=("$JAVA_HOME/bin/java" --add-opens java.base/java.util=ALL-UNNAMED -cp "$BASE/target/classes:$(cat $BASE/cp.txt)" baseline.Baseline)
-MINIDBG=(target/release/examples/bench)
+UNIDROID=(target/release/examples/bench)
 
 # Runs a command with its stdout saved to $1, prints "<seconds> <MB>".
 measure() {
@@ -34,7 +34,7 @@ measure() {
 uo=$(mktemp)
 mo=$(mktemp)
 trap 'rm -f "$uo" "$mo"' EXIT
-printf "%-11s %4s | %16s | %16s | %s\n" sample n "unidbg" "minidbg" "same output"
+printf "%-11s %4s | %16s | %16s | %s\n" sample n "unidbg" "unidroid" "same output"
 for sample in jna tmessages jna32 ttencrypt tmessages32 signutil qdreader kanxue thread; do
     case "$sample" in
         jna|tmessages) SAMPLES=tests/fixtures/arm64-v8a ;;
@@ -42,7 +42,7 @@ for sample in jna tmessages jna32 ttencrypt tmessages32 signutil qdreader kanxue
     esac
     for n in "${COUNTS[@]}"; do
         read -r ut um <<< "$(measure "$uo" "${UNIDBG[@]}" "$sample" "$SAMPLES" "$n")"
-        read -r mt mm <<< "$(measure "$mo" "${MINIDBG[@]}" "$sample" "$SAMPLES" "$n")"
+        read -r mt mm <<< "$(measure "$mo" "${UNIDROID[@]}" "$sample" "$SAMPLES" "$n")"
         same=no
         if [[ -s $uo && -s $mo ]] && diff <(grep -v '^pbkdf2_ms=' "$uo") <(grep -v '^pbkdf2_ms=' "$mo") > /dev/null; then same=yes; fi
         printf "%-11s %4d | %6.1f MB %6.2fs | %6.1f MB %6.2fs | %s\n" "$sample" "$n" "$um" "$ut" "$mm" "$mt" "$same"

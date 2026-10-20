@@ -12,8 +12,8 @@ mod thread;
 mod tmessages;
 #[path = "../tests/support/ttencrypt.rs"]
 mod ttencrypt;
-use minidbg::{Emulator, Result};
 use std::path::Path;
+use unidroid::{Emulator, Result};
 
 fn main() -> std::process::ExitCode {
     match run() {
@@ -33,7 +33,7 @@ fn run() -> Result<()> {
     let mut emulators = Vec::new();
     for i in 0..instances {
         let mut builder = Emulator::builder().process_name("baseline");
-        if let Some(size) = std::env::var_os("MINIDBG_CACHE_SIZE") {
+        if let Some(size) = std::env::var_os("UNIDROID_CACHE_SIZE") {
             builder = builder.translation_cache_size(size.to_string_lossy().parse()?);
         }
         let mut emu = builder.build()?;

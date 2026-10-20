@@ -11,7 +11,7 @@ fn options_require_key_value_pairs() {
             ("--alias", "NAME=TARGET"),
             ("--superclass", "CLASS=SUPERCLASS"),
         ] {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_minidbg"));
+            let mut command = Command::new(env!("CARGO_BIN_EXE_unidroid"));
             command.args([subcommand, option, "missing"]);
             if subcommand == "inspect" {
                 command.arg("tests/fixtures/armeabi-v7a/libsignutil.so");
@@ -36,7 +36,7 @@ fn options_require_key_value_pairs() {
 #[test]
 fn both_subcommands_accept_repeatable_superclasses() {
     for subcommand in ["inspect", "serve"] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_minidbg"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_unidroid"));
         command.args([
             subcommand,
             "--superclass",
@@ -62,7 +62,7 @@ fn inspect_names_a_non_arm_library_in_its_error() {
     let mut bytes = std::fs::read(&library.0).unwrap();
     bytes[18..20].copy_from_slice(&62u16.to_le_bytes()); // EM_X86_64
     std::fs::write(&library.0, bytes).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_minidbg"))
+    let output = Command::new(env!("CARGO_BIN_EXE_unidroid"))
         .arg("inspect")
         .arg(&library.0)
         .output()
@@ -80,7 +80,7 @@ fn inspect_names_a_non_arm_library_in_its_error() {
 
 #[test]
 fn inspect_reports_arm32_exports_and_no_registered_natives() {
-    let output = Command::new(env!("CARGO_BIN_EXE_minidbg"))
+    let output = Command::new(env!("CARGO_BIN_EXE_unidroid"))
         .args([
             "inspect",
             "--rootfs",
@@ -118,7 +118,7 @@ fn inspect_reports_arm32_exports_and_no_registered_natives() {
 
 #[test]
 fn inspect_lists_registered_natives_in_order() {
-    let output = Command::new(env!("CARGO_BIN_EXE_minidbg"))
+    let output = Command::new(env!("CARGO_BIN_EXE_unidroid"))
         .args([
             "inspect",
             "--rootfs",
@@ -143,7 +143,7 @@ fn inspect_lists_registered_natives_in_order() {
 
 #[test]
 fn inspect_reports_arm64_and_stops_at_unanswered_java() {
-    let output = Command::new(env!("CARGO_BIN_EXE_minidbg"))
+    let output = Command::new(env!("CARGO_BIN_EXE_unidroid"))
         .args([
             "inspect",
             "--rootfs",

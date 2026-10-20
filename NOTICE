@@ -1,6 +1,6 @@
-minidbg
+unidroid
 
-minidbg ports ideas and logic from unidbg (https://github.com/zhkl0228/unidbg),
+unidroid ports ideas and logic from unidbg (https://github.com/zhkl0228/unidbg),
 which is licensed under the Apache License 2.0.
 
 rootfs/lib (32-bit) and rootfs/lib64 (64-bit) hold Android 6.0 (API 23)

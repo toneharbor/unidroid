@@ -10,7 +10,7 @@ type Question = {
   args: Value[];
 };
 
-const child = spawn(process.env.MINIDBG ?? "target/release/minidbg", [
+const child = spawn(process.env.UNIDROID ?? "target/release/unidroid", [
   "serve", "--rootfs", "rootfs",
 ], { stdio: ["pipe", "pipe", "inherit"] });
 const exited = new Promise<number | null>((resolve) => child.once("close", resolve));

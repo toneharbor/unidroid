@@ -1,5 +1,5 @@
-use minidbg::{Emulator, JniHandler, Result};
 use std::{path::Path, time::Instant};
+use unidroid::{Emulator, JniHandler, Result};
 pub struct TelegramHandler;
 impl JniHandler for TelegramHandler {}
 

@@ -36,7 +36,7 @@ import java.util.Map;
 
 /**
  * Runs unidbg's own samples with the Unicorn2 backend and prints every result as hex,
- * so minidbg can be checked against it byte for byte.
+ * so unidroid can be checked against it byte for byte.
  * jna and tmessages are arm64-v8a; the rest are armeabi-v7a.
  *
  * Usage: Baseline <jna|tmessages|jna32|ttencrypt|tmessages32|signutil|qdreader|kanxue|thread>

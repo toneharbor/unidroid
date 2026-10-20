@@ -1,4 +1,4 @@
-use minidbg::{Emulator, Result};
+use unidroid::{Emulator, Result};
 #[path = "support/elf.rs"]
 mod elf;
 
@@ -21,7 +21,7 @@ fn cpu_calls_require_a_library_but_host_objects_do_not() -> Result<()> {
         expected
     );
     assert_eq!(
-        emu.call_jni_onload(minidbg::Module(0), &mut ())
+        emu.call_jni_onload(unidroid::Module(0), &mut ())
             .unwrap_err()
             .to_string(),
         "no module 0 is loaded"

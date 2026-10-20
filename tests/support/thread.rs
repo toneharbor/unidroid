@@ -1,5 +1,5 @@
-use minidbg::{Emulator, Result};
 use std::path::Path;
+use unidroid::{Emulator, Result};
 
 pub fn run(emu: &mut Emulator, directory: &Path) -> Result<String> {
     emu.load_library(directory.join("libthread-lib.so"))?;

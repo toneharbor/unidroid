@@ -145,7 +145,7 @@ impl Emulator {
     pub fn builder() -> EmulatorBuilder {
         EmulatorBuilder {
             rootfs: "rootfs".into(),
-            process_name: "minidbg".into(),
+            process_name: "unidroid".into(),
             properties: HashMap::from([("ro.build.version.sdk".into(), "23".into())]),
             verbose: false,
             cache_size: 8 * 1024 * 1024,

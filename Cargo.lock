@@ -278,20 +278,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "minidbg"
-version = "0.2.0"
-dependencies = [
- "base64",
- "clap",
- "goblin",
- "libc",
- "memmap2",
- "serde",
- "serde_json",
- "unicorn-engine",
-]
-
-[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -521,6 +507,20 @@ dependencies = [
  "cmake",
  "heck",
  "pkg-config",
+]
+
+[[package]]
+name = "unidroid"
+version = "0.2.0"
+dependencies = [
+ "base64",
+ "clap",
+ "goblin",
+ "libc",
+ "memmap2",
+ "serde",
+ "serde_json",
+ "unicorn-engine",
 ]
 
 [[package]]

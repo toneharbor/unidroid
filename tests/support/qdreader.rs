@@ -1,5 +1,5 @@
-use minidbg::{Emulator, Result};
 use std::path::Path;
+use unidroid::{Emulator, Result};
 
 pub fn run(emu: &mut Emulator, directory: &Path) -> Result<String> {
     emu.symbol_alias("DES_set_key_unchecked", "DES_set_key");

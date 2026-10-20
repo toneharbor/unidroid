@@ -1,4 +1,4 @@
-use minidbg::{Emulator, Handle, JniCall, JniHandler, JniValue, Result};
+use unidroid::{Emulator, Handle, JniCall, JniHandler, JniValue, Result};
 
 struct JnaHandler;
 impl JniHandler for JnaHandler {

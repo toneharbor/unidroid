@@ -1,4 +1,4 @@
-use minidbg::{Emulator, Handle, Result};
+use unidroid::{Emulator, Handle, Result};
 #[path = "support/elf.rs"]
 mod elf;
 

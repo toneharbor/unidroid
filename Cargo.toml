@@ -1,10 +1,10 @@
 [package]
-name = "minidbg"
+name = "unidroid"
 version = "0.2.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "A low-memory unidbg: run Android arm64 and armv7 .so files on a computer, in Rust on Unicorn."
-repository = "https://github.com/zhoupb01/minidbg"
+repository = "https://github.com/zhoupb01/unidroid"
 readme = "README.md"
 keywords = ["android", "emulator", "unicorn", "jni", "unidbg"]
 categories = ["emulators", "development-tools"]

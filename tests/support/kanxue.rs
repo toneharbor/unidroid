@@ -1,5 +1,5 @@
-use minidbg::{Emulator, JniValue, Result};
 use std::path::Path;
+use unidroid::{Emulator, JniValue, Result};
 
 pub struct Output {
     pub found: String,
