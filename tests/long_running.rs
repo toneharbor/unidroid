@@ -62,19 +62,62 @@ fn weak_undefined_imports_resolve_to_zero() -> Result<()> {
 }
 
 #[test]
+fn released_handles_return_errors_from_the_rust_api() -> Result<()> {
+    let mut emu = Emulator::builder().build()?;
+    let handle = emu.new_string("released");
+    emu.release(handle);
+    let expected = "invalid handle 1: no live object (never created, or already released)";
+    assert_eq!(emu.string(handle).unwrap_err().to_string(), expected);
+    assert_eq!(
+        emu.primitive_array(handle).unwrap_err().to_string(),
+        expected
+    );
+    assert_eq!(emu.byte_array(handle).unwrap_err().to_string(), expected);
+    assert_eq!(emu.object_array(handle).unwrap_err().to_string(), expected);
+    assert_eq!(
+        emu.new_object_array("java/lang/Object", &[handle])
+            .unwrap_err()
+            .to_string(),
+        expected
+    );
+    assert!(emu.user_value::<()>(handle).is_none());
+    let class = emu.class("example/Class");
+    let objects = emu.new_object_array("java/lang/String", &[Handle(0)])?;
+    let user = emu.new_object("example/User", ());
+    for (handle, java_type) in [
+        (class, "java/lang/Class"),
+        (objects, "[Ljava/lang/String;"),
+        (user, "example/User"),
+    ] {
+        assert_eq!(
+            emu.string(handle).unwrap_err().to_string(),
+            format!("invalid handle {}: {java_type}, not a string", handle.0)
+        );
+        assert_eq!(
+            emu.primitive_array(handle).unwrap_err().to_string(),
+            format!(
+                "invalid handle {}: {java_type}, not a primitive array",
+                handle.0
+            )
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn api_object_arrays_are_stable_handles() -> Result<()> {
     let mut emu = Emulator::builder().build()?;
     let a = emu.new_string("a");
     let b = emu.new_string("b");
-    let array = emu.new_object_array("java/lang/String", &[a, Handle(0), b]);
-    let actual = emu.object_array(array);
-    assert_eq!(emu.string(actual[0]), "a");
+    let array = emu.new_object_array("java/lang/String", &[a, Handle(0), b])?;
+    let actual = emu.object_array(array)?;
+    assert_eq!(emu.string(actual[0])?, "a");
     assert_eq!(actual[1], Handle(0));
-    assert_eq!(emu.string(actual[2]), "b");
+    assert_eq!(emu.string(actual[2])?, "b");
     emu.release(a);
     emu.release(b);
-    let retained = emu.object_array(array);
-    assert_eq!(emu.string(retained[0]), "a");
-    assert_eq!(emu.string(retained[2]), "b");
+    let retained = emu.object_array(array)?;
+    assert_eq!(emu.string(retained[0])?, "a");
+    assert_eq!(emu.string(retained[2])?, "b");
     Ok(())
 }

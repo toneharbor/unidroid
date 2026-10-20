@@ -13,7 +13,7 @@ pub fn run(emu: &mut Emulator, directory: &Path) -> Result<String> {
         )?
         .object();
     let hex = emu
-        .byte_array(output)
+        .byte_array(output)?
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();

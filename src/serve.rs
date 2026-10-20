@@ -104,6 +104,10 @@ enum Command {
         name: String,
         target: String,
     },
+    Superclass {
+        class: String,
+        superclass: String,
+    },
     FindSymbol {
         module: usize,
         name: String,
@@ -249,6 +253,10 @@ impl<R: BufRead, W: Write> Session<R, W> {
                 emu.symbol_alias(name, target);
                 Value::Null
             }
+            Command::Superclass { class, superclass } => {
+                emu.superclass(class, superclass);
+                Value::Null
+            }
             Command::FindSymbol { module, name } => {
                 json!(emu.find_symbol(Module(module), &name)?.to_string())
             }
@@ -290,7 +298,7 @@ impl<R: BufRead, W: Write> Session<R, W> {
                 Value::Null
             }
             Command::NewString { value } => json!(emu.new_string(&value).0),
-            Command::String { handle } => json!(emu.string(Handle(handle))),
+            Command::String { handle } => json!(emu.string(Handle(handle))?),
             Command::NewArray { r#type, base64 } => {
                 let kind = match r#type.as_str() {
                     "Z" => PrimitiveType::Boolean,
@@ -309,14 +317,14 @@ impl<R: BufRead, W: Write> Session<R, W> {
                 )
             }
             Command::Array { handle } => {
-                json!(BASE64_STANDARD.encode(emu.primitive_array(Handle(handle))))
+                json!(BASE64_STANDARD.encode(emu.primitive_array(Handle(handle))?))
             }
             Command::NewObjectArray { class, items } => json!(
-                emu.new_object_array(&class, &items.into_iter().map(Handle).collect::<Vec<_>>())
+                emu.new_object_array(&class, &items.into_iter().map(Handle).collect::<Vec<_>>())?
                     .0
             ),
             Command::ObjectArray { handle } => json!(
-                emu.object_array(Handle(handle))
+                emu.object_array(Handle(handle))?
                     .into_iter()
                     .map(|handle| handle.0)
                     .collect::<Vec<_>>()

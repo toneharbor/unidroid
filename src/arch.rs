@@ -34,7 +34,7 @@ impl Architecture {
             Self::Arm64 => (Arch::ARM64, Mode::LITTLE_ENDIAN),
         }
     }
-    pub fn enable_fp(self, uc: &mut Unicorn<'_, Option<u32>>) -> Result<()> {
+    pub fn enable_fp(self, uc: &mut Unicorn<'_, crate::CpuData>) -> Result<()> {
         match self {
             Self::Arm32 => {
                 uc.reg_write(Arm::C1_C0_2, 0xf << 20)?;

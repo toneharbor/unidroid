@@ -19,11 +19,11 @@ impl JniHandler for SignHandler {
             ("java/util/HashMap", "keySet", "()Ljava/util/Set;") => Some(self.key_set),
             ("java/util/Set", "toArray", "()[Ljava/lang/Object;") => Some(self.keys),
             ("java/util/HashMap", "get", "(Ljava/lang/Object;)Ljava/lang/Object;") => {
-                let key = emu.string(call.args[0].object());
+                let key = emu.string(call.args[0].object()).ok()?;
                 Some(
                     self.entries
                         .iter()
-                        .find(|(k, _)| emu.string(*k) == key)
+                        .find(|(k, _)| emu.string(*k).ok().as_ref() == Some(&key))
                         .map_or(Handle(0), |(_, value)| *value),
                 )
             }
@@ -38,7 +38,7 @@ pub fn run(emu: &mut Emulator, directory: &Path) -> Result<String> {
         (emu.new_string("a"), emu.new_byte_array(b"b")),
         (emu.new_string("b"), emu.new_byte_array(b"b")),
     ];
-    let keys = emu.new_object_array("java/lang/Object", &[entries[0].0, entries[1].0]);
+    let keys = emu.new_object_array("java/lang/Object", &[entries[0].0, entries[1].0])?;
     let key_set = emu.new_object("java/util/Set", ());
     let mut handler = SignHandler {
         entries,
@@ -56,7 +56,7 @@ pub fn run(emu: &mut Emulator, directory: &Path) -> Result<String> {
         "getSign0(Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/String;I)Ljava/lang/String;",
         &[aa.into(), bb.into(), map.into(), cc.into(), 10.into()],
     )?.object();
-    let sign = emu.string(output);
+    let sign = emu.string(output)?;
     for handle in [aa, bb, map, cc, output, keys, key_set] {
         emu.release(handle);
     }

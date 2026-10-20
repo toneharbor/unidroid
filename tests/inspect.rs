@@ -6,7 +6,11 @@ mod elf;
 #[test]
 fn options_require_key_value_pairs() {
     for subcommand in ["inspect", "serve"] {
-        for (option, label) in [("--prop", "KEY=VALUE"), ("--alias", "NAME=TARGET")] {
+        for (option, label) in [
+            ("--prop", "KEY=VALUE"),
+            ("--alias", "NAME=TARGET"),
+            ("--superclass", "CLASS=SUPERCLASS"),
+        ] {
             let mut command = Command::new(env!("CARGO_BIN_EXE_minidbg"));
             command.args([subcommand, option, "missing"]);
             if subcommand == "inspect" {
@@ -26,6 +30,29 @@ fn options_require_key_value_pairs() {
                 )
             );
         }
+    }
+}
+
+#[test]
+fn both_subcommands_accept_repeatable_superclasses() {
+    for subcommand in ["inspect", "serve"] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_minidbg"));
+        command.args([
+            subcommand,
+            "--superclass",
+            "a/B=a/C",
+            "--superclass",
+            "a/C=java/lang/Object",
+        ]);
+        if subcommand == "inspect" {
+            command.arg("tests/fixtures/armeabi-v7a/libsignutil.so");
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
 

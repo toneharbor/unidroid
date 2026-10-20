@@ -10,7 +10,7 @@ pub fn run(emu: &mut Emulator, directory: &Path) -> Result<String> {
         &[],
     )?;
     let handle = result.object();
-    let output = emu.string(handle).to_owned();
+    let output = emu.string(handle)?;
     emu.release(handle);
     Ok(output)
 }

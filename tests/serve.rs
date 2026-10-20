@@ -110,6 +110,65 @@ fn errors_leave_the_server_ready_for_the_next_command() {
 }
 
 #[test]
+fn invalid_handles_modules_and_paths_leave_the_server_ready() {
+    let mut client = Client::start();
+    for (command, error) in [
+        (
+            json!({"cmd":"array", "type":"B", "handle":999}),
+            "invalid handle 999: no live object (never created, or already released)",
+        ),
+        (
+            json!({"cmd":"find_symbol", "module":99, "name":"x"}),
+            "no module 99 is loaded",
+        ),
+        (
+            json!({"cmd":"onload", "module":99}),
+            "no module 99 is loaded",
+        ),
+        (
+            json!({"cmd":"load", "path":"."}),
+            "cannot load .: not a file path",
+        ),
+    ] {
+        client.send(command);
+        assert_eq!(client.receive(), json!({"error":error}));
+        let handle = client.request(json!({"cmd":"new_string", "value":"still ready"}));
+        assert_eq!(
+            client.request(json!({"cmd":"string", "handle":handle})),
+            "still ready"
+        );
+    }
+    let string = client.request(json!({"cmd":"new_string", "value":"abc"}));
+    let array = client.request(json!({"cmd":"new_array", "type":"B", "base64":"AQID"}));
+    for (command, error) in [
+        (
+            json!({"cmd":"array", "handle":string}),
+            format!("invalid handle {string}: java/lang/String, not a primitive array"),
+        ),
+        (
+            json!({"cmd":"string", "handle":array}),
+            format!("invalid handle {array}: [B, not a string"),
+        ),
+        (
+            json!({"cmd":"object_array", "handle":string}),
+            format!("invalid handle {string}: java/lang/String, not an object array"),
+        ),
+        (
+            json!({"cmd":"new_object_array", "class":"java/lang/Object", "items":[999]}),
+            "invalid handle 999: no live object (never created, or already released)".into(),
+        ),
+    ] {
+        client.send(command);
+        assert_eq!(client.receive(), json!({"error":error}));
+        assert_eq!(
+            client.request(json!({"cmd":"string", "handle":string})),
+            "abc"
+        );
+    }
+    client.finish();
+}
+
+#[test]
 fn eof_during_a_question_fails_the_process() {
     let mut client = Client::start();
     let module =
@@ -212,6 +271,15 @@ fn c_calls_forward_methods_fields_constructors_and_assignability() {
         .request(json!({"cmd":"call_static", "class":"test/Bridge", "method":"env()J", "args":[]}));
     let table = read_pointer(&mut client, env.as_str().unwrap().parse().unwrap());
     let class = client.request(json!({"cmd":"class", "name":"test/Bridge"}));
+    assert_eq!(
+        client.request(
+            json!({"cmd":"superclass", "class":"test/Bridge", "superclass":"test/Parent"})
+        ),
+        Value::Null
+    );
+    let parent = client.request(json!({"cmd":"class", "name":"test/Parent"}));
+    let get_superclass = read_pointer(&mut client, table + 10 * 8);
+    assert_eq!(client.request(json!({"cmd":"call_function", "address":get_superclass.to_string(), "args":[env, class.to_string()]})), parent.to_string());
     let object = client.request(json!({"cmd":"new_object", "class":"test/Bridge"}));
     let args = client.request(json!({"cmd":"malloc", "size":8}));
 

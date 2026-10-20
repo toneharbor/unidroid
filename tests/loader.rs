@@ -6,7 +6,7 @@ mod elf;
 fn cpu_calls_require_a_library_but_host_objects_do_not() -> Result<()> {
     let mut emu = Emulator::builder().build()?;
     let text = emu.new_string("before loading");
-    assert_eq!(emu.string(text), "before loading");
+    assert_eq!(emu.string(text)?, "before loading");
     emu.release(text);
     let expected = "no library loaded yet: the first load_library picks arm64 or arm32";
     assert_eq!(emu.malloc(16).unwrap_err().to_string(), expected);
@@ -24,7 +24,7 @@ fn cpu_calls_require_a_library_but_host_objects_do_not() -> Result<()> {
         emu.call_jni_onload(minidbg::Module(0), &mut ())
             .unwrap_err()
             .to_string(),
-        expected
+        "no module 0 is loaded"
     );
     Ok(())
 }
@@ -196,6 +196,33 @@ fn libdl_resolves_dependencies_and_clears_errors() -> Result<()> {
         let exported = emu.new_cstring("__cxa_throw")?;
         assert_ne!(emu.call_function(lookup, &[cpp_handle, exported])?, 0);
     }
+    Ok(())
+}
+
+#[test]
+fn dependencies_and_dlopen_find_siblings_of_public_loads() -> Result<()> {
+    let library = elf::TestLibrary::new(false);
+    let directory = library.0.with_extension("siblings");
+    std::fs::create_dir(&directory)?;
+    let main = directory.join("libtmessages.29.so");
+    std::fs::copy("tests/fixtures/arm64-v8a/libtmessages.29.so", &main)?;
+    std::fs::copy(&library.0, directory.join("libjnigraphics.so"))?;
+    std::fs::copy(&library.0, directory.join("libextra.so"))?;
+    let mut emu = Emulator::builder().build()?;
+    let module = emu.load_library(&main)?;
+    let answer = emu.find_symbol(module, "answer")?;
+    assert_eq!(emu.call_function(answer, &[])?, 42);
+    let open = emu.find_symbol(module, "dlopen")?;
+    let lookup = emu.find_symbol(module, "dlsym")?;
+    let name = emu.new_cstring("libextra.so")?;
+    let handle = emu.call_function(open, &[name, 0])?;
+    assert_ne!(handle, 0);
+    let symbol = emu.new_cstring("answer")?;
+    let extra_answer = emu.call_function(lookup, &[handle, symbol])?;
+    assert_ne!(extra_answer, 0);
+    assert_ne!(extra_answer, answer);
+    assert_eq!(emu.call_function(extra_answer, &[])?, 42);
+    std::fs::remove_dir_all(directory)?;
     Ok(())
 }
 

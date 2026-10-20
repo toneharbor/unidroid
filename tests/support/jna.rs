@@ -10,7 +10,7 @@ impl JniHandler for JnaHandler {
         if call.class == "java/lang/System"
             && call.name == "getProperty"
             && call.signature == "(Ljava/lang/String;)Ljava/lang/String;"
-            && emu.string(call.args[0].object()) == "file.encoding"
+            && emu.string(call.args[0].object()).ok()? == "file.encoding"
         {
             Some(emu.new_string("UTF-8"))
         } else {
@@ -42,7 +42,7 @@ impl JniHandler for JnaHandler {
     fn new_object(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<Handle> {
         if call.class == "java/lang/String" && call.name == "<init>" && call.signature == "([B)V" {
             Some(emu.new_string(&String::from_utf8_lossy(
-                &emu.byte_array(call.args[0].object()),
+                &emu.byte_array(call.args[0].object()).ok()?,
             )))
         } else {
             None
@@ -79,7 +79,7 @@ pub fn run(emu: &mut Emulator, directory: &std::path::Path) -> Result<Output> {
             &[],
         )?
         .object();
-    let version = emu.string(object);
+    let version = emu.string(object)?;
     emu.release(object);
     let object = emu
         .call_static_jni_method(
@@ -89,7 +89,7 @@ pub fn run(emu: &mut Emulator, directory: &std::path::Path) -> Result<Output> {
             &[],
         )?
         .object();
-    let checksum = emu.string(object);
+    let checksum = emu.string(object)?;
     emu.release(object);
     let size = emu
         .call_static_jni_method(&mut handler, class, "sizeof(I)I", &[0.into()])?

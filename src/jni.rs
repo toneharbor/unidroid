@@ -60,6 +60,18 @@ enum Object {
     DirectBuffer(u64, i64),
     Exception(String, Option<String>),
 }
+impl Object {
+    fn java_type(&self) -> String {
+        match self {
+            Self::Class(_) => "java/lang/Class".into(),
+            Self::String(_) => "java/lang/String".into(),
+            Self::Array(kind, _) => kind.signature().into(),
+            Self::User(class, _) | Self::Exception(class, _) => class.clone(),
+            Self::ObjectArray(_, class) => format!("[L{class};"),
+            Self::DirectBuffer(_, _) => "java/nio/ByteBuffer".into(),
+        }
+    }
+}
 struct Reference {
     object: Rc<RefCell<Object>>,
     scope: usize,
@@ -74,6 +86,7 @@ struct Member {
 pub(crate) struct JniState {
     objects: HashMap<Handle, Reference>,
     classes: HashMap<String, (Handle, Rc<RefCell<Object>>)>,
+    superclasses: HashMap<String, String>,
     members: Vec<Member>,
     member_ids: HashMap<(String, String, String, bool, bool), u64>,
     natives: HashMap<(String, String), u64>,
@@ -110,8 +123,18 @@ impl Emulator {
     fn insert_api_object(&mut self, object: Object) -> Handle {
         self.insert_ref(Rc::new(RefCell::new(object)), 0)
     }
-    fn object(&self, handle: Handle) -> Rc<RefCell<Object>> {
-        self.jni.objects[&handle].object.clone()
+    fn object(&self, handle: Handle) -> Result<Rc<RefCell<Object>>> {
+        self.jni
+            .objects
+            .get(&handle)
+            .map(|reference| reference.object.clone())
+            .ok_or_else(|| {
+                format!(
+                    "invalid handle {}: no live object (never created, or already released)",
+                    handle.0
+                )
+                .into()
+            })
     }
     pub fn release(&mut self, handle: Handle) {
         self.jni.objects.remove(&handle);
@@ -129,20 +152,41 @@ impl Emulator {
             reference.scope = reference.scope.min(scope);
             return handle;
         }
-        let handle = self.insert_object(Object::Class(name.into()));
-        self.jni.objects.get_mut(&handle).unwrap().scope = scope;
-        self.jni
-            .classes
-            .insert(name.into(), (handle, self.object(handle)));
+        let object = Rc::new(RefCell::new(Object::Class(name.into())));
+        let handle = self.insert_ref(object.clone(), scope);
+        self.jni.classes.insert(name.into(), (handle, object));
         handle
+    }
+    /// Declare that a class directly extends a superclass.
+    pub fn superclass(&mut self, class: impl Into<String>, superclass: impl Into<String>) {
+        self.jni
+            .superclasses
+            .insert(class.into(), superclass.into());
+    }
+    fn class_chain<'a>(&'a self, class: &'a str) -> Vec<&'a str> {
+        let mut chain = Vec::new();
+        let mut next = Some(class);
+        while let Some(class) = next {
+            if chain.contains(&class) {
+                break;
+            }
+            chain.push(class);
+            next = self.jni.superclasses.get(class).map(String::as_str);
+        }
+        chain
     }
     pub fn new_string(&mut self, value: &str) -> Handle {
         self.insert_api_object(Object::String(value.encode_utf16().collect()))
     }
-    pub fn string(&self, handle: Handle) -> String {
-        match &*self.object(handle).borrow() {
-            Object::String(s) => String::from_utf16_lossy(s),
-            _ => panic!(),
+    pub fn string(&self, handle: Handle) -> Result<String> {
+        match &*self.object(handle)?.borrow() {
+            Object::String(s) => Ok(String::from_utf16_lossy(s)),
+            object => Err(format!(
+                "invalid handle {}: {}, not a string",
+                handle.0,
+                object.java_type()
+            )
+            .into()),
         }
     }
     pub fn new_byte_array(&mut self, bytes: &[u8]) -> Handle {
@@ -152,34 +196,46 @@ impl Emulator {
     pub fn new_primitive_array(&mut self, kind: PrimitiveType, bytes: &[u8]) -> Handle {
         self.insert_api_object(Object::Array(kind, bytes.to_vec()))
     }
-    pub fn byte_array(&self, handle: Handle) -> Vec<u8> {
+    pub fn byte_array(&self, handle: Handle) -> Result<Vec<u8>> {
         self.primitive_array(handle)
     }
-    pub fn primitive_array(&self, handle: Handle) -> Vec<u8> {
-        match &*self.object(handle).borrow() {
-            Object::Array(_, bytes) => bytes.clone(),
-            _ => panic!(),
+    pub fn primitive_array(&self, handle: Handle) -> Result<Vec<u8>> {
+        match &*self.object(handle)?.borrow() {
+            Object::Array(_, bytes) => Ok(bytes.clone()),
+            object => Err(format!(
+                "invalid handle {}: {}, not a primitive array",
+                handle.0,
+                object.java_type()
+            )
+            .into()),
         }
     }
     pub fn new_object<T: Any>(&mut self, class: &str, value: T) -> Handle {
         self.insert_api_object(Object::User(class.into(), Rc::new(value)))
     }
-    pub fn new_object_array(&mut self, class: &str, values: &[Handle]) -> Handle {
+    pub fn new_object_array(&mut self, class: &str, values: &[Handle]) -> Result<Handle> {
         let values = values
             .iter()
-            .map(|handle| (handle.0 != 0).then(|| self.object(*handle)))
-            .collect();
-        self.insert_api_object(Object::ObjectArray(values, class.into()))
+            .map(|handle| (handle.0 != 0).then(|| self.object(*handle)).transpose())
+            .collect::<Result<_>>()?;
+        Ok(self.insert_api_object(Object::ObjectArray(values, class.into())))
     }
-    pub fn object_array(&mut self, handle: Handle) -> Vec<Handle> {
-        let values = match &*self.object(handle).borrow() {
+    pub fn object_array(&mut self, handle: Handle) -> Result<Vec<Handle>> {
+        let values = match &*self.object(handle)?.borrow() {
             Object::ObjectArray(values, _) => values.clone(),
-            _ => panic!(),
+            object => {
+                return Err(format!(
+                    "invalid handle {}: {}, not an object array",
+                    handle.0,
+                    object.java_type()
+                )
+                .into());
+            }
         };
-        values
+        Ok(values
             .into_iter()
             .map(|object| object.map_or(Handle(0), |object| self.insert_ref(object, 0)))
-            .collect()
+            .collect())
     }
     fn reference_error(&self, function: &str, handle: u64) -> Box<dyn std::error::Error> {
         format!(
@@ -222,7 +278,7 @@ impl Emulator {
         let Some(handle) = self.jni.pending.take() else {
             return Ok(());
         };
-        let object = self.object(handle);
+        let object = self.object(handle)?;
         let (class, message) = match &*object.borrow() {
             Object::Exception(class, message) => (class.clone(), message.clone()),
             _ => ("java/lang/Throwable".into(), None),
@@ -236,27 +292,23 @@ impl Emulator {
     }
 
     pub fn user_value<T: Any>(&self, handle: Handle) -> Option<Rc<T>> {
-        match &*self.object(handle).borrow() {
+        match &*self.object(handle).ok()?.borrow() {
             Object::User(_, v) => v.clone().downcast().ok(),
             _ => None,
         }
     }
-    fn class_name(&self, handle: Handle) -> String {
-        match &*self.object(handle).borrow() {
-            Object::Class(name) | Object::User(name, _) => name.clone(),
-            Object::String(_) => "java/lang/String".into(),
-            Object::Array(kind, _) => kind.signature().into(),
-            Object::ObjectArray(_, class) => format!("[L{class};"),
-            Object::DirectBuffer(_, _) => "java/nio/ByteBuffer".into(),
-            Object::Exception(class, _) => class.clone(),
-        }
+    fn class_name(&self, handle: Handle) -> Result<String> {
+        Ok(match &*self.object(handle)?.borrow() {
+            Object::Class(name) => name.clone(),
+            object => object.java_type(),
+        })
     }
-    fn alias(&mut self, handle: Handle, scope: usize) -> Handle {
+    fn alias(&mut self, handle: Handle, scope: usize) -> Result<Handle> {
         if handle.0 == 0 {
-            return handle;
+            return Ok(handle);
         }
-        let object = self.object(handle);
-        self.insert_ref(object, scope)
+        let object = self.object(handle)?;
+        Ok(self.insert_ref(object, scope))
     }
     pub(crate) fn setup_jni(&mut self) -> Result<()> {
         let p = self.pointer_size();
@@ -287,7 +339,6 @@ impl Emulator {
         natives
     }
     pub fn call_jni_onload(&mut self, module: Module, handler: &mut dyn JniHandler) -> Result<u64> {
-        self.cpu()?;
         let function = self.find_symbol(module, "JNI_OnLoad")?;
         self.invoke_jni(
             function,
@@ -307,8 +358,7 @@ impl Emulator {
         method: &str,
         args: &[JniValue],
     ) -> Result<JniValue> {
-        let class_handle = self.class(class);
-        self.call_jni_method(handler, class, class_handle, method, args)
+        self.call_native_method(handler, class, None, method, args)
     }
     pub fn call_jni_method(
         &mut self,
@@ -318,22 +368,36 @@ impl Emulator {
         method: &str,
         args: &[JniValue],
     ) -> Result<JniValue> {
+        self.call_native_method(handler, class, Some(receiver), method, args)
+    }
+    fn call_native_method(
+        &mut self,
+        handler: &mut dyn JniHandler,
+        class: &str,
+        receiver: Option<Handle>,
+        method: &str,
+        args: &[JniValue],
+    ) -> Result<JniValue> {
         self.cpu()?;
         let (name, signature) = method.split_at(method.find('(').unwrap());
-        let key = (class.to_owned(), method.to_owned());
-        let function = if let Some(function) = self.jni.natives.get(&key) {
-            *function
-        } else {
-            let short = format!("Java_{}_{}", mangle(class), mangle(name));
-            let args_sig = signature[1..].split(')').next().unwrap();
-            let long = format!("{short}__{}", mangle(args_sig));
-            [short, long]
-                .iter()
-                .find_map(|symbol| {
+        let chain = self.class_chain(class);
+        let found = chain.iter().find_map(|&class| {
+            let key = (class.to_owned(), method.to_owned());
+            let function = self.jni.natives.get(&key).copied().or_else(|| {
+                let short = format!("Java_{}_{}", mangle(class), mangle(name));
+                let args_sig = signature[1..].split(')').next().unwrap();
+                let long = format!("{short}__{}", mangle(args_sig));
+                [short, long].iter().find_map(|symbol| {
                     (0..self.modules.len()).find_map(|i| self.local_symbol(Module(i), symbol))
                 })
-                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?
-        };
+            })?;
+            Some((class.to_owned(), function))
+        });
+        let (declaring, function) = found.ok_or_else(|| format!(
+            "native method {class}.{method} not found: no RegisterNatives entry or Java_ export on {} (an inherited method needs its superclasses declared)",
+            chain.join(", ")
+        ))?;
+        let receiver = receiver.unwrap_or_else(|| self.class(&declaring));
         let mut values = vec![JniValue::Object(Handle(self.jni.env)), receiver.into()];
         values.extend_from_slice(args);
         let result_type = signature.as_bytes()[signature.find(')').unwrap() + 1];
@@ -466,7 +530,7 @@ impl Emulator {
             164..=166 | 168..=170 | 220 | 221 | 224 | 225 => Some(2),
             171 => Some(5),
             183..=214 | 222 | 223 => Some(3),
-            27..=30 | 33 | 94 | 113..=162 | 215 | 216 => Some(1),
+            10 | 27..=30 | 33 | 94 | 113..=162 | 215 | 216 => Some(1),
             31 | 32 | 34..=93 | 95..=112 | 230 | 231 => Some(0),
             _ => None,
         };
@@ -509,14 +573,16 @@ impl Emulator {
                 6 | 167 => self.cstring(a)?,
                 33 | 94 | 113 | 144 => format!(
                     "{}->{}{}",
-                    self.class_name(Handle(a)),
+                    self.class_name(Handle(a))?,
                     self.cstring(b)?,
                     self.cstring(c)?
                 ),
-                21..=25 | 31 | 164..=166 | 168..=171 | 183..=216 | 220..=225 if a != 0 => format!(
-                    "{} handle=0x{a:x}, arg2=0x{b:x}, arg3=0x{c:x}",
-                    self.class_name(Handle(a))
-                ),
+                10 | 21..=25 | 31 | 164..=166 | 168..=171 | 183..=216 | 220..=225 if a != 0 => {
+                    format!(
+                        "{} handle=0x{a:x}, arg2=0x{b:x}, arg3=0x{c:x}",
+                        self.class_name(Handle(a))?
+                    )
+                }
                 _ => format!("arg1=0x{a:x}, arg2=0x{b:x}, arg3=0x{c:x}"),
             };
             eprintln!(
@@ -529,38 +595,53 @@ impl Emulator {
             7 => Err(self.unsupported_jni("FromReflectedMethod")),
             8 => Err(self.unsupported_jni("FromReflectedField")),
             9 => Err(self.unsupported_jni("ToReflectedMethod")),
-            10 => Err(self.unsupported_jni("GetSuperclass")),
+            10 => {
+                let class = self.class_name(Handle(a))?;
+                if class == "java/lang/Object" {
+                    return Ok(0);
+                }
+                let Some(superclass) = self.jni.superclasses.get(&class).cloned() else {
+                    return Err(format!(
+                        "GetSuperclass {class} from {}: superclass not declared; declare it with Emulator::superclass, --superclass, or the serve command superclass",
+                        self.location(self.lr()?)
+                    ).into());
+                };
+                Ok(self.find_class(&superclass, self.jni.scope).0)
+            }
             12 => Err(self.unsupported_jni("ToReflectedField")),
             11 | 32 => {
-                let from = self.class_name(Handle(a));
-                let to = self.class_name(Handle(b));
-                Ok(if from == to || to == "java/lang/Object" {
-                    1
-                } else {
-                    handler
-                        .is_assignable(self, &from, &to)
-                        .ok_or_else(|| self.jni_error(&function, &from, &to, ""))?
-                        as u64
-                })
+                let from = self.class_name(Handle(a))?;
+                let to = self.class_name(Handle(b))?;
+                Ok(
+                    if to == "java/lang/Object" || self.class_chain(&from).contains(&to.as_str()) {
+                        1
+                    } else {
+                        handler
+                            .is_assignable(self, &from, &to)
+                            .ok_or_else(|| self.jni_error(&function, &from, &to, ""))?
+                            as u64
+                    },
+                )
             }
             13 => {
                 if self.jni.objects.contains_key(&Handle(a)) {
-                    self.jni.pending = Some(self.alias(Handle(a), 0));
+                    self.jni.pending = Some(self.alias(Handle(a), 0)?);
                     Ok(0)
                 } else {
                     Err(self.reference_error(&function, a))
                 }
             }
             14 => {
-                let class = self.class_name(Handle(a));
+                let class = self.class_name(Handle(a))?;
                 self.pending_exception(&class, Some(self.cstring(b)?));
                 Ok(0)
             }
             15 => Ok(self
                 .jni
                 .pending
-                .map(|handle| self.alias(handle, self.jni.scope).0)
-                .unwrap_or(0)),
+                .map(|handle| self.alias(handle, self.jni.scope))
+                .transpose()?
+                .map_or(0, |handle| handle.0)),
             16 => Ok(0),
             17 => {
                 if let Some(handle) = self.jni.pending.take() {
@@ -575,7 +656,7 @@ impl Emulator {
             )
             .into()),
             27 => Ok(self
-                .insert_object(Object::User(self.class_name(Handle(a)), Rc::new(())))
+                .insert_object(Object::User(self.class_name(Handle(a))?, Rc::new(())))
                 .0),
             217 | 218 => {
                 self.validate_ref(&function, a, 0)?;
@@ -585,7 +666,7 @@ impl Emulator {
                 if a == 0 {
                     return Ok(0);
                 }
-                let handle = self.alias(Handle(a), 1);
+                let handle = self.alias(Handle(a), 1)?;
                 self.jni.weak.insert(handle);
                 Ok(handle.0)
             }
@@ -601,8 +682,8 @@ impl Emulator {
                     self.pending_exception("java/lang/NegativeArraySizeException", None);
                     Ok(0)
                 } else {
-                    let initial = (c != 0).then(|| self.object(Handle(c)));
-                    let class = self.class_name(Handle(b));
+                    let initial = (c != 0).then(|| self.object(Handle(c))).transpose()?;
+                    let class = self.class_name(Handle(b))?;
                     Ok(self
                         .insert_object(Object::ObjectArray(vec![initial; length as usize], class))
                         .0)
@@ -624,7 +705,7 @@ impl Emulator {
                 Ok(value.map_or(0, |object| self.insert_ref(object, self.jni.scope).0))
             }
             174 => {
-                let value = (c != 0).then(|| self.object(Handle(c)));
+                let value = (c != 0).then(|| self.object(Handle(c))).transpose()?;
                 let object = self.require_object(&function, a)?;
                 let Object::ObjectArray(values, _) = &mut *object.borrow_mut() else {
                     return Err(self.reference_error(&function, a));
@@ -667,7 +748,7 @@ impl Emulator {
             }
             20 => {
                 let object = if a != 0 {
-                    Some(self.object(Handle(a)))
+                    Some(self.require_object(&function, a)?)
                 } else {
                     None
                 };
@@ -680,7 +761,7 @@ impl Emulator {
                     Ok(0)
                 }
             }
-            21 => Ok(self.alias(Handle(a), 1).0),
+            21 => Ok(self.alias(Handle(a), 1)?.0),
             22 => {
                 if self
                     .jni
@@ -706,18 +787,15 @@ impl Emulator {
             24 => Ok(if a == 0 || b == 0 {
                 a == b
             } else {
-                Rc::ptr_eq(&self.object(Handle(a)), &self.object(Handle(b)))
+                Rc::ptr_eq(&self.object(Handle(a))?, &self.object(Handle(b))?)
             } as u64),
-            25 => Ok(self.alias(Handle(a), self.jni.scope).0),
+            25 => Ok(self.alias(Handle(a), self.jni.scope)?.0),
             31 => {
-                let name = match &*self.object(Handle(a)).borrow() {
-                    Object::Class(_) => "java/lang/Class".to_owned(),
-                    _ => self.class_name(Handle(a)),
-                };
+                let name = self.object(Handle(a))?.borrow().java_type();
                 Ok(self.find_class(&name, self.jni.scope).0)
             }
             33 | 94 | 113 | 144 => {
-                let class = self.class_name(Handle(a));
+                let class = self.class_name(Handle(a))?;
                 let name = self.cstring(b)?;
                 let signature = self.cstring(c)?;
                 let key = (
@@ -785,9 +863,11 @@ impl Emulator {
                     if member.class == "java/lang/String"
                         && member.signature == "([BLjava/lang/String;)V"
                     {
-                        let bytes = self.byte_array(args[0].object());
+                        self.validate_ref(&function, args[0].object().0, 3)?;
+                        self.validate_ref(&function, args[1].object().0, 2)?;
+                        let bytes = self.byte_array(args[0].object())?;
                         let charset = self
-                            .string(args[1].object())
+                            .string(args[1].object())?
                             .to_ascii_lowercase()
                             .replace('-', "");
                         let text = match charset.as_str() {
@@ -837,14 +917,14 @@ impl Emulator {
                     .0)
             }
             164 => {
-                let object = self.object(Handle(a));
+                let object = self.object(Handle(a))?;
                 let Object::String(value) = &*object.borrow() else {
                     unreachable!()
                 };
                 Ok(value.len() as u64)
             }
             165 | 169 | 224 => {
-                let object = self.object(Handle(a));
+                let object = self.object(Handle(a))?;
                 let Object::String(value) = &*object.borrow() else {
                     unreachable!()
                 };
@@ -881,7 +961,7 @@ impl Emulator {
                     .0)
             }
             168 => {
-                let object = self.object(Handle(a));
+                let object = self.object(Handle(a))?;
                 let Object::String(value) = &*object.borrow() else {
                     unreachable!()
                 };
@@ -908,7 +988,7 @@ impl Emulator {
                 }
             }
             183..=190 | 222 => {
-                let bytes = self.primitive_array(Handle(a));
+                let bytes = self.primitive_array(Handle(a))?;
                 if b != 0 {
                     self.write_bytes(b, &[1])?;
                 }
@@ -916,7 +996,7 @@ impl Emulator {
             }
             191..=198 | 223 => {
                 if c == 0 || c == 1 {
-                    let object = self.object(Handle(a));
+                    let object = self.object(Handle(a))?;
                     let mut object = object.borrow_mut();
                     let Object::Array(_, bytes) = &mut *object else {
                         unreachable!()
@@ -959,7 +1039,7 @@ impl Emulator {
                 Ok(0)
             }
             215 => {
-                let class = self.class_name(Handle(a));
+                let class = self.class_name(Handle(a))?;
                 for i in 0..c {
                     let p = self.pointer_size();
                     let entry = b + i * 3 * p;
@@ -973,7 +1053,7 @@ impl Emulator {
                 Ok(0)
             }
             216 => {
-                let class = self.class_name(Handle(a));
+                let class = self.class_name(Handle(a))?;
                 self.jni.natives.retain(|(c, _), _| *c != class);
                 Ok(0)
             }
@@ -1644,6 +1724,196 @@ mod tests {
         emu.call_function(function, &words)
     }
 
+    #[test]
+    fn get_superclass_uses_declarations_and_requires_unknown_parents() -> Result<()> {
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            emu.superclass("example/Child", "example/Old");
+            emu.superclass("example/Child", "example/Parent");
+            let child = emu.class("example/Child");
+            let parent = jni_call(&mut emu, 10, &[child.0])?;
+            assert_eq!(emu.class_name(Handle(parent))?, "example/Parent");
+            let object = emu.class("java/lang/Object");
+            assert_eq!(jni_call(&mut emu, 10, &[object.0])?, 0);
+            emu.superclass("example/Loop", "example/Loop");
+            let looping = emu.class("example/Loop");
+            assert_eq!(jni_call(&mut emu, 10, &[looping.0])?, looping.0);
+            let unknown = emu.class("example/Unknown");
+            assert_eq!(
+                jni_call(&mut emu, 10, &[unknown.0])
+                    .unwrap_err()
+                    .to_string(),
+                "GetSuperclass example/Unknown from 0x20000: superclass not declared; declare it with Emulator::superclass, --superclass, or the serve command superclass"
+            );
+            let string = emu.new_string("wrong kind");
+            assert_eq!(
+                jni_call(&mut emu, 10, &[string.0]).unwrap_err().to_string(),
+                format!(
+                    "invalid JNI reference 0x{:x} in GetSuperclass from 0x20000",
+                    string.0
+                )
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn declared_superclasses_answer_assignability_without_a_handler() -> Result<()> {
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            emu.superclass("com/example/Child", "com/example/Parent");
+            emu.superclass("com/example/Parent", "com/example/Base");
+            let child = emu.class("com/example/Child");
+            let parent = emu.class("com/example/Base");
+            assert_eq!(jni_call(&mut emu, 11, &[child.0, parent.0])?, 1);
+            let instance = emu.new_object("com/example/Child", ());
+            assert_eq!(jni_call(&mut emu, 32, &[instance.0, parent.0])?, 1);
+            assert!(jni_call(&mut emu, 11, &[parent.0, child.0]).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn inherited_registered_natives_receive_the_declaring_class_or_receiver() -> Result<()> {
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            let code = crate::RETURN + 0x100;
+            let words = match arch {
+                crate::Architecture::Arm32 => [0xe1a00001u32, 0xe12fff1e], // mov r0,r1; bx lr
+                crate::Architecture::Arm64 => [0xaa0103e0, 0xd65f03c0],    // mov x0,x1; ret
+            };
+            emu.write_bytes(
+                code,
+                &words
+                    .into_iter()
+                    .flat_map(u32::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            )?;
+            let declaring = emu.class("com/example/Base");
+            let entry = emu.malloc(3 * emu.pointer_size() as usize)?;
+            let name = emu.new_cstring("a")?;
+            let signature = emu.new_cstring("()Ljava/lang/Class;")?;
+            emu.write_pointer(entry, name)?;
+            emu.write_pointer(entry + emu.pointer_size(), signature)?;
+            emu.write_pointer(entry + 2 * emu.pointer_size(), code)?;
+            jni_call(&mut emu, 215, &[declaring.0, entry, 1])?;
+            let class = "com/example/Child";
+            let method = "a()Ljava/lang/Class;";
+            assert_eq!(
+                emu.call_static_jni_method(&mut (), class, method, &[])
+                    .unwrap_err()
+                    .to_string(),
+                "native method com/example/Child.a()Ljava/lang/Class; not found: no RegisterNatives entry or Java_ export on com/example/Child (an inherited method needs its superclasses declared)"
+            );
+            emu.superclass(class, "com/example/Parent");
+            emu.superclass("com/example/Parent", "com/example/Base");
+            assert_eq!(
+                emu.call_static_jni_method(&mut (), class, method, &[])?
+                    .object(),
+                declaring
+            );
+            let receiver = emu.new_object(class, ());
+            assert_eq!(
+                emu.call_jni_method(&mut (), class, receiver, method, &[])?
+                    .object(),
+                receiver
+            );
+            emu.superclass("A", "B");
+            emu.superclass("B", "A");
+            assert_eq!(
+                emu.call_static_jni_method(&mut (), "A", "missing()V", &[])
+                    .unwrap_err()
+                    .to_string(),
+                "native method A.missing()V not found: no RegisterNatives entry or Java_ export on A, B (an inherited method needs its superclasses declared)"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn inherited_java_exports_precede_ancestor_registrations_and_use_short_names_first()
+    -> Result<()> {
+        let library = crate::test_elf::TestLibrary::new(false);
+        let mut bytes = std::fs::read(&library.0)?;
+        let names = b"Java_example_Parent_a\0Java_example_Parent_a__\0";
+        bytes[0x1800..0x1800 + names.len()].copy_from_slice(names);
+        bytes[0x1218..0x121c].copy_from_slice(&0x700u32.to_le_bytes());
+        bytes[0x1230..0x1234].copy_from_slice(&0x716u32.to_le_bytes());
+        bytes[0x1038..0x1040].copy_from_slice(&0x800u64.to_le_bytes());
+        bytes[0x200..0x204].copy_from_slice(&0xaa0103e0u32.to_le_bytes()); // mov x0,x1
+        std::fs::write(&library.0, &bytes)?;
+        let mut emu = Emulator::builder().build()?;
+        emu.load_library(&library.0)?;
+        emu.superclass("example/Child", "example/Parent");
+        emu.superclass("example/Parent", "example/Grandparent");
+        let parent = emu.class("example/Parent");
+        let grandparent = emu.class("example/Grandparent");
+        let entry = emu.malloc(24)?;
+        let name = emu.new_cstring("a")?;
+        let signature = emu.new_cstring("()Ljava/lang/Class;")?;
+        emu.write_pointer(entry, name)?;
+        emu.write_pointer(entry + 8, signature)?;
+        emu.write_pointer(entry + 16, crate::RETURN + 0x100)?;
+        jni_call(&mut emu, 215, &[grandparent.0, entry, 1])?;
+        assert_eq!(
+            emu.call_static_jni_method(&mut (), "example/Child", "a()Ljava/lang/Class;", &[])?
+                .object(),
+            parent
+        );
+        // Removing the short name leaves the long Java_ export on the same class.
+        bytes[0x1218..0x121c].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x1238..0x1240].copy_from_slice(&0x200u64.to_le_bytes());
+        let long_library = crate::test_elf::TestLibrary::new(false);
+        std::fs::write(&long_library.0, bytes)?;
+        let mut emu = Emulator::builder().build()?;
+        emu.load_library(&long_library.0)?;
+        emu.superclass("example/Child", "example/Parent");
+        let parent = emu.class("example/Parent");
+        assert_eq!(
+            emu.call_static_jni_method(&mut (), "example/Child", "a()Ljava/lang/Class;", &[])?
+                .object(),
+            parent
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn local_frames_and_string_constructors_reject_invalid_guest_references() -> Result<()> {
+        for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            assert_eq!(
+                jni_call(&mut emu, 20, &[999]).unwrap_err().to_string(),
+                "invalid JNI reference 0x3e7 in PopLocalFrame from 0x20000"
+            );
+            let class = emu.class("java/lang/String");
+            let name = emu.new_cstring("<init>")?;
+            let signature = emu.new_cstring("([BLjava/lang/String;)V")?;
+            let id = jni_call(&mut emu, 33, &[class.0, name, signature])?;
+            let bytes = emu.new_byte_array(b"abc");
+            let charset = emu.new_string("UTF-8");
+            for (first, second, invalid) in [
+                (999, charset.0, 999),
+                (charset.0, charset.0, charset.0),
+                (bytes.0, 999, 999),
+                (bytes.0, bytes.0, bytes.0),
+            ] {
+                assert_eq!(
+                    jni_call(&mut emu, 28, &[class.0, id, first, second])
+                        .unwrap_err()
+                        .to_string(),
+                    format!("invalid JNI reference 0x{invalid:x} in NewObject from 0x20000")
+                );
+            }
+            let string = jni_call(&mut emu, 28, &[class.0, id, bytes.0, charset.0])?;
+            assert_eq!(emu.string(Handle(string))?, "abc");
+        }
+        Ok(())
+    }
+
     fn string_chars_use_libc_heap(get: u64, release: u64, expected: &[u8]) -> Result<()> {
         for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
             let (mut emu, libc) = libc_emulator(arch)?;
@@ -1695,7 +1965,7 @@ mod tests {
                 emu.write_bytes(ptr, &vec![0; length])?;
                 jni_call(&mut emu, release, &[array.0, ptr, mode])?;
                 assert_eq!(
-                    emu.primitive_array(array),
+                    emu.primitive_array(array)?,
                     vec![u8::from(mode == 2); length]
                 );
                 if mode == 1 {
@@ -1703,7 +1973,7 @@ mod tests {
                     assert_ne!(other, ptr);
                     emu.write_bytes(ptr, &vec![1; length])?;
                     jni_call(&mut emu, release, &[array.0, ptr, 0])?;
-                    assert_eq!(emu.primitive_array(array), vec![1; length]);
+                    assert_eq!(emu.primitive_array(array)?, vec![1; length]);
                     assert_eq!(emu.call_function(malloc, &[length as u64])?, ptr);
                     emu.call_function(free, &[other])?;
                 } else {
@@ -1760,7 +2030,7 @@ mod tests {
             let ptr = emu.malloc(bytes.len())?;
             emu.write_bytes(ptr, bytes)?;
             let string = jni_call(&mut emu, 167, &[ptr])?;
-            assert_eq!(emu.string(Handle(string)), "a\0é😀");
+            assert_eq!(emu.string(Handle(string))?, "a\0é😀");
             emu.free(ptr);
         }
         Ok(())
@@ -2167,7 +2437,7 @@ mod tests {
             emu.jni.next_handle = 0x7fff_fffe;
             assert_eq!(emu.new_string("last"), Handle(0x7fff_ffff));
             assert_eq!(emu.new_string("wrapped"), free);
-            assert_eq!(emu.string(live), "live");
+            assert_eq!(emu.string(live)?, "live");
             assert_eq!(emu.class("example/Remembered"), class);
 
             let table = emu.read_pointer(emu.jni.env)?;
@@ -2184,7 +2454,7 @@ mod tests {
             emu.jni.next_handle = 0x7fff_ffff;
             let result = emu.call_function(pop, &[emu.jni.env, live.0])?;
             assert_eq!(result, 4);
-            assert_eq!(emu.string(Handle(result)), "live");
+            assert_eq!(emu.string(Handle(result))?, "live");
         }
         Ok(())
     }
@@ -2343,7 +2613,7 @@ mod tests {
             let text = emu.new_cstring("hello")?;
             let string =
                 emu.call_function(emu.read_pointer(table + 167 * p)?, &[emu.jni.env, text])?;
-            assert_eq!(emu.string(Handle(string)), "hello");
+            assert_eq!(emu.string(Handle(string))?, "hello");
             let array = emu.new_byte_array(&[1, 2, 3]);
             let ptr = emu.call_function(
                 emu.read_pointer(table + 222 * p)?,
@@ -2354,7 +2624,7 @@ mod tests {
                 emu.read_pointer(table + 223 * p)?,
                 &[emu.jni.env, array.0, ptr, 0],
             )?;
-            assert_eq!(emu.byte_array(array), [9, 2, 3]);
+            assert_eq!(emu.byte_array(array)?, [9, 2, 3]);
             let memory = emu.malloc(16)?;
             let buffer = emu
                 .invoke_jni(
@@ -2389,7 +2659,7 @@ mod tests {
             let p = emu.pointer_size();
             emu.jni.scope = 2;
             let local = emu.class("example/Test");
-            let global = emu.alias(local, 1);
+            let global = emu.alias(local, 1)?;
             emu.release(local);
             let again = emu.class("example/Test");
             let table = emu.read_pointer(emu.jni.env)?;
@@ -2416,10 +2686,10 @@ mod tests {
                 let ptr = emu.call_function(get, &[emu.jni.env, array.0, 0])?;
                 emu.write_bytes(ptr, &vec![0x42; 3 * width])?;
                 emu.call_function(release, &[emu.jni.env, array.0, ptr, 1])?;
-                assert_eq!(emu.primitive_array(array), vec![0x42; 3 * width]);
+                assert_eq!(emu.primitive_array(array)?, vec![0x42; 3 * width]);
                 emu.write_bytes(ptr, &vec![0x55; 3 * width])?;
                 emu.call_function(release, &[emu.jni.env, array.0, ptr, 2])?;
-                assert_eq!(emu.primitive_array(array), vec![0x42; 3 * width]);
+                assert_eq!(emu.primitive_array(array)?, vec![0x42; 3 * width]);
                 let set_region = emu.read_pointer(table + (207 + index as u64) * p)?;
                 let region = emu.malloc(width)?;
                 emu.write_bytes(region, &vec![0x55; width])?;
@@ -2427,7 +2697,7 @@ mod tests {
                 emu.free(region);
                 let mut expected = vec![0x42; 3 * width];
                 expected[width..2 * width].fill(0x55);
-                assert_eq!(emu.primitive_array(array), expected);
+                assert_eq!(emu.primitive_array(array)?, expected);
                 let get_region = emu.read_pointer(table + (199 + index as u64) * p)?;
                 let out = emu.malloc(width + 4)?;
                 emu.write_bytes(out, &vec![0xa5; width + 4])?;
@@ -2437,7 +2707,7 @@ mod tests {
                 let ptr = emu.call_function(get, &[emu.jni.env, array.0, 0])?;
                 emu.write_bytes(ptr, &vec![0x66; 3 * width])?;
                 emu.call_function(release, &[emu.jni.env, array.0, ptr, 0])?;
-                assert_eq!(emu.primitive_array(array), vec![0x66; 3 * width]);
+                assert_eq!(emu.primitive_array(array)?, vec![0x66; 3 * width]);
             }
         }
         Ok(())
@@ -2475,7 +2745,7 @@ mod tests {
             )?;
             let element =
                 emu.call_function(emu.read_pointer(table + 173 * p)?, &[emu.jni.env, array, 1])?;
-            assert_eq!(emu.string(Handle(element)), "y");
+            assert_eq!(emu.string(Handle(element))?, "y");
             let throw_new = emu.read_pointer(table + 14 * p)?;
             let message = emu.new_cstring("bad input")?;
             assert_eq!(

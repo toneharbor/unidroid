@@ -38,6 +38,9 @@ struct Options {
     /// Resolve a symbol under another name.
     #[arg(long, value_name = "NAME=TARGET", value_parser = pair)]
     alias: Vec<(String, String)>,
+    /// Declare that CLASS extends SUPERCLASS.
+    #[arg(long, value_name = "CLASS=SUPERCLASS", value_parser = pair)]
+    superclass: Vec<(String, String)>,
     /// Trace JNI calls to stderr.
     #[arg(long)]
     verbose: bool,
@@ -64,6 +67,9 @@ impl Options {
         let mut emu = builder.build()?;
         for (name, target) in self.alias {
             emu.symbol_alias(name, target);
+        }
+        for (class, superclass) in self.superclass {
+            emu.superclass(class, superclass);
         }
         Ok(emu)
     }

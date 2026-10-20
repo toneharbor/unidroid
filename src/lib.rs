@@ -16,7 +16,7 @@ use std::{
 };
 use unicorn_engine::{
     Unicorn,
-    unicorn_const::{ControlType, Prot, uc_ctl, uc_error},
+    unicorn_const::{ControlType, HookType, MemType, Prot, uc_ctl, uc_error},
 };
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -100,9 +100,20 @@ impl EmulatorBuilder {
     }
 }
 
+#[derive(Default)]
+struct CpuData {
+    interrupt: Option<u32>,
+    memory_access: Option<MemoryAccess>,
+}
+struct MemoryAccess {
+    kind: MemType,
+    address: u64,
+    size: usize,
+}
+
 pub struct Emulator {
     // Unicorn must be destroyed before the Arc-backed host pointers it uses.
-    uc: Option<Unicorn<'static, Option<u32>>>,
+    uc: Option<Unicorn<'static, CpuData>>,
     cache_size: u32,
     arch: Option<Architecture>,
     modules: Vec<Loaded>,
@@ -111,6 +122,7 @@ pub struct Emulator {
     overrides: HashMap<String, u64>,
     symbol_aliases: HashMap<String, String>,
     rootfs: PathBuf,
+    library_dirs: Vec<PathBuf>,
     properties: HashMap<String, String>,
     verbose: bool,
     next_module: u64,
@@ -150,6 +162,7 @@ impl Emulator {
             overrides: HashMap::new(),
             symbol_aliases: HashMap::new(),
             rootfs: builder.rootfs,
+            library_dirs: Vec::new(),
             properties: builder.properties,
             verbose: builder.verbose,
             next_module: 0x10000000,
@@ -171,7 +184,7 @@ impl Emulator {
     }
     fn setup_cpu(&mut self, arch: Architecture) -> Result<()> {
         let (cpu_arch, mode) = arch.cpu();
-        let mut uc = Unicorn::new_with_data(cpu_arch, mode, None)?;
+        let mut uc = Unicorn::new_with_data(cpu_arch, mode, CpuData::default())?;
         // Set before the first CPU access: this allocates Unicorn's TCG cache.
         let status = unsafe {
             uc_ctl(
@@ -185,8 +198,16 @@ impl Emulator {
         }
         arch.enable_fp(&mut uc)?;
         uc.add_intr_hook(|uc, interrupt| {
-            *uc.get_data_mut() = Some(interrupt);
+            uc.get_data_mut().interrupt = Some(interrupt);
             let _ = uc.emu_stop();
+        })?;
+        uc.add_mem_hook(HookType::MEM_INVALID, 1, 0, |uc, kind, address, size, _| {
+            uc.get_data_mut().memory_access = Some(MemoryAccess {
+                kind,
+                address,
+                size,
+            });
+            false
         })?;
         uc.mem_map(TRAMPOLINE, TRAMPOLINE_SIZE, Prot::READ | Prot::EXEC)?;
         uc.mem_map(RETURN, PAGE, Prot::READ | Prot::EXEC)?;
@@ -257,10 +278,10 @@ impl Emulator {
         self.dlerror_buf = self.malloc(self.dlerror_capacity)?;
         Ok(())
     }
-    fn cpu(&self) -> Result<&Unicorn<'static, Option<u32>>> {
+    fn cpu(&self) -> Result<&Unicorn<'static, CpuData>> {
         self.uc.as_ref().ok_or_else(|| NO_LIBRARY.into())
     }
-    fn cpu_mut(&mut self) -> Result<&mut Unicorn<'static, Option<u32>>> {
+    fn cpu_mut(&mut self) -> Result<&mut Unicorn<'static, CpuData>> {
         self.uc.as_mut().ok_or_else(|| NO_LIBRARY.into())
     }
     fn setup_tls(&mut self, process: &str) -> Result<()> {
@@ -321,7 +342,27 @@ impl Emulator {
         self.symbol_aliases.insert(name.into(), target.into());
     }
     pub fn load_library(&mut self, path: impl AsRef<Path>) -> Result<Module> {
-        let module = self.load_image(path.as_ref())?;
+        let path = path.as_ref();
+        if let Some(directory) = path.parent()
+            && !self.library_dirs.iter().any(|loaded| loaded == directory)
+        {
+            self.library_dirs.push(directory.to_owned());
+        }
+        self.load_library_internal(path)
+    }
+    fn library_file(&self, name: &str) -> Option<PathBuf> {
+        self.library_dirs
+            .iter()
+            .map(|directory| directory.join(name))
+            .chain(std::iter::once(
+                self.rootfs
+                    .join(self.architecture().library_dir())
+                    .join(name),
+            ))
+            .find(|path| path.is_file())
+    }
+    fn load_library_internal(&mut self, path: &Path) -> Result<Module> {
+        let module = self.load_image(path)?;
         for i in 0..self.modules.len() {
             self.relocate(Module(i))?;
         }
@@ -329,7 +370,11 @@ impl Emulator {
         Ok(module)
     }
     fn load_image(&mut self, path: &Path) -> Result<Module> {
-        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let name = path
+            .file_name()
+            .ok_or_else(|| format!("cannot load {}: not a file path", path.display()))?
+            .to_string_lossy()
+            .into_owned();
         let image = Image::open(path)?;
         if self.uc.is_none() {
             self.setup_cpu(image.arch)?;
@@ -407,16 +452,12 @@ impl Emulator {
             dl_references: 0,
         });
         for needed in &image.needed {
-            let path = self
-                .rootfs
-                .join(self.architecture().library_dir())
-                .join(needed);
-            if path.is_file() {
+            if let Some(path) = self.library_file(needed) {
                 let dep = self.load_image(&path)?;
                 self.modules[id.0].dependencies.push(dep);
             } else {
                 eprintln!(
-                    "warning: {needed} needed by {name} not found in rootfs; its symbols stay unresolved"
+                    "warning: {needed} needed by {name} not found next to the loaded libraries or in rootfs; its symbols stay unresolved"
                 );
             }
         }
@@ -447,6 +488,9 @@ impl Emulator {
         })
     }
     pub fn find_symbol(&self, module: Module, name: &str) -> Result<u64> {
+        if module.0 >= self.modules.len() {
+            return Err(format!("no module {} is loaded", module.0).into());
+        }
         self.search_symbol(module, name, &mut Vec::new())
             .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound).into())
     }
@@ -714,13 +758,13 @@ impl Emulator {
             } else {
                 0
             };
-            *self.cpu_mut()?.get_data_mut() = None;
+            *self.cpu_mut()?.get_data_mut() = CpuData::default();
             if let Err(error) = self.cpu_mut()?.emu_start(pc, RETURN, 0, count) {
                 return Err(self.emulation_error(error));
             }
             let (restart, location) = self.restart_pc()?;
             pc = restart;
-            let Some(interrupt) = *self.cpu()?.get_data() else {
+            let Some(interrupt) = self.cpu()?.get_data().interrupt else {
                 if pc & !1 == RETURN {
                     if !outermost || self.threads.tid() == threads::MAIN_TID {
                         return self.reg(0);
@@ -772,11 +816,37 @@ impl Emulator {
     fn emulation_error(&self, error: uc_error) -> Box<dyn std::error::Error> {
         let pc = self.pc().unwrap_or(0);
         let lr = self.lr().unwrap_or(0);
-        format!(
+        let mut message = format!(
             "emulation stopped: {error} at {} (pc=0x{pc:x}, lr=0x{lr:x})",
             self.location(pc)
-        )
-        .into()
+        );
+        if matches!(
+            error,
+            uc_error::READ_UNMAPPED
+                | uc_error::WRITE_UNMAPPED
+                | uc_error::FETCH_UNMAPPED
+                | uc_error::READ_PROT
+                | uc_error::WRITE_PROT
+                | uc_error::FETCH_PROT
+        ) && let Some(fault) = self
+            .uc
+            .as_ref()
+            .and_then(|uc| uc.get_data().memory_access.as_ref())
+        {
+            let access = match fault.kind {
+                MemType::READ_UNMAPPED | MemType::READ_PROT => "read",
+                MemType::WRITE_UNMAPPED | MemType::WRITE_PROT => "write",
+                _ => "instruction fetch",
+            };
+            message.push_str(&format!(
+                ": {}-byte {access} at 0x{:x}",
+                fault.size, fault.address
+            ));
+            if fault.address < TRAMPOLINE {
+                message.push_str(", likely a null pointer");
+            }
+        }
+        message.into()
     }
     fn host_function(
         &mut self,
@@ -820,21 +890,18 @@ impl Emulator {
                     self.modules[i].dl_references += 1;
                     return Ok(i as u64 + 1);
                 }
-                // Guest paths resolve inside rootfs, never on the host.
                 let full = self.rootfs.join(path.trim_start_matches('/'));
                 let path = if !path.contains("..") && full.is_file() {
-                    full
+                    Some(full)
                 } else {
-                    self.rootfs
-                        .join(self.architecture().library_dir())
-                        .join(name.as_ref())
+                    self.library_file(&name)
                 };
-                if !path.is_file() {
+                let Some(path) = path else {
                     self.set_dlerror(&format!("dlopen failed: library \"{name}\" not found"))?;
                     return Ok(0);
-                }
+                };
                 let context = self.cpu()?.context_init()?;
-                let result = self.load_library(path);
+                let result = self.load_library_internal(&path);
                 self.cpu_mut()?.context_restore(&context)?;
                 let module = result?;
                 self.modules[module.0].dl_references += 1;
@@ -974,6 +1041,88 @@ mod tests {
     use super::*;
 
     #[test]
+    fn memory_faults_name_the_address_and_only_hint_at_low_null_pointers() -> Result<()> {
+        for arch in [Architecture::Arm32, Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            let code = RETURN + 0x100;
+            let (words, size) = match arch {
+                Architecture::Arm32 => ([0xe5900000u32, 0xe12fff1e], 4), // ldr r0,[r0]; bx lr
+                Architecture::Arm64 => ([0xf9400000, 0xd65f03c0], 8),    // ldr x0,[x0]; ret
+            };
+            emu.write_bytes(
+                code,
+                &words
+                    .into_iter()
+                    .flat_map(u32::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            )?;
+            for (address, hint) in [(0x18, ", likely a null pointer"), (0x30000000, "")] {
+                assert_eq!(
+                    emu.call_function(code, &[address]).unwrap_err().to_string(),
+                    format!(
+                        "emulation stopped: Invalid memory read (UC_ERR_READ_UNMAPPED) at 0x20100 (pc=0x20100, lr=0x20000): {size}-byte read at 0x{address:x}{hint}"
+                    )
+                );
+            }
+            let value = emu.malloc(8)?;
+            emu.write_u64(value, 42)?;
+            assert_eq!(emu.call_function(code, &[value])?, 42);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn memory_fault_hooks_cover_writes_fetches_and_protection_errors() -> Result<()> {
+        for arch in [Architecture::Arm32, Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            let code = RETURN + 0x100;
+            let address = 0x30000000;
+            let (read, write, trap, size) = match arch {
+                Architecture::Arm32 => (0xe5900000u32, 0xe5800000u32, 0xe1200070u32, 4),
+                Architecture::Arm64 => (0xf9400000, 0xf9000000, 0xd4200000, 8),
+            };
+            emu.write_bytes(code, &write.to_le_bytes())?;
+            assert_eq!(
+                emu.call_function(code, &[address]).unwrap_err().to_string(),
+                format!(
+                    "emulation stopped: Invalid memory write (UC_ERR_WRITE_UNMAPPED) at 0x20100 (pc=0x20100, lr=0x20000): {size}-byte write at 0x30000000"
+                )
+            );
+            assert_eq!(
+                emu.call_function(address, &[]).unwrap_err().to_string(),
+                "emulation stopped: Invalid memory fetch (UC_ERR_FETCH_UNMAPPED) at 0x30000000 (pc=0x30000000, lr=0x20000): 4-byte instruction fetch at 0x30000000"
+            );
+            emu.cpu_mut()?.mem_map(address, PAGE, Prot::READ)?;
+            assert_eq!(
+                emu.call_function(code, &[address]).unwrap_err().to_string(),
+                format!(
+                    "emulation stopped: Write to write-protected memory (UC_ERR_WRITE_PROT) at 0x20100 (pc=0x20100, lr=0x20000): {size}-byte write at 0x30000000"
+                )
+            );
+            assert_eq!(
+                emu.call_function(address, &[]).unwrap_err().to_string(),
+                "emulation stopped: Fetch from non-executable memory (UC_ERR_FETCH_PROT) at 0x30000000 (pc=0x30000000, lr=0x20000): 4-byte instruction fetch at 0x30000000"
+            );
+            emu.cpu_mut()?.mem_protect(address, PAGE, Prot::WRITE)?;
+            emu.write_bytes(code, &read.to_le_bytes())?;
+            assert_eq!(
+                emu.call_function(code, &[address]).unwrap_err().to_string(),
+                format!(
+                    "emulation stopped: Read from non-readable memory (UC_ERR_READ_PROT) at 0x20100 (pc=0x20100, lr=0x20000): {size}-byte read at 0x30000000"
+                )
+            );
+            emu.write_bytes(code, &trap.to_le_bytes())?;
+            assert_eq!(
+                emu.call_function(code, &[]).unwrap_err().to_string(),
+                "emulation stopped: Unhandled CPU exception (UC_ERR_EXCEPTION) at 0x20100 (pc=0x20100, lr=0x20000)"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn rust_jni_handler_can_call_guest_code_without_clobbering_the_outer_call() -> Result<()> {
         struct Handler {
             strlen: u64,
@@ -1012,7 +1161,7 @@ mod tests {
                     return None;
                 }
                 Some(emu.new_string(&String::from_utf8_lossy(
-                    &emu.byte_array(call.args[0].object()),
+                    &emu.byte_array(call.args[0].object()).ok()?,
                 )))
             }
             fn call_static_object_method(
@@ -1026,7 +1175,7 @@ mod tests {
                         "getProperty",
                         "(Ljava/lang/String;)Ljava/lang/String;",
                     )
-                    && emu.string(call.args[0].object()) == "file.encoding"
+                    && emu.string(call.args[0].object()).ok()? == "file.encoding"
                 {
                     Some(emu.new_string("UTF-8"))
                 } else {

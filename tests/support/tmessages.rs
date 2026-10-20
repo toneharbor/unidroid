@@ -34,7 +34,7 @@ pub fn run(emu: &mut Emulator, directory: &Path) -> Result<Output> {
             0.into(),
         ],
     )?;
-    let cbc = hex(&emu.byte_array(data));
+    let cbc = hex(&emu.byte_array(data)?);
     let data = emu.new_byte_array(&[0; 16]);
     let iv = emu.new_byte_array(&[0; 16]);
     emu.call_static_jni_method(
@@ -50,7 +50,7 @@ pub fn run(emu: &mut Emulator, directory: &Path) -> Result<Output> {
             0.into(),
         ],
     )?;
-    let ctr = hex(&emu.byte_array(data));
+    let ctr = hex(&emu.byte_array(data)?);
     let password = emu.new_byte_array(b"123456");
     let salt = emu.new_byte_array(&[0; 8]);
     let dst = emu.new_byte_array(&[0; 64]);
@@ -65,7 +65,7 @@ pub fn run(emu: &mut Emulator, directory: &Path) -> Result<Output> {
     Ok(Output {
         cbc,
         ctr,
-        pbkdf2: hex(&emu.byte_array(dst)),
+        pbkdf2: hex(&emu.byte_array(dst)?),
         pbkdf2_ms,
     })
 }

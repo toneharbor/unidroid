@@ -73,7 +73,7 @@ emu.call_jni_onload(m, &mut env)?;
 // Call a JNI method
 let input = emu.new_byte_array(b"hello");
 let out = emu.call_static_jni_method(&mut env, "com/example/Sign", "sign([B)Ljava/lang/String;", &[input.into()])?;
-println!("{}", emu.string(out.object()));
+println!("{}", emu.string(out.object())?);
 emu.release(input);
 emu.release(out.object());
 
@@ -94,7 +94,7 @@ Add the matching method to `JniHandler` and run again. It's the same idea as set
 
 On 32-bit, `call_function` passes each argument as one 32-bit word and returns only `r0`. To pass a 64-bit value, give it as two words, low word first. If it would start at an odd word position (counting from 0), put a `0` word in front of it. `call_static_jni_method` and `call_jni_method` handle this for you.
 
-Objects you create (strings, arrays, `malloc` memory) live until you free them with `release` / `free`. In a long-running service, remember to free them.
+Objects you create (strings, arrays, `malloc` memory) live until you free them with `release` / `free`. In a long-running service, remember to free them. Reading a handle that was released, or that holds another kind of object, returns an error.
 
 If a library needs a function that rootfs has under another name, point it there before loading. For example, Android 6.0's libcrypto has no `DES_set_key_unchecked`, only `DES_set_key`:
 
@@ -104,6 +104,15 @@ emu.load_library("libd-lib.so")?;
 ```
 
 The alias is used only when no loaded library has the real name.
+
+There are no Java classes, so minidbg doesn't know which class extends which. If a library calls `GetSuperclass`, or registers a native method on a parent class and you call it through a child class, tell minidbg the parents first:
+
+```rust
+emu.superclass("com/example/Sign", "com/example/Base");
+emu.superclass("com/example/Base", "java/lang/Object");
+```
+
+Now `GetSuperclass` answers, and `call_static_jni_method(.., "com/example/Sign", ..)` also finds a native method registered on `com/example/Base`. Without it, `GetSuperclass` stops and says which class to declare.
 
 ## The `minidbg` command
 
@@ -197,6 +206,7 @@ Options, the same for both subcommands:
 | `--process-name NAME` | process name the library sees |
 | `--prop KEY=VALUE` | a system property, repeatable |
 | `--alias NAME=TARGET` | same as `symbol_alias`, repeatable |
+| `--superclass CLASS=SUPERCLASS` | same as `superclass`, repeatable |
 | `--verbose` | print every JNI call on stderr (`inspect` always does) |
 
 How values are written in JSON:
@@ -216,6 +226,7 @@ Commands:
 |---|---|---|
 | `load` | `path` | module number |
 | `alias` | `name`, `target` | `null` |
+| `superclass` | `class`, `superclass` | `null` |
 | `onload` | `module` | `JNI_OnLoad`'s return |
 | `call_static` | `class`, `method` (name + signature), `args` | the return value |
 | `call` | `class`, `receiver`, `method`, `args` | the return value |
@@ -262,7 +273,9 @@ Not supported:
 - Debugger, inline hooks
 - File access outside `rootfs`. `/dev/urandom` is allowed. Every other path is "not found".
 
-A dependency missing from rootfs (such as `libEGL.so`) only prints a warning. If its function is actually called, it stops and names the function.
+A library's dependencies are looked for first in the folders of the libraries you loaded, then in rootfs. That's how an app's own `lib/arm64-v8a` folder works on a phone, so copy an app's libraries together and load the one you need. `dlopen` from the library searches the same way.
+
+A dependency found in neither place (such as `libEGL.so`) only prints a warning. If its function is actually called, it stops and names the function.
 
 ## Directories
 
