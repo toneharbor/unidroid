@@ -47,13 +47,16 @@ impl Emulator {
     fn run_loop(&mut self, mut pc: u64, handler: &mut dyn JniHandler) -> Result<u64> {
         let outermost = self.threads.depth == 1;
         loop {
-            let count = if outermost && self.threads.has_runnable() {
-                threads::SLICE_INSTRUCTIONS
+            let slice_remaining = if outermost && self.threads.has_runnable() {
+                threads::SLICE_CODE_BYTES
             } else {
                 0
             };
-            *self.cpu_mut()?.get_data_mut() = CpuData::default();
-            if let Err(error) = self.cpu_mut()?.emu_start(pc, RETURN, 0, count) {
+            *self.cpu_mut()?.get_data_mut() = CpuData {
+                slice_remaining,
+                ..CpuData::default()
+            };
+            if let Err(error) = self.cpu_mut()?.emu_start(pc, RETURN, 0, 0) {
                 return Err(self.emulation_error(error));
             }
             let (restart, location) = self.restart_pc()?;

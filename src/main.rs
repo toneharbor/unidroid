@@ -32,6 +32,14 @@ struct Options {
     /// Guest process name.
     #[arg(long)]
     process_name: Option<String>,
+    /// Translation cache size in MB (default 8). Large libraries run faster with a bigger cache.
+    #[arg(
+        long,
+        value_name = "MB",
+        value_parser = clap::value_parser!(u32).range(1..4096),
+        verbatim_doc_comment
+    )]
+    translation_cache_mb: Option<u32>,
     /// Set a system property.
     #[arg(long = "prop", value_name = "KEY=VALUE", value_parser = pair)]
     properties: Vec<(String, String)>,
@@ -60,6 +68,9 @@ impl Options {
             .verbose(inspect || self.verbose);
         if let Some(name) = self.process_name {
             builder = builder.process_name(name);
+        }
+        if let Some(mb) = self.translation_cache_mb {
+            builder = builder.translation_cache_size(mb * 1024 * 1024);
         }
         for (key, value) in self.properties {
             builder = builder.system_property(key, value);

@@ -103,6 +103,7 @@ impl EmulatorBuilder {
 struct CpuData {
     interrupt: Option<u32>,
     memory_access: Option<MemoryAccess>,
+    slice_remaining: u64,
 }
 struct MemoryAccess {
     kind: MemType,
@@ -147,7 +148,7 @@ impl Emulator {
             process_name: "minidbg".into(),
             properties: HashMap::from([("ro.build.version.sdk".into(), "23".into())]),
             verbose: false,
-            cache_size: 1024 * 1024,
+            cache_size: 8 * 1024 * 1024,
         }
     }
     fn build(builder: EmulatorBuilder) -> Result<Self> {

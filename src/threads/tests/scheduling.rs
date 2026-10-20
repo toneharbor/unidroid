@@ -42,36 +42,57 @@ fn arm32_kuser_cmpxchg_increments_are_atomic_across_thread_slices() -> Result<()
     Ok(())
 }
 
+/// A worker that sets `*arg = 1`, and a spin that waits for it without a syscall.
+fn flag_worker_and_spin(emu: &mut Emulator) -> Result<(u64, u64)> {
+    let arm32 = emu.architecture() == Architecture::Arm32;
+    let worker = code(
+        emu,
+        0x100,
+        if arm32 {
+            &[0xe3a01001, 0xe5801000, 0xe12fff1e] // *arg = 1; return arg
+        } else {
+            &[0x52800021, 0xb9000001, 0xd65f03c0]
+        },
+    )?;
+    let spin = code(
+        emu,
+        0x200,
+        if arm32 {
+            // Bounded spin: 50,000 tries, no syscall. Return the observed flag.
+            &[
+                0xe30c2350, 0xe5901000, 0xe3510000, 0x1a000001, 0xe2522001, 0x1afffffa, 0xe1a00001,
+                0xe12fff1e,
+            ]
+        } else {
+            &[
+                0x52986a02, 0xb9400001, 0x35000061, 0x71000442, 0x54ffffa1, 0x2a0103e0, 0xd65f03c0,
+            ]
+        },
+    )?;
+    Ok((worker, spin))
+}
+
 #[test]
 fn instruction_slices_run_a_saved_thread_during_the_next_call() -> Result<()> {
     for arch in [Architecture::Arm32, Architecture::Arm64] {
         let (mut emu, libc) = libc_emulator(arch)?;
-        let worker = code(
-            &mut emu,
-            0x100,
-            if arch == Architecture::Arm32 {
-                &[0xe3a01001, 0xe5801000, 0xe12fff1e] // *arg = 1; return arg
-            } else {
-                &[0x52800021, 0xb9000001, 0xd65f03c0]
-            },
-        )?;
-        let spin = code(
-            &mut emu,
-            0x200,
-            if arch == Architecture::Arm32 {
-                // Bounded spin: 50,000 tries, no syscall. Return the observed flag.
-                &[
-                    0xe30c2350, 0xe5901000, 0xe3510000, 0x1a000001, 0xe2522001, 0x1afffffa,
-                    0xe1a00001, 0xe12fff1e,
-                ]
-            } else {
-                &[
-                    0x52986a02, 0xb9400001, 0x35000061, 0x71000442, 0x54ffffa1, 0x2a0103e0,
-                    0xd65f03c0,
-                ]
-            },
-        )?;
+        let (worker, spin) = flag_worker_and_spin(&mut emu)?;
         let flag = emu.malloc(4)?;
+        let thread = spawn(&mut emu, libc, worker, flag)?;
+        assert_eq!(emu.read_bytes(flag, 4)?, [0; 4]);
+        assert_eq!(emu.call_function(spin, &[flag])?, 1);
+        assert_eq!(call(&mut emu, libc, "pthread_join", &[thread, 0])?, 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn slices_run_previously_translated_code_after_spawning_a_thread() -> Result<()> {
+    for arch in [Architecture::Arm32, Architecture::Arm64] {
+        let (mut emu, libc) = libc_emulator(arch)?;
+        let (worker, spin) = flag_worker_and_spin(&mut emu)?;
+        let flag = emu.malloc(4)?;
+        assert_eq!(emu.call_function(spin, &[flag])?, 0);
         let thread = spawn(&mut emu, libc, worker, flag)?;
         assert_eq!(emu.read_bytes(flag, 4)?, [0; 4]);
         assert_eq!(emu.call_function(spin, &[flag])?, 1);

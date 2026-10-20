@@ -12,20 +12,20 @@ Both run nine of unidbg's own sample `.so` files and give exactly the same resul
 
 | sample | unidbg 0.9.9 | minidbg |
 |---|---|---|
-| JNA `libjnidispatch.so`, 1 instance | 91 MB | 7.9 MB |
-| Telegram `libtmessages.29.so`, 1 instance | 131 MB | 15.4 MB |
-| Telegram, 4 instances in one process | 258 MB | 26.6 MB |
+| JNA `libjnidispatch.so`, 1 instance | 91 MB | 7.8 MB |
+| Telegram `libtmessages.29.so`, 1 instance | 131 MB | 15.6 MB |
+| Telegram, 4 instances in one process | 258 MB | 28.1 MB |
 | JNA `libjnidispatch.so`, 32-bit, 1 instance | 93 MB | 9.1 MB |
 | ttEncrypt `libttEncrypt.so`, 32-bit, 1 instance | 92 MB | 8.8 MB |
 | ttEncrypt, 32-bit, 4 instances in one process | 106 MB | 20.4 MB |
-| Telegram `libtmessages.29.so`, 32-bit, 1 instance | 128 MB | 16.0 MB |
-| Anjuke SignUtil `libsignutil.so`, 32-bit, 1 instance | 94 MB | 10.5 MB |
-| QDReader `libd-lib.so`, 32-bit, 1 instance | 97 MB | 11.8 MB |
-| Kanxue crackme `libnative-lib.so`, 32-bit, 1 instance | 317 MB | 11.4 MB |
-| Kanxue crackme, 32-bit, 4 instances in one process | 411 MB | 25.7 MB |
-| Thread test `libthread-lib.so`, 32-bit, 1 instance | 99 MB | 12.4 MB |
+| Telegram `libtmessages.29.so`, 32-bit, 1 instance | 128 MB | 16.2 MB |
+| Anjuke SignUtil `libsignutil.so`, 32-bit, 1 instance | 94 MB | 10.2 MB |
+| QDReader `libd-lib.so`, 32-bit, 1 instance | 97 MB | 11.9 MB |
+| Kanxue crackme `libnative-lib.so`, 32-bit, 1 instance | 317 MB | 19.2 MB |
+| Kanxue crackme, 32-bit, 4 instances in one process | 411 MB | 56.5 MB |
+| Thread test `libthread-lib.so`, 32-bit, 1 instance | 99 MB | 12.3 MB |
 
-It's also about 3x faster. Telegram's PBKDF2 at 100,000 iterations: unidbg about 4.5 s, minidbg about 1.4 s. The Kanxue crackme tries 64,589 inputs: unidbg about 3 s, minidbg about 1 s.
+It's also about 3x faster. Telegram's PBKDF2 at 100,000 iterations: unidbg about 4.5 s, minidbg about 1.4 s. The Kanxue crackme tries 64,589 inputs: unidbg about 3 s, minidbg about 0.6 s.
 
 Why it's smaller:
 
@@ -95,6 +95,8 @@ Add the matching method to `JniHandler` and run again. It's the same idea as set
 On 32-bit, `call_function` passes each argument as one 32-bit word and returns only `r0`. To pass a 64-bit value, give it as two words, low word first. If it would start at an odd word position (counting from 0), put a `0` word in front of it. `call_static_jni_method` and `call_jni_method` handle this for you.
 
 Objects you create (strings, arrays, `malloc` memory) live until you free them with `release` / `free`. In a long-running service, remember to free them. Reading a handle that was released, or that holds another kind of object, returns an error.
+
+Before running a library's code, Unicorn translates it and keeps the result in a translation cache, 8 MB by default. When a large library fills the cache, everything is thrown away and translated again, and each call gets several times slower. Give it more with `.translation_cache_size(16 * 1024 * 1024)` on the builder, or `--translation-cache-mb 16` on the command. Memory grows only as the cache fills, so a small library uses no more.
 
 If a library needs a function that rootfs has under another name, point it there before loading. For example, Android 6.0's libcrypto has no `DES_set_key_unchecked`, only `DES_set_key`:
 
@@ -208,6 +210,7 @@ Options, the same for both subcommands:
 | `--alias NAME=TARGET` | same as `symbol_alias`, repeatable |
 | `--superclass CLASS=SUPERCLASS` | same as `superclass`, repeatable |
 | `--verbose` | print every JNI call on stderr (`inspect` always does) |
+| `--translation-cache-mb MB` | translation cache size (default 8), same as `translation_cache_size` |
 
 How values are written in JSON:
 
@@ -262,7 +265,7 @@ Supported:
 - Loading a `.so` and its dependencies, relocation (including Android packed relocations), running constructors
 - libdl (`dlopen` / `dlsym` and the rest), system properties, the common syscalls
 - JNI: classes, methods, fields, strings, arrays, exceptions, global and local references, `RegisterNatives`. Strings and arrays handed to native code come from libc's own `malloc`, as on a phone, so native code may `free` them.
-- Guest threads (`pthread_create`, `pthread_join`, and the futex waits behind locks). They take turns on one CPU and switch every 10,000 instructions, like unidbg. A thread that is still running when your call returns keeps going during your next call. An instance that never starts a thread pays nothing for this.
+- Guest threads (`pthread_create`, `pthread_join`, and the futex waits behind locks). They take turns on one CPU and switch about every 10,000 instructions, like unidbg. Switching keeps the translated code. A thread that is still running when your call returns keeps going during your next call. An instance that never starts a thread pays nothing for this.
 - The 32-bit ARM kernel helpers at `0xffff0f60`–`0xffff0fff`, which old libraries and Android 6.0's own libc use
 - Several instances in one process
 

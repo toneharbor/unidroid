@@ -3,7 +3,8 @@ use std::collections::VecDeque;
 use unicorn_engine::Context;
 
 pub(crate) const MAIN_TID: u32 = 1234;
-pub(crate) const SLICE_INSTRUCTIONS: usize = 10000;
+// About 10,000 A64 or ARM instructions; Thumb code runs more per slice.
+pub(crate) const SLICE_CODE_BYTES: u64 = 40_000;
 
 #[derive(Clone, Copy)]
 struct Identity {
@@ -40,6 +41,7 @@ pub(crate) struct Threads {
     next_tid: u32,
     time: u128,
     wait_order: u64,
+    slice_hook_installed: bool,
     pub depth: usize,
     pub action: Action,
 }
@@ -55,6 +57,7 @@ impl Default for Threads {
             next_tid: MAIN_TID + 1,
             time: 0,
             wait_order: 0,
+            slice_hook_installed: false,
             depth: 0,
             action: Action::Continue,
         }
@@ -101,6 +104,21 @@ impl Emulator {
             self.write_bytes(a[4], &tid.to_le_bytes())?;
         }
         let pc = self.restart_pc()?.0;
+        if !self.threads.slice_hook_installed {
+            let uc = self.cpu_mut()?;
+            uc.add_block_hook(1, 0, |uc, _, size| {
+                let remaining = &mut uc.get_data_mut().slice_remaining;
+                if *remaining == 0 {
+                    return;
+                }
+                *remaining = remaining.saturating_sub(u64::from(size));
+                if *remaining == 0 {
+                    let _ = uc.emu_stop();
+                }
+            })?;
+            uc.ctl_flush_tb()?;
+            self.threads.slice_hook_installed = true;
+        }
         self.threads.saved.push_back(SavedThread {
             identity: Identity {
                 tid,
