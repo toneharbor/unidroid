@@ -34,6 +34,9 @@ impl Emulator {
         for i in 0..self.modules.len() {
             self.relocate(Module(i))?;
         }
+        if self.trace.imports {
+            self.refresh_imports();
+        }
         self.initialize(module)?;
         Ok(module)
     }
@@ -55,7 +58,11 @@ impl Emulator {
             )
             .into());
         }
+        let app = path
+            .parent()
+            .is_some_and(|parent| self.library_dirs.iter().any(|dir| dir == parent));
         if let Some(i) = self.modules.iter().position(|m| m.name == name) {
+            self.modules[i].app |= app;
             return Ok(Module(i));
         }
         let base = self.next_module;
@@ -109,6 +116,7 @@ impl Emulator {
         )?;
         self.write_bytes(info_ptr + 3 * p, &image.phnum.to_le_bytes())?;
         self.modules.push(Loaded {
+            app,
             name: name.clone(),
             image: image.clone(),
             base,
@@ -124,9 +132,9 @@ impl Emulator {
                 let dep = self.load_image(&path)?;
                 self.modules[id.0].dependencies.push(dep);
             } else {
-                eprintln!(
-                    "warning: {needed} needed by {name} not found next to the loaded libraries or in rootfs; its symbols stay unresolved"
-                );
+                self.events.borrow_mut().emit(crate::Event::Warning { message: format!(
+                    "{needed} needed by {name} not found next to the loaded libraries or in rootfs; its symbols stay unresolved"
+                ) });
             }
         }
         Ok(id)

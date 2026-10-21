@@ -69,15 +69,15 @@ impl Emulator {
                     receiver: Handle(a),
                     args: &args,
                 };
-                if self.verbose {
-                    eprintln!(
-                        "JNIEnv->{function}({}->{}{}, {:?}) from {}",
-                        call.class,
-                        call.name,
-                        call.signature,
-                        call.args,
-                        self.location(self.lr()?)
-                    );
+                if self.trace.jni {
+                    self.events.borrow_mut().emit(crate::Event::JniCall {
+                        function: function.clone(),
+                        class: call.class.into(),
+                        name: call.name.into(),
+                        signature: call.signature.into(),
+                        args: call.args.iter().map(|arg| format!("{arg:?}")).collect(),
+                        from: self.location(self.lr()?),
+                    });
                 }
                 let result = if constructor {
                     if member.class == "java/lang/String"

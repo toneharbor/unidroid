@@ -210,11 +210,16 @@ fn blocking_futex_in_nested_run_reports_address_and_location() -> Result<()> {
             },
         )?;
         let address = emu.malloc(4)?;
-        let error = call(&mut emu, libc, "dl_iterate_phdr", &[callback, address])
-            .unwrap_err()
-            .to_string();
+        let error = call(&mut emu, libc, "dl_iterate_phdr", &[callback, address]).unwrap_err();
+        let crash = error.downcast_ref::<crate::Crash>().unwrap();
+        assert_eq!(crash.thread, 1234);
+        assert_eq!(crash.backtrace[0].address, callback + 24);
         assert_eq!(
-            error,
+            crash.registers.iter().find(|r| r.0 == "pc").unwrap().1,
+            callback + 24
+        );
+        assert_eq!(
+            error.to_string(),
             format!(
                 "futex wait at 0x{address:x} would block in nested run at 0x{:x}",
                 callback + 20

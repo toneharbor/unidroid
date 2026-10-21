@@ -4,7 +4,10 @@ use unidroid::{Emulator, Result};
 #[test]
 fn jna_matches_unidbg() -> Result<()> {
     let mut emu = Emulator::builder()
-        .verbose(std::env::var_os("UNIDROID_TRACE").is_some())
+        .trace(unidroid::Trace {
+            jni: std::env::var_os("UNIDROID_TRACE").is_some(),
+            ..Default::default()
+        })
         .build()?;
     let out = sample::run(&mut emu, std::path::Path::new("tests/fixtures/arm64-v8a"))?;
     assert_eq!(out.sdk, "23");

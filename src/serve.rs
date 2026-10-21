@@ -1,15 +1,25 @@
 use crate::{Emulator, Handle, JniCall, JniHandler, JniValue, Module, PrimitiveType, Result};
 use base64::{Engine, prelude::BASE64_STANDARD};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
 
+mod response;
+use response::{Response, crash_value};
 mod wire;
 use wire::{Address, Method, decode, encode};
 
 #[derive(Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 enum Command {
+    Trace {
+        #[serde(default)]
+        jni: bool,
+        #[serde(default)]
+        syscalls: bool,
+        #[serde(default)]
+        imports: bool,
+    },
     Load {
         path: String,
     },
@@ -96,14 +106,6 @@ enum Command {
     Unhandled,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Response {
-    Ok(Value),
-    Error(String),
-    Jni(Value),
-}
-
 /// Serve JSON Lines commands, including reentrant JNI questions, until stdin closes.
 pub fn serve(emu: &mut Emulator, input: impl BufRead, output: impl Write) -> Result<()> {
     let mut session = Session {
@@ -148,6 +150,11 @@ impl<R: BufRead, W: Write> Session<R, W> {
             Ok(command) => self.execute(emu, command),
             Err(error) => Err(format!("bad message: {error}").into()),
         };
+        let crash = result
+            .as_ref()
+            .err()
+            .and_then(|error| error.downcast_ref::<crate::Crash>())
+            .map(crash_value);
         if let Some(error) = self.error.take() {
             result = Err(error);
         }
@@ -156,11 +163,26 @@ impl<R: BufRead, W: Write> Session<R, W> {
         }
         self.write(match result {
             Ok(value) => Response::Ok(value),
-            Err(error) => Response::Error(error.to_string()),
+            Err(error) => Response::Error {
+                error: error.to_string(),
+                crash,
+            },
         })
     }
     fn execute(&mut self, emu: &mut Emulator, command: Command) -> Result<Value> {
         Ok(match command {
+            Command::Trace {
+                jni,
+                syscalls,
+                imports,
+            } => {
+                emu.set_trace(crate::Trace {
+                    jni,
+                    syscalls,
+                    imports,
+                })?;
+                Value::Null
+            }
             Command::Load { path } => json!(emu.load_library(path)?.0),
             Command::Alias { name, target } => {
                 emu.symbol_alias(name, target);

@@ -1,5 +1,97 @@
 use std::process::Command;
 
+#[test]
+fn serve_json_logs_keep_protocol_replies_on_stdout() {
+    use std::{io::Write, process::Stdio};
+    for abi in ["arm64-v8a", "armeabi-v7a"] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_unidroid"))
+            .args([
+                "serve",
+                "--verbose",
+                "--log-format",
+                "json",
+                "--trace-syscalls",
+                "--trace-imports",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        {
+            let mut input = child.stdin.take().unwrap();
+            for command in [
+                serde_json::json!({"cmd":"load", "path":format!("tests/fixtures/{abi}/libjnidispatch.so")}),
+                serde_json::json!({"cmd":"onload", "module":0}),
+                serde_json::json!({"cmd":"unhandled"}),
+            ] {
+                writeln!(input, "{command}").unwrap();
+            }
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        let logs: Vec<serde_json::Value> = String::from_utf8(output.stderr)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert!(logs.iter().any(|event| event["event"] == "jni_call"));
+        assert!(logs.iter().any(|event| event["event"] == "syscall"));
+        let replies: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(replies.len(), 3);
+        assert_eq!(replies[0], serde_json::json!({"ok":0}));
+        assert!(replies[1].get("jni").is_some());
+        assert!(replies[2].get("crash").is_some());
+        assert!(replies.iter().all(|reply| reply.get("event").is_none()));
+    }
+}
+
+#[test]
+fn json_logs_and_probe_are_available_in_inspect() {
+    for abi in ["arm64-v8a", "armeabi-v7a"] {
+        for probe in [false, true] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_unidroid"));
+            command.args([
+                "inspect",
+                "--log-format",
+                "json",
+                "--trace-syscalls",
+                "--trace-imports",
+            ]);
+            if probe {
+                command.arg("--probe");
+            }
+            let output = command
+                .arg(format!("tests/fixtures/{abi}/libjnidispatch.so"))
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            let logs: Vec<serde_json::Value> = String::from_utf8(output.stderr)
+                .unwrap()
+                .lines()
+                .map(|s| serde_json::from_str(s).expect("JSON event"))
+                .collect();
+            assert!(logs.iter().any(|v| v["event"] == "jni_call"));
+            assert!(logs.iter().any(|v| v["event"] == "syscall"));
+            if probe {
+                assert!(stdout.contains("Probed calls:\n  static get java/lang/Void->TYPELjava/lang/Class; from libjnidispatch.so+"));
+                assert!(stdout.contains("(count 1)"));
+                assert!(stdout.contains("JNI_OnLoad returned 0x0"));
+                assert!(output.status.success());
+            } else {
+                assert!(stdout.contains("JNI_OnLoad stopped: unhandled JNI call:"));
+                assert!(stdout.contains("\nthread 1234\n#0 libjnidispatch.so+"));
+                assert!(stdout.contains(" (JNI_OnLoad+0x"));
+                assert_eq!(output.status.code(), Some(1));
+            }
+        }
+    }
+}
+
 #[path = "support/elf.rs"]
 mod elf;
 

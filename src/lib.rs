@@ -1,13 +1,20 @@
 mod arch;
+mod debug;
 mod dl;
 mod elf;
 mod jni;
 mod loader;
 mod memory;
+mod probe;
+pub use probe::{Probe, ProbedCall};
 mod run;
 pub mod serve;
 mod syscalls;
 mod threads;
+pub use debug::{
+    Crash, Frame,
+    events::{Event, Trace},
+};
 pub use jni::{Handle, JniCall, JniHandler, JniValue, PrimitiveType};
 
 use arch::Architecture;
@@ -41,6 +48,7 @@ fn page_down(n: u64) -> u64 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Module(pub usize);
 struct Loaded {
+    app: bool,
     name: String,
     image: Arc<Image>,
     base: u64,
@@ -70,7 +78,8 @@ pub struct EmulatorBuilder {
     rootfs: PathBuf,
     process_name: String,
     properties: HashMap<String, String>,
-    verbose: bool,
+    trace: Trace,
+    on_event: Option<debug::events::EventHandler>,
     cache_size: u32,
 }
 impl EmulatorBuilder {
@@ -86,8 +95,12 @@ impl EmulatorBuilder {
         self.properties.insert(key.into(), value.into());
         self
     }
-    pub fn verbose(mut self, value: bool) -> Self {
-        self.verbose = value;
+    pub fn trace(mut self, trace: Trace) -> Self {
+        self.trace = trace;
+        self
+    }
+    pub fn on_event(mut self, f: impl FnMut(&Event) + 'static) -> Self {
+        self.on_event = Some(Box::new(f));
         self
     }
     pub fn translation_cache_size(mut self, bytes: u32) -> Self {
@@ -104,6 +117,8 @@ struct CpuData {
     interrupt: Option<u32>,
     memory_access: Option<MemoryAccess>,
     slice_remaining: u64,
+    thread: u32,
+    import: Option<u64>,
 }
 struct MemoryAccess {
     kind: MemType,
@@ -124,7 +139,8 @@ pub struct Emulator {
     rootfs: PathBuf,
     library_dirs: Vec<PathBuf>,
     properties: HashMap<String, String>,
-    verbose: bool,
+    trace: Trace,
+    events: std::rc::Rc<std::cell::RefCell<debug::events::Events>>,
     next_module: u64,
     heap: u64,
     heap_end: u64,
@@ -140,6 +156,7 @@ pub struct Emulator {
     next_fd: u64,
     jni: jni::JniState,
     threads: threads::Threads,
+    imports: debug::imports::Imports,
 }
 impl Emulator {
     pub fn builder() -> EmulatorBuilder {
@@ -147,7 +164,8 @@ impl Emulator {
             rootfs: "rootfs".into(),
             process_name: "unidroid".into(),
             properties: HashMap::from([("ro.build.version.sdk".into(), "23".into())]),
-            verbose: false,
+            trace: Trace::default(),
+            on_event: None,
             cache_size: 8 * 1024 * 1024,
         }
     }
@@ -164,7 +182,10 @@ impl Emulator {
             rootfs: builder.rootfs,
             library_dirs: Vec::new(),
             properties: builder.properties,
-            verbose: builder.verbose,
+            trace: builder.trace,
+            events: std::rc::Rc::new(std::cell::RefCell::new(debug::events::Events {
+                handler: builder.on_event,
+            })),
             next_module: 0x10000000,
             heap: 0x40000000,
             heap_end: 0x40000000,
@@ -180,6 +201,7 @@ impl Emulator {
             next_fd: 3,
             jni: jni::JniState::default(),
             threads: threads::Threads::default(),
+            imports: debug::imports::Imports::default(),
         })
     }
     fn setup_cpu(&mut self, arch: Architecture) -> Result<()> {
@@ -276,6 +298,7 @@ impl Emulator {
         }
         self.setup_jni()?;
         self.dlerror_buf = self.malloc(self.dlerror_capacity)?;
+        self.trace_imports(self.trace.imports)?;
         Ok(())
     }
     fn cpu(&self) -> Result<&Unicorn<'static, CpuData>> {

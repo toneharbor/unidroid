@@ -26,6 +26,13 @@ pub(crate) struct Image {
     pub size: u64,
     pub phoff: u64,
     pub phnum: u16,
+    functions: OnceLock<Vec<Function>>,
+}
+
+struct Function {
+    name: String,
+    value: u64,
+    size: u64,
 }
 
 pub(crate) struct Symbol {
@@ -35,9 +42,47 @@ pub(crate) struct Symbol {
     pub defined: bool,
     pub absolute: bool,
     pub binding: u8,
+    pub function: bool,
 }
 
 impl Image {
+    pub fn function(&self, offset: u64) -> Option<String> {
+        let functions = self.functions.get_or_init(|| {
+            let elf = Elf::parse(&self.bytes).expect("loaded ELF");
+            let mut functions = Vec::new();
+            for (symbols, strings) in [(&elf.dynsyms, &elf.dynstrtab), (&elf.syms, &elf.strtab)] {
+                for s in symbols
+                    .iter()
+                    .filter(|s| s.st_shndx != 0 && s.st_size > 0 && matches!(s.st_type(), 2 | 10))
+                {
+                    let name = strings.get_at(s.st_name).unwrap_or("");
+                    if !name.is_empty() {
+                        functions.push(Function {
+                            name: name.into(),
+                            value: if self.arch == Architecture::Arm32 {
+                                s.st_value & !1
+                            } else {
+                                s.st_value
+                            },
+                            size: s.st_size,
+                        });
+                    }
+                }
+            }
+            functions.sort_by_key(|s| s.value);
+            functions
+        });
+        let symbol = functions[..functions.partition_point(|s| s.value <= offset)]
+            .iter()
+            .rev()
+            .find(|s| offset - s.value < s.size)?;
+        Some(if offset == symbol.value {
+            symbol.name.clone()
+        } else {
+            format!("{}+0x{:x}", symbol.name, offset - symbol.value)
+        })
+    }
+
     pub fn open(path: &Path) -> Result<Arc<Self>> {
         static IMAGES: OnceLock<Mutex<HashMap<PathBuf, Arc<Image>>>> = OnceLock::new();
         let path = path.canonicalize()?;
@@ -107,6 +152,7 @@ impl Image {
                 defined: s.st_shndx != 0,
                 absolute: s.st_shndx == 0xfff1,
                 binding: s.st_bind(),
+                function: matches!(s.st_type(), 2 | 10),
             })
             .collect();
         let exports = symbols
@@ -140,6 +186,7 @@ impl Image {
             size,
             phoff: elf.header.e_phoff,
             phnum: elf.header.e_phnum,
+            functions: OnceLock::new(),
             bytes,
         };
         let image = Arc::new(image);

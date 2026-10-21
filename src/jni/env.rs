@@ -63,7 +63,7 @@ impl Emulator {
         if matches!(index, 226 | 227) {
             self.validate_ref(&function, a, 6)?;
         }
-        if self.verbose && !matches!(index,28..=30 | 34..=93 | 95..=112 | 114..=143 | 145..=162) {
+        if self.trace.jni && !matches!(index,28..=30 | 34..=93 | 95..=112 | 114..=143 | 145..=162) {
             let details = match index {
                 6 | 167 => self.cstring(a)?,
                 33 | 94 | 113 | 144 => format!(
@@ -80,10 +80,11 @@ impl Emulator {
                 }
                 _ => format!("arg1=0x{a:x}, arg2=0x{b:x}, arg3=0x{c:x}"),
             };
-            eprintln!(
-                "JNIEnv->{function}({details}) from {}",
-                self.location(self.lr()?)
-            );
+            self.events.borrow_mut().emit(crate::Event::Jni {
+                function: function.clone(),
+                details,
+                from: self.location(self.lr()?),
+            });
         }
         match index {
             5 => Err(self.unsupported_jni("DefineClass")),

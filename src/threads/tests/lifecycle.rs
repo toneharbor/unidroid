@@ -59,11 +59,12 @@ fn main_exit_and_exit_group_report_status_and_location() -> Result<()> {
             assert_eq!(error, format!("emulation stopped: {name}(7) at 0x{at:x}"));
             if name == "exit_group" {
                 spawn(&mut emu, libc, exit, 9)?;
-                let error = call(&mut emu, libc, "sched_yield", &[])
-                    .unwrap_err()
-                    .to_string();
+                let error = call(&mut emu, libc, "sched_yield", &[]).unwrap_err();
+                let crash = error.downcast_ref::<crate::Crash>().unwrap();
+                assert_eq!(crash.thread, 1235);
+                assert_eq!(crash.backtrace[0].address, at + 4);
                 assert_eq!(
-                    error,
+                    error.to_string(),
                     format!("emulation stopped: exit_group(9) at 0x{at:x}")
                 );
             }

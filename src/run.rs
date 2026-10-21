@@ -37,7 +37,9 @@ impl Emulator {
     }
     fn run(&mut self, pc: u64, handler: &mut dyn JniHandler) -> Result<u64> {
         self.threads.depth += 1;
-        let result = self.run_loop(pc, handler);
+        let result = self
+            .run_loop(pc, handler)
+            .map_err(|error| self.crash(error));
         self.threads.depth -= 1;
         if self.threads.depth == 0 && result.is_err() {
             self.restore_main_thread()?;
@@ -52,8 +54,10 @@ impl Emulator {
             } else {
                 0
             };
+            let thread = self.threads.tid();
             *self.cpu_mut()?.get_data_mut() = CpuData {
                 slice_remaining,
+                thread,
                 ..CpuData::default()
             };
             if let Err(error) = self.cpu_mut()?.emu_start(pc, RETURN, 0, 0) {
@@ -72,6 +76,9 @@ impl Emulator {
                         self.location(pc)
                     )
                     .into());
+                }
+                if self.trace.imports {
+                    self.suspend_import(pc & !1)?;
                 }
                 pc = self.switch_thread(pc)?;
                 continue;

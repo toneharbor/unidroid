@@ -3,6 +3,7 @@ use crate::{Architecture, Emulator, Module, RETURN, Result};
 mod futex;
 mod lifecycle;
 mod scheduling;
+mod tracing;
 
 fn libc_emulator(arch: Architecture) -> Result<(Emulator, Module)> {
     let mut emu = Emulator::builder().build()?;

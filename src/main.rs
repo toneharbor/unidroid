@@ -1,7 +1,7 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use goblin::elf::{Elf, sym};
 use std::{fs, path::PathBuf, process::ExitCode};
-use unidroid::{Emulator, Result};
+use unidroid::{Crash, Emulator, JniHandler, Probe, Result, Trace};
 
 #[derive(Parser)]
 struct Cli {
@@ -20,8 +20,18 @@ enum Command {
     Inspect {
         #[command(flatten)]
         options: Options,
+        /// Answer Java calls with defaults and list each distinct call.
+        #[arg(long)]
+        probe: bool,
         lib: PathBuf,
     },
+}
+
+#[derive(Clone, Copy, Default, ValueEnum)]
+enum LogFormat {
+    #[default]
+    Text,
+    Json,
 }
 
 #[derive(Args)]
@@ -52,6 +62,15 @@ struct Options {
     /// Trace JNI calls to stderr.
     #[arg(long)]
     verbose: bool,
+    /// Trace guest syscalls to stderr.
+    #[arg(long)]
+    trace_syscalls: bool,
+    /// Trace app calls into other libraries to stderr.
+    #[arg(long)]
+    trace_imports: bool,
+    /// Format diagnostic events on stderr.
+    #[arg(long, value_enum, default_value = "text")]
+    log_format: LogFormat,
 }
 
 fn pair(value: &str) -> std::result::Result<(String, String), String> {
@@ -63,9 +82,19 @@ fn pair(value: &str) -> std::result::Result<(String, String), String> {
 
 impl Options {
     fn build(self, inspect: bool) -> Result<Emulator> {
-        let mut builder = Emulator::builder()
-            .rootfs(self.rootfs)
-            .verbose(inspect || self.verbose);
+        let mut builder = Emulator::builder().rootfs(self.rootfs).trace(Trace {
+            jni: inspect || self.verbose,
+            syscalls: self.trace_syscalls,
+            imports: self.trace_imports,
+        });
+        if matches!(self.log_format, LogFormat::Json) {
+            builder = builder.on_event(|event| {
+                use std::io::Write;
+                let mut stderr = std::io::stderr().lock();
+                let _ = serde_json::to_writer(&mut stderr, event);
+                let _ = writeln!(stderr);
+            });
+        }
         if let Some(name) = self.process_name {
             builder = builder.process_name(name);
         }
@@ -86,7 +115,7 @@ impl Options {
     }
 }
 
-fn inspect(options: Options, lib: PathBuf) -> Result<ExitCode> {
+fn inspect(options: Options, lib: PathBuf, probe: bool) -> Result<ExitCode> {
     let bytes = fs::read(&lib)?;
     let elf = Elf::parse(&bytes)?;
     let name = lib.file_name().unwrap().to_string_lossy();
@@ -126,11 +155,16 @@ fn inspect(options: Options, lib: PathBuf) -> Result<ExitCode> {
     let mut emu = options.build(true)?;
     let module = emu.load_library(lib)?;
     let mut status = ExitCode::SUCCESS;
+    let mut answers = Probe::default();
     if onload {
-        match emu.call_jni_onload(module, &mut ()) {
+        let handler: &mut dyn JniHandler = if probe { &mut answers } else { &mut () };
+        match emu.call_jni_onload(module, handler) {
             Ok(value) => println!("JNI_OnLoad returned 0x{value:x}"),
             Err(error) => {
                 println!("JNI_OnLoad stopped: {error}");
+                if let Some(crash) = error.downcast_ref::<Crash>() {
+                    println!("{}", crash.report());
+                }
                 status = ExitCode::FAILURE;
             }
         }
@@ -143,6 +177,24 @@ fn inspect(options: Options, lib: PathBuf) -> Result<ExitCode> {
     for (class, method, address) in natives {
         println!("  {class}.{method} at {}", emu.location(address));
     }
+    if probe {
+        println!("Probed calls:");
+        if answers.calls().is_empty() {
+            println!("  (none)");
+        }
+        for call in answers.calls() {
+            println!(
+                "  {}{} {}->{}{} from {} (count {})",
+                if call.is_static { "static " } else { "" },
+                call.op,
+                call.class,
+                call.name,
+                call.signature,
+                call.from,
+                call.count
+            );
+        }
+    }
     Ok(status)
 }
 
@@ -153,7 +205,11 @@ fn run() -> Result<ExitCode> {
             unidroid::serve::serve(&mut emu, std::io::stdin().lock(), std::io::stdout().lock())?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Inspect { options, lib } => inspect(options, lib),
+        Command::Inspect {
+            options,
+            lib,
+            probe,
+        } => inspect(options, lib, probe),
     }
 }
 

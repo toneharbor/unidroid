@@ -46,7 +46,7 @@ cargo add unidroid
 The crate doesn't include `rootfs`. Copy the `rootfs` directory from this repository, or take it from a release download.
 
 ```rust
-use unidroid::{Emulator, JniHandler, JniCall, Handle, JniValue};
+use unidroid::{Emulator, JniHandler, JniCall, Handle, JniValue, Trace};
 
 // Setting up the environment: whatever Java the .so asks for, you answer here.
 struct Env;
@@ -63,7 +63,7 @@ let mut emu = Emulator::builder()
     .rootfs("rootfs")                     // Android system libraries
     .process_name("com.example.app")
     .system_property("ro.product.model", "Pixel")
-    .verbose(true)                        // Print every JNI call, handy while setting up
+    .trace(Trace { jni: true, ..Trace::default() }) // Print every JNI call
     .build()?;
 
 let m = emu.load_library("libfoo.so")?;  // 32-bit or 64-bit: the file decides
@@ -89,6 +89,37 @@ unhandled JNI call: CallStaticObjectMethodV java/lang/System->getProperty(Ljava/
 ```
 
 Add the matching method to `JniHandler` and run again. It's the same idea as setting up the environment in unidbg.
+
+Guest failures carry a `Crash`. Its `Display` is the same error message; `report()` adds the thread, backtrace and registers:
+
+```rust
+if let Err(error) = emu.call_function(f, &[]) {
+    if let Some(crash) = error.downcast_ref::<unidroid::Crash>() {
+        eprintln!("{}", crash.report());
+    }
+}
+```
+
+`Crash` has `message`, `thread`, `registers` (name/value pairs) and `backtrace`. Each `Frame` has `address`, `location` and an optional `symbol`. Both types serialize with serde. A crash keeps the state at the failure, including failures in guest threads or nested calls. Host function failures start at the guest caller. `emu.registers()?` and `emu.backtrace()?` read the current state. The backtrace follows frame pointers, skips repeated neighbors and stops at 32 frames or a zero return address. Code without frame pointers may give a short backtrace.
+
+`emu.location(address)` stays `libfoo.so+0x1234`. `emu.symbolize(address)` adds a covering function name, like `libc.so+0x1f2a4 (strlen+0x10)`. It uses function symbols with a nonzero size from `.dynsym` and `.symtab`, when present. The symbol table is built on first use and shared between instances.
+
+`Trace` has three booleans: `jni`, `syscalls` and `imports`. All default to `false`. Set them with `.trace(Trace { .. })` on the builder, or `emu.set_trace(Trace { .. })?` at runtime. `emu.trace()` reads the settings. Each change replaces all settings. With traces off, no trace hook is installed.
+
+Syscall events show the guest number, arguments, signed result, errno name, instruction location and caller. Import events show calls from app libraries into other modules, including dl, property and unresolved-symbol stubs. The previous executed block in the same guest thread must be in an app library; app PLT stubs count, but internal tail calls within a dependency do not. The caller location comes from lr. They show the first four argument registers, with known C strings quoted and capped at 256 bytes. Dependencies next to an app count as app libraries; dependencies found in rootfs do not.
+
+All diagnostics go through `Event`: `Jni`, `JniCall`, `Syscall`, `Call` or `Warning`. By default they print their text form on stderr. Capture them with the builder's `on_event`:
+
+```rust
+let emu = Emulator::builder()
+    .trace(Trace { syscalls: true, ..Trace::default() })
+    .on_event(|event| eprintln!("{}", serde_json::to_string(event).unwrap()))
+    .build()?;
+```
+
+Events serialize as objects tagged with `event`: `jni`, `jni_call`, `syscall`, `call` or `warning`. Arguments are arrays of text; JNI member arguments keep their typed debug form, such as `Object(Handle(7))`. Syscall numbers and returned results are JSON numbers. If dispatch fails, ends the thread or process, or switches away from the thread, `result` is `null` and `errno` is absent. Its text line ends with `= (no return)`. The event is emitted before any crash propagates. Otherwise `errno` is present only for a Linux error result. JNI locations keep the existing text; syscall and import locations include symbols.
+
+`Probe::default()` is a `JniHandler` that answers calls with null, zero, false or void. `is_assignable` answers false. Pass it to `call_jni_onload` to explore calls without writing a handler. `probe.calls()` returns `&[ProbedCall]` in first-seen order. Each entry has `op`, `is_static`, `class`, `name`, `signature`, `count` and the first `from` location. For `is_assignable`, `class` is the source and `name` the target class. Defaults can make the library return early or crash.
 
 32-bit or 64-bit is picked by the first library you load. There's no setting for it. Load that library before `malloc`, `read_bytes`, `write_bytes` or `call_function`; before it, they return an error. One emulator runs one kind: loading a 64-bit library after a 32-bit one is an error.
 
@@ -150,6 +181,14 @@ Registered natives:
 
 This one asks Java nothing in `JNI_OnLoad`, so it runs to the end. Its two Java methods are plain `Java_` exports.
 
+Use `inspect --probe LIB` to answer Java calls with `Probe` defaults and print a `Probed calls` section, with the first caller and count for each call. If `JNI_OnLoad` fails, inspect prints a crash report after the stop line and still prints the list. For example:
+
+```bash
+target/release/unidroid inspect --probe --log-format json libfoo.so
+```
+
+A default answer can make the library return early, take another branch or crash. The list shows only the calls it reached.
+
 ### `serve`: drive it from your program
 
 ```bash
@@ -210,6 +249,9 @@ Options, the same for both subcommands:
 | `--alias NAME=TARGET` | same as `symbol_alias`, repeatable |
 | `--superclass CLASS=SUPERCLASS` | same as `superclass`, repeatable |
 | `--verbose` | print every JNI call on stderr (`inspect` always does) |
+| `--trace-syscalls` | print each guest syscall, arguments, result and caller |
+| `--trace-imports` | print app calls into other libraries |
+| `--log-format text\|json` | text logs (default) or one JSON event per stderr line |
 | `--translation-cache-mb MB` | translation cache size (default 8), same as `translation_cache_size` |
 
 How values are written in JSON:
@@ -223,11 +265,22 @@ How values are written in JSON:
 
 Addresses are decimal strings too. Bytes are base64.
 
+A guest failure adds `crash` to the error response. Other errors still have only `error`. Inside `crash`, frame addresses and register values are decimal strings; the thread ID is a number. `registers` is an object keyed by register name, so `crash.registers.pc` reads the program counter. For example:
+
+```json
+{"error":"unhandled JNI call: ...","crash":{"message":"unhandled JNI call: ...","thread":1234,"registers":{"pc":"65820","x0":"7"},"backtrace":[{"address":"268471236","location":"libjnidispatch.so+0x8bc4","symbol":"JNI_OnLoad+0x3c0"}]}}
+```
+
+The example abbreviates the registers. If a bad JNI answer replaces the command's error message, `crash` still holds the original guest failure.
+
+Change traces during a session with `{"cmd":"trace","jni":true,"syscalls":true,"imports":false}`. Omitted fields become `false`. `{"cmd":"trace"}` turns all traces off. Log format is chosen when starting the CLI; JSON logs go to stderr and protocol replies go to stdout.
+
 Commands:
 
 | command | fields | result |
 |---|---|---|
 | `load` | `path` | module number |
+| `trace` | `jni`, `syscalls`, `imports` (booleans, omitted means false) | `null` |
 | `alias` | `name`, `target` | `null` |
 | `superclass` | `class`, `superclass` | `null` |
 | `onload` | `module` | `JNI_OnLoad`'s return |

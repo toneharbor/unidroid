@@ -10,6 +10,23 @@ impl Emulator {
             .architecture()
             .syscall(guest_nr, &mut a)
             .unwrap_or(u64::MAX);
+        let event = if self.trace.syscalls {
+            Some(self.syscall_event(guest_nr, nr, a, pc, self.lr()?))
+        } else {
+            None
+        };
+        let result = self.dispatch_syscall(guest_nr, nr, a, pc);
+        if let Some(event) = event {
+            let returned = result
+                .as_ref()
+                .ok()
+                .copied()
+                .filter(|_| matches!(self.threads.action, crate::threads::Action::Continue));
+            self.emit_syscall(event, returned);
+        }
+        result
+    }
+    fn dispatch_syscall(&mut self, guest_nr: u64, nr: u64, a: [u64; 6], pc: u64) -> Result<u64> {
         let errno = |n: i64| (-n) as u64;
         Ok(match nr {
             56 => {
@@ -244,10 +261,12 @@ impl Emulator {
                 0
             }
             _ => {
-                eprintln!(
-                    "warning: unsupported syscall {guest_nr} at {}, returning -ENOSYS",
-                    self.location(pc)
-                );
+                self.events.borrow_mut().emit(crate::Event::Warning {
+                    message: format!(
+                        "unsupported syscall {guest_nr} at {}, returning -ENOSYS",
+                        self.location(pc)
+                    ),
+                });
                 errno(38)
             }
         })
