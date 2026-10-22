@@ -1,4 +1,4 @@
-use crate::{Emulator, Handle, JniCall, JniHandler, JniValue, Module, PrimitiveType, Result};
+use crate::{Emulator, Handle, JniCall, JniHandler, JniValue, Module, Policy, Result};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
@@ -10,7 +10,7 @@ mod recording;
 pub use recording::{record, replay};
 mod response;
 use response::{Response, crash_value};
-mod wire;
+pub(crate) mod wire;
 use wire::{decode, encode};
 mod command;
 use command::Command;
@@ -19,13 +19,19 @@ mod waiting;
 use waiting::{Question, Reply};
 
 /// Serve JSON Lines commands, including reentrant JNI questions, until stdin closes.
-pub fn serve(emu: &mut Emulator, input: impl BufRead, output: impl Write) -> Result<()> {
+pub fn serve(
+    emu: &mut Emulator,
+    policy: Option<Policy>,
+    input: impl BufRead,
+    output: impl Write,
+) -> Result<()> {
     let mut session = Session {
         input,
         output,
         error: None,
         fatal: false,
         journal: None,
+        policy,
     };
     session.run(emu)
 }
@@ -37,6 +43,7 @@ struct Session<R, W> {
     error: Option<Box<dyn std::error::Error>>,
     fatal: bool,
     journal: Option<journal::Shared>,
+    policy: Option<Policy>,
 }
 impl<R: BufRead, W: Write> Session<R, W> {
     fn run(&mut self, emu: &mut Emulator) -> Result<()> {
@@ -246,21 +253,7 @@ impl<R: BufRead, W: Write> Session<R, W> {
             Command::NewString { value } => json!(emu.new_string(&value).0),
             Command::String { handle } => json!(emu.string(Handle(handle))?),
             Command::NewArray { r#type, base64 } => {
-                let kind = match r#type.as_str() {
-                    "Z" => PrimitiveType::Boolean,
-                    "B" => PrimitiveType::Byte,
-                    "C" => PrimitiveType::Char,
-                    "S" => PrimitiveType::Short,
-                    "I" => PrimitiveType::Int,
-                    "J" => PrimitiveType::Long,
-                    "F" => PrimitiveType::Float,
-                    "D" => PrimitiveType::Double,
-                    _ => return Err(format!("unknown array type: {type}").into()),
-                };
-                json!(
-                    emu.new_primitive_array(kind, &BASE64_STANDARD.decode(base64)?)
-                        .0
-                )
+                json!(crate::policy::value::new_array(emu, &r#type, &base64)?.0)
             }
             Command::Array { handle } => {
                 json!(BASE64_STANDARD.encode(emu.primitive_array(Handle(handle))?))
@@ -302,6 +295,15 @@ impl<R: BufRead, W: Write> Session<R, W> {
             _ => None,
         }
     }
+    fn policy_answer(&mut self, result: Result<JniValue>) -> Option<JniValue> {
+        match result {
+            Ok(value) => Some(value),
+            Err(error) => {
+                self.error = Some(error);
+                None
+            }
+        }
+    }
     fn member(
         &mut self,
         emu: &mut Emulator,
@@ -310,6 +312,11 @@ impl<R: BufRead, W: Write> Session<R, W> {
         is_static: bool,
         kind: u8,
     ) -> Option<JniValue> {
+        if let Some(policy) = &mut self.policy
+            && let Some(result) = policy.member(emu, call, op, is_static, kind)
+        {
+            return self.policy_answer(result);
+        }
         let question = json!({
             "op":op, "static":is_static, "type":char::from(kind).to_string(),
             "class":call.class, "name":call.name, "signature":call.signature,

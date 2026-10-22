@@ -45,7 +45,9 @@ Flush each input line. Read stdout until the running command ends with `ok` or `
 
 For an unknown Java call, send `unhandled` and keep the resulting crash. Add the specific answer from the app's behavior, then rerun from a fresh instance with the same input. Use the answer type from README; distinguish an intentional null from a call you have not implemented. Repeat until the target call completes. Release created handles and free guest allocations after their last use in a service.
 
-**Done when:** one fixed input reaches a decoded result with every Java question answered, or a saved failure identifies the next missing answer or guest fault. Take failures to step 3; take a wrong result to steps 4–6.
+Once the library's Java answers are known, move them into a policy file using the format in [README.md](../../README.md). Pass it with `--policy` to `serve` or `inspect`; uncovered calls still reach the driver, or Probe with `inspect --probe`. Use `values` lists to replay a recorded Java call sequence in order; after a list runs out, later rules or the driver answer. Rerun the fixed input with the policy to check the same result.
+
+**Done when:** one fixed input reaches a decoded result with every Java question answered and known answers verified in a policy file, or a saved failure identifies the next missing answer or guest fault. Take failures to step 3; take a wrong result to steps 4–6.
 
 ## 3. Read the crash before changing the setup
 

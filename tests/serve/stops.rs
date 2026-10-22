@@ -7,6 +7,7 @@ fn watch_before_load_returns_the_cpu_setup_error() -> Result<()> {
     let mut output = Vec::new();
     unidroid::serve::serve(
         &mut emu,
+        None,
         b"{\"cmd\":\"watch\",\"at\":\"0x3000\",\"size\":4,\"kind\":\"write\"}\n{\"cmd\":\"modules\"}\n".as_slice(),
         &mut output,
     )?;
@@ -81,7 +82,7 @@ fn watch_questions_keep_full_width_values_and_unwatch_removes_the_stop() -> Resu
                 json!({"cmd":"unwatch", "at":at}),
             ].map(|v| v.to_string()).join("\n");
             let mut output = Vec::new();
-            unidroid::serve::serve(&mut emu, input.as_bytes(), &mut output)?;
+            unidroid::serve::serve(&mut emu, None, input.as_bytes(), &mut output)?;
             let replies: Vec<Value> = String::from_utf8(output)?
                 .lines()
                 .map(|s| serde_json::from_str(s).unwrap())
@@ -133,7 +134,7 @@ fn floating_point_registers_can_be_written_without_appearing_in_dumps() -> Resul
         .map(|v| v.to_string())
         .join("\n");
         let mut output = Vec::new();
-        unidroid::serve::serve(&mut emu, input.as_bytes(), &mut output)?;
+        unidroid::serve::serve(&mut emu, None, input.as_bytes(), &mut output)?;
         let replies: Vec<Value> = String::from_utf8(output)?
             .lines()
             .map(|s| serde_json::from_str(s).unwrap())
@@ -182,7 +183,7 @@ fn full_break_finish_exchange() -> Result<()> {
             .collect::<Vec<_>>()
             .join("\n");
         let mut output = Vec::new();
-        unidroid::serve::serve(&mut emu, input.as_bytes(), &mut output)?;
+        unidroid::serve::serve(&mut emu, None, input.as_bytes(), &mut output)?;
         let output = String::from_utf8(output)?;
         let replies: Vec<Value> = output
             .lines()
@@ -231,7 +232,7 @@ fn debugger_commands_inspect_step_finish_and_resume_a_c_call() -> Result<()> {
         .map(|v| v.to_string())
         .join("\n");
         let mut output = Vec::new();
-        unidroid::serve::serve(&mut emu, input.as_bytes(), &mut output)?;
+        unidroid::serve::serve(&mut emu, None, input.as_bytes(), &mut output)?;
         let output = String::from_utf8(output)?;
         let replies: Vec<Value> = output
             .lines()

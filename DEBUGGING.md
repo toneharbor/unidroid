@@ -226,6 +226,8 @@ target/release/unidroid replay session.jsonl --trace-syscalls --trace-code libsi
 
 The recording starts with `{"record":1,"version":"<crate version>","options":{...}}`. `options` holds `rootfs`, `process_name`, `prop`, `alias`, `superclass` and `translation_cache_mb`; the three repeatable settings are arrays of key/value pairs. Defaults are recorded too. Trace and log options are not in the header. Subsequent entries stay in consumption order:
 
+With `--policy`, the header also holds `"policy":{"rules":[...]}`: the parsed rules, with their original `values` lists. The policy path is not stored. Replay uses these embedded rules from the first sequence value, even if the original file changed or was deleted. A recording made without a policy has no `policy` entry. See [README.md](README.md) for the policy format and API.
+
 | entry | what it holds |
 |---|---|
 | `{"in":"<line>"}` | the input exactly as read, with its line ending removed |

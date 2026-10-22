@@ -10,8 +10,9 @@ pub fn record(
     input: impl BufRead,
     output: impl Write,
 ) -> Result<()> {
+    let policy = options.load_policy()?;
     let mut emu = options.build(builder)?;
-    let journal = Journal::recording(file, options)?;
+    let journal = Journal::recording(file, options, policy.as_ref())?;
     emu.source.mode = crate::source::Mode::Recording(Box::new(journal.clone()));
     let mut session = Session {
         input,
@@ -19,13 +20,14 @@ pub fn record(
         error: None,
         fatal: false,
         journal: Some(journal),
+        policy,
     };
     session.run(&mut emu)
 }
 
 /// Replay a recording with the builder's diagnostic settings; return the input count.
 pub fn replay(file: impl BufRead, builder: EmulatorBuilder) -> Result<usize> {
-    let (options, journal) = Journal::replaying(file)?;
+    let (options, policy, journal) = Journal::replaying(file)?;
     let mut emu = options.build(builder)?;
     emu.source.mode = crate::source::Mode::Replaying(Box::new(journal.clone()));
     let mut session = Session {
@@ -34,6 +36,7 @@ pub fn replay(file: impl BufRead, builder: EmulatorBuilder) -> Result<usize> {
         error: None,
         fatal: false,
         journal: Some(journal.clone()),
+        policy,
     };
     session.run(&mut emu)?;
     Ok(journal.borrow().commands)

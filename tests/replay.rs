@@ -39,6 +39,7 @@ fn records_exact_inputs_and_replays_or_reports_the_edited_response_line() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(lines[0]["record"], 1);
+    assert!(lines[0].get("policy").is_none());
     assert_eq!(lines[0]["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(
         lines[1],

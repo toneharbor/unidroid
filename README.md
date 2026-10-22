@@ -223,6 +223,7 @@ Options, the same for `inspect` and `serve`:
 | `--prop KEY=VALUE` | a system property, repeatable |
 | `--alias NAME=TARGET` | same as `symbol_alias`, repeatable |
 | `--superclass CLASS=SUPERCLASS` | same as `superclass`, repeatable |
+| `--policy FILE` | answer matching Java calls from a JSON file before the driver or Probe |
 | `--verbose` | print every JNI call on stderr (`inspect` always does) |
 | `--trace-syscalls` | print each guest syscall, arguments, result and caller |
 | `--trace-imports` | print app calls into other libraries |
@@ -280,6 +281,47 @@ A question looks like this:
 - `op` is `call`, `get` (read a field), `set` (write a field), `new` (a constructor) or `is_assignable` (that one carries `from` and `to` instead).
 - `type` is what your answer must be, using the letters above. `V` means just `{"cmd":"answer"}`.
 - `args` are written the same way as values. For `set`, the value being written is in `args`.
+
+### Answering Java calls from a file
+
+Use `serve --policy java.json` or `inspect --policy java.json LIB` to reuse known Java answers. Uncovered calls still reach the serve driver. Inspect stops at the first uncovered call, or uses `Probe` defaults with `--probe`; its `Probed calls` list includes only calls that reached Probe.
+
+```json
+{"rules": [
+  {"op":"call", "static":true, "class":"java/lang/System", "name":"getProperty", "signature":"(Ljava/lang/String;)Ljava/lang/String;", "value":"1.8.0"},
+  {"op":"get", "class":"android/os/Build", "name":"MODEL", "value":"Pixel 7"},
+  {"op":"call", "class":"android/content/Context", "name":"getPackageName", "values":["com.a","com.b"]},
+  {"op":"is_assignable", "from":"java/lang/String", "to":"java/lang/Object", "value":true},
+  {"op":"set", "class":"com/example/*"}
+]}
+```
+
+Match fields are `op`, `static`, `class`, `name`, `signature`, `from` and `to`. Each is optional; an omitted field matches anything. Text matches the whole field, with `*` matching any run of characters, including empty; all other characters are literal. `op` names `call`, `get`, `set`, `new` or `is_assignable`, or a wildcard pattern matching at least one of them. Assignability questions have only `op`, `from` and `to`; a rule requiring a missing field does not match.
+
+Rules run in file order; the first matching rule answers. `value` repeats on every match. `values` supplies one answer per match, then the exhausted rule is skipped. Use only one of these fields. Without either, a rule answers void calls and field sets; matching a call that needs a value errors. Errors inside a rule name its zero-based index, and answer errors also name the call and guest location. Errors outside a rule start with `policy:` and have no index.
+
+Policy values use the call's type letter:
+
+| type | policy value |
+|---|---|
+| `Z` | JSON boolean |
+| `B C S I` | integer in that Java type's range |
+| `F D` | number |
+| `J` | decimal string, such as `"-9007199254740993"` |
+| `L` | `null`, a string (creates a new `java/lang/String`), `{"object":"class/Name"}`, or `{"array":"B","base64":"AQID"}` |
+
+Arrays accept `Z B C S I J F D` and use the same little-endian bytes as serve's `new_array`. Object, string and array answers create fresh handles each time. A constructor (`new`) needs an `L` answer even though its signature ends in `V`.
+
+In Rust, load a file with `Policy::load(path)` or JSON text with `Policy::parse(text)`, then wrap your existing handler:
+
+```rust
+let mut policy = unidroid::Policy::load("java.json")?;
+let mut handler = policy.handler(&mut env);
+let result = emu.call_jni_onload(m, &mut handler);
+handler.finish(result)?;
+```
+
+Call `finish(result)` after each emulator call to surface policy errors across `JniHandler`'s `Option` return type. Uncovered calls and debugger stops go to `env`. Sequence positions stay with the policy across calls and new handler wrappers; loading or parsing a new policy starts them over. The library serve entry point is `serve::serve(&mut emu, Some(policy), input, output)`; pass `None` when no policy is needed. `serve::Options::load_policy()` reads its optional `policy` path; `serve::record` loads it automatically. Without a policy, no policy rules, sequence state or hooks are allocated.
 
 ### Record a session and replay it
 

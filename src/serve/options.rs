@@ -1,4 +1,4 @@
-use crate::{Emulator, EmulatorBuilder, Result};
+use crate::{Emulator, EmulatorBuilder, Policy, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -6,6 +6,10 @@ use std::path::PathBuf;
 /// Emulator settings shared by the CLI and recording header.
 #[derive(Args, Serialize, Deserialize)]
 pub struct Options {
+    /// Answer matching Java calls from a JSON policy file.
+    #[arg(long, value_name = "FILE")]
+    #[serde(skip)]
+    pub policy: Option<PathBuf>,
     /// Android system library directory.
     #[arg(long, default_value = "rootfs")]
     pub rootfs: PathBuf,
@@ -34,6 +38,10 @@ fn pair(value: &str) -> std::result::Result<(String, String), String> {
 }
 
 impl Options {
+    pub fn load_policy(&self) -> Result<Option<Policy>> {
+        self.policy.as_ref().map(Policy::load).transpose()
+    }
+
     pub fn build(&self, builder: EmulatorBuilder) -> Result<Emulator> {
         let mut builder = builder
             .rootfs(&self.rootfs)

@@ -34,7 +34,7 @@ fn search_replies_use_the_same_locations_as_snapshot_changes() -> Result<()> {
         .map(|v| v.to_string())
         .join("\n");
         let mut output = Vec::new();
-        unidroid::serve::serve(&mut emu, input.as_bytes(), &mut output)?;
+        unidroid::serve::serve(&mut emu, None, input.as_bytes(), &mut output)?;
         let replies: Vec<Value> = String::from_utf8(output)?
             .lines()
             .map(|s| serde_json::from_str(s).unwrap())
@@ -75,7 +75,7 @@ fn maps_and_snapshots_work_between_calls_and_at_breakpoints() -> Result<()> {
         .map(|v| v.to_string())
         .join("\n");
         let mut output = Vec::new();
-        unidroid::serve::serve(&mut emu, input.as_bytes(), &mut output)?;
+        unidroid::serve::serve(&mut emu, None, input.as_bytes(), &mut output)?;
         let replies: Vec<Value> = String::from_utf8(output)?
             .lines()
             .map(|s| serde_json::from_str(s).unwrap())
@@ -130,7 +130,7 @@ fn trace_command_replaces_the_whole_state_while_serving() -> Result<()> {
         ]
         .map(|v| v.to_string())
         .join("\n");
-        unidroid::serve::serve(&mut emu, input.as_bytes(), &mut output)?;
+        unidroid::serve::serve(&mut emu, None, input.as_bytes(), &mut output)?;
         let replies: Vec<Value> = String::from_utf8(output)?
             .lines()
             .map(|s| serde_json::from_str(s).unwrap())

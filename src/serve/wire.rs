@@ -107,7 +107,7 @@ pub(super) fn encode(value: JniValue) -> Value {
     }
 }
 
-pub(super) fn decode(kind: u8, value: &Value, context: &str) -> Result<JniValue> {
+pub(crate) fn decode(kind: u8, value: &Value, context: &str) -> Result<JniValue> {
     let decoded = match kind {
         b'L' | b'[' => value.as_u64().map(|v| JniValue::Object(Handle(v))),
         b'Z' => value.as_bool().map(JniValue::Boolean),

@@ -135,13 +135,21 @@ fn inspect(options: Options, lib: PathBuf, probe: bool) -> Result<ExitCode> {
     }
     let onload = exports.contains(&"JNI_OnLoad");
     println!("JNI_OnLoad: {}", if onload { "yes" } else { "no" });
+    let mut policy = options.emulator.load_policy()?;
     let mut emu = options.emulator.build(options.diagnostics.builder(true))?;
     let module = emu.load_library(lib)?;
     let mut status = ExitCode::SUCCESS;
     let mut answers = Probe::default();
     if onload {
         let handler: &mut dyn JniHandler = if probe { &mut answers } else { &mut () };
-        match emu.call_jni_onload(module, handler) {
+        let result = if let Some(policy) = &mut policy {
+            let mut handler = policy.handler(handler);
+            let result = emu.call_jni_onload(module, &mut handler);
+            handler.finish(result)
+        } else {
+            emu.call_jni_onload(module, handler)
+        };
+        match result {
             Ok(value) => println!("JNI_OnLoad returned 0x{value:x}"),
             Err(error) => {
                 println!("JNI_OnLoad stopped: {error}");
@@ -214,6 +222,7 @@ fn run() -> Result<ExitCode> {
                 let mut emu = options.emulator.build(builder)?;
                 unidroid::serve::serve(
                     &mut emu,
+                    options.emulator.load_policy()?,
                     std::io::stdin().lock(),
                     std::io::stdout().lock(),
                 )?;

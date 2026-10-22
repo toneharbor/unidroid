@@ -1,6 +1,6 @@
 use super::Options;
 use crate::{
-    Result,
+    Policy, Result,
     source::{Clock, Time},
 };
 use base64::{Engine, prelude::BASE64_STANDARD};
@@ -16,10 +16,12 @@ use std::{
 pub(super) type Shared = Rc<RefCell<Journal>>;
 
 #[derive(Serialize, Deserialize)]
-struct Header<O> {
+struct Header<O, P> {
     pub record: u32,
     pub version: String,
     pub options: O,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy: Option<P>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -53,13 +55,18 @@ pub(super) struct Journal {
     pub commands: usize,
 }
 impl Journal {
-    pub fn recording(mut file: impl Write + 'static, options: &Options) -> Result<Shared> {
+    pub fn recording(
+        mut file: impl Write + 'static,
+        options: &Options,
+        policy: Option<&Policy>,
+    ) -> Result<Shared> {
         serde_json::to_writer(
             &mut file,
             &Header {
                 record: 1,
                 version: env!("CARGO_PKG_VERSION").into(),
                 options,
+                policy,
             },
         )?;
         file.write_all(b"\n")?;
@@ -70,10 +77,10 @@ impl Journal {
             commands: 0,
         })))
     }
-    pub fn replaying(mut file: impl BufRead) -> Result<(Options, Shared)> {
+    pub fn replaying(mut file: impl BufRead) -> Result<(Options, Option<Policy>, Shared)> {
         let mut line = String::new();
         file.read_line(&mut line)?;
-        let header: Header<Options> =
+        let header: Header<Options, Policy> =
             serde_json::from_str(&line).map_err(|e| format!("line 1: {e}"))?;
         if header.record != 1 {
             return Err(format!("line 1: unsupported recording format {}", header.record).into());
@@ -88,6 +95,7 @@ impl Journal {
         }
         Ok((
             header.options,
+            header.policy,
             Rc::new(RefCell::new(Self {
                 mode: Mode::Replay { entries, end },
                 failure: None,

@@ -74,6 +74,8 @@ mod crypto;
 mod debug;
 #[path = "serve/errors.rs"]
 mod errors;
+#[path = "serve/policy.rs"]
+mod policy;
 #[path = "serve/record.rs"]
 mod record;
 #[path = "serve/sign_debug.rs"]

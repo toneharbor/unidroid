@@ -5,6 +5,8 @@ mod elf;
 mod jni;
 mod loader;
 mod memory;
+mod policy;
+pub use policy::{Policy, PolicyHandler};
 mod probe;
 pub use probe::{Probe, ProbedCall};
 mod run;
