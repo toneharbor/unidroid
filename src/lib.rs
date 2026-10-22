@@ -18,7 +18,9 @@ pub use debug::{
     events::{Event, Trace},
     maps::Mapping,
     modules::ModuleInfo,
+    search::SEARCH_LIMIT,
     snapshot::{Change, Diff, Snapshot},
+    watch::{Watch, WatchHit},
 };
 pub use jni::{Handle, JniCall, JniHandler, JniValue, PrimitiveType};
 
@@ -128,6 +130,7 @@ struct CpuData {
     depth: usize,
     import: Option<u64>,
     stop: Option<StopReason>,
+    watch: Option<WatchHit>,
     step_started: bool,
     skip_breakpoint: Option<(u32, u64)>,
     finish: Option<debug::control::FinishTarget>,
@@ -172,6 +175,7 @@ pub struct Emulator {
     imports: debug::imports::Imports,
     code: debug::code::Code,
     breakpoints: HashMap<u64, unicorn_engine::UcHookId>,
+    watchpoints: debug::watch::Watchpoints,
 }
 impl Emulator {
     pub fn builder() -> EmulatorBuilder {
@@ -223,6 +227,7 @@ impl Emulator {
             imports: debug::imports::Imports::default(),
             code: debug::code::Code::default(),
             breakpoints: HashMap::new(),
+            watchpoints: debug::watch::Watchpoints::default(),
         })
     }
     fn setup_cpu(&mut self, arch: Architecture) -> Result<()> {

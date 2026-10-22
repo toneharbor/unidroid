@@ -2,6 +2,124 @@ use super::*;
 use unidroid::{Emulator, Result};
 
 #[test]
+fn watch_before_load_returns_the_cpu_setup_error() -> Result<()> {
+    let mut emu = Emulator::builder().build()?;
+    let mut output = Vec::new();
+    unidroid::serve::serve(
+        &mut emu,
+        b"{\"cmd\":\"watch\",\"at\":\"0x3000\",\"size\":4,\"kind\":\"write\"}\n{\"cmd\":\"modules\"}\n".as_slice(),
+        &mut output,
+    )?;
+    let replies: Vec<Value> = String::from_utf8(output)?
+        .lines()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    assert_eq!(
+        replies,
+        [
+            json!({"error":"no library loaded yet: the first load_library picks arm64 or arm32"}),
+            json!({"ok":[]}),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn watch_questions_keep_full_width_values_and_unwatch_removes_the_stop() -> Result<()> {
+    for arm64 in [true, false] {
+        for kind in ["read", "write", "access"] {
+            let words = if arm64 {
+                [
+                    if kind == "read" {
+                        0xf9400001u32
+                    } else {
+                        0xf9000001
+                    },
+                    0xd28000e0,
+                    0xd65f03c0,
+                ]
+            } else {
+                [
+                    if kind == "read" {
+                        0xe5901000
+                    } else {
+                        0xe5801000
+                    },
+                    0xe3a00007,
+                    0xe12fff1e,
+                ]
+            };
+            let mut emu = Emulator::builder().build()?;
+            emu.load_library(if arm64 {
+                "rootfs/lib64/libc.so"
+            } else {
+                "rootfs/lib/libc.so"
+            })?;
+            emu.write_bytes(
+                0x20100,
+                &words
+                    .into_iter()
+                    .flat_map(u32::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            )?;
+            let target = emu.malloc(8)?;
+            let value = if arm64 {
+                0xfedcba9876543210u64
+            } else {
+                0xfedcba98
+            };
+            let size = if arm64 { 8 } else { 4 };
+            let at = format!("0x{target:x}");
+            let input = [
+                json!({"cmd":"watch", "at":at, "size":size, "kind":kind}),
+                json!({"cmd":"write", "address":target.to_string(), "base64":BASE64_STANDARD.encode(value.to_le_bytes())}),
+                json!({"cmd":"call_function", "address":"131328", "args":[target.to_string(), value.to_string()]}),
+                json!({"cmd":"read", "address":target.to_string(), "size":size}),
+                json!({"cmd":"unwatch", "at":at}),
+                json!({"cmd":"continue"}),
+                json!({"cmd":"call_function", "address":"131328", "args":[target.to_string(), value.to_string()]}),
+                json!({"cmd":"unwatch", "at":at}),
+            ].map(|v| v.to_string()).join("\n");
+            let mut output = Vec::new();
+            unidroid::serve::serve(&mut emu, input.as_bytes(), &mut output)?;
+            let replies: Vec<Value> = String::from_utf8(output)?
+                .lines()
+                .map(|s| serde_json::from_str(s).unwrap())
+                .collect();
+            assert_eq!(replies.len(), 8);
+            assert_eq!(replies[0], json!({"ok":target.to_string()}));
+            assert_eq!(replies[1], json!({"ok":null}));
+            let question = &replies[2]["break"];
+            assert_eq!(question["reason"], "watchpoint");
+            assert_eq!(question["address"], "131332");
+            assert_eq!(
+                question["registers"][if arm64 { "x1" } else { "r1" }],
+                value.to_string()
+            );
+            assert_eq!(
+                question["watch"],
+                json!({
+                    "pc":"131328", "location":"0x20100", "address":target.to_string(),
+                    "size":size, "write":kind != "read", "value":value.to_string(),
+                })
+            );
+            assert_eq!(
+                replies[3],
+                json!({"ok":BASE64_STANDARD.encode(&value.to_le_bytes()[..size])})
+            );
+            assert_eq!(replies[4], json!({"ok":null}));
+            assert_eq!(replies[5], json!({"ok":"7"}));
+            assert_eq!(replies[6], json!({"ok":"7"}));
+            assert_eq!(
+                replies[7],
+                json!({"error":format!("no watchpoint at {}", emu.symbolize(target))})
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn floating_point_registers_can_be_written_without_appearing_in_dumps() -> Result<()> {
     for dir in ["lib64", "lib"] {
         let mut emu = Emulator::builder().build()?;
@@ -126,6 +244,7 @@ fn debugger_commands_inspect_step_finish_and_resume_a_c_call() -> Result<()> {
         assert!(replies[2]["ok"][0]["base"].is_string());
         assert!(replies[2]["ok"][0]["size"].is_string());
         assert_eq!(replies[3]["break"]["reason"], "breakpoint");
+        assert!(replies[3]["break"].get("watch").is_none());
         assert_eq!(replies[3]["break"]["address"], "131328");
         assert_eq!(replies[3]["break"]["location"], "0x20100");
         assert_eq!(replies[3]["break"]["thread"], 1234);

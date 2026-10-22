@@ -1,5 +1,5 @@
 use super::Snapshot;
-use crate::{Mapping, debug::modules::module_location};
+use crate::{Mapping, debug::memory_location};
 use serde::Serialize;
 use std::fmt::Write;
 
@@ -139,20 +139,7 @@ impl Snapshot {
                         } else {
                             diff.changes.push(Change {
                                 address,
-                                location: module_location(
-                                    address,
-                                    after
-                                        .modules
-                                        .iter()
-                                        .map(|m| (m.name.as_str(), m.base, m.size)),
-                                )
-                                .unwrap_or_else(|| {
-                                    if mapping_b.name.is_empty() {
-                                        format!("0x{address:x}")
-                                    } else {
-                                        format!("0x{address:x} {}", mapping_b.name)
-                                    }
-                                }),
+                                location: memory_location(address, &after.modules, Some(mapping_b)),
                                 before: vec![a],
                                 after: vec![b],
                             });

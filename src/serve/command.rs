@@ -11,6 +11,14 @@ pub(super) enum Command {
     Unbreak {
         at: String,
     },
+    Watch {
+        at: String,
+        size: u64,
+        kind: crate::Watch,
+    },
+    Unwatch {
+        at: String,
+    },
     Resolve {
         at: String,
     },
@@ -22,6 +30,9 @@ pub(super) enum Command {
     Backtrace,
     Modules,
     Maps,
+    Search {
+        base64: String,
+    },
     Snapshot {
         path: String,
     },

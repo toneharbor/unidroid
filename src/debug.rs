@@ -10,10 +10,27 @@ pub(crate) mod imports;
 pub(crate) mod maps;
 pub(crate) mod modules;
 mod registers;
+pub(crate) mod search;
 pub(crate) mod snapshot;
 mod syscalls;
+pub(crate) mod watch;
 
 const STACK_WORDS: usize = 32;
+
+pub(crate) fn memory_location(
+    address: u64,
+    modules: &[crate::ModuleInfo],
+    mapping: Option<&crate::Mapping>,
+) -> String {
+    modules::module_location(
+        address,
+        modules.iter().map(|m| (m.name.as_str(), m.base, m.size)),
+    )
+    .unwrap_or_else(|| match mapping.filter(|m| !m.name.is_empty()) {
+        Some(mapping) => format!("0x{address:x} {}", mapping.name),
+        None => format!("0x{address:x}"),
+    })
+}
 
 #[derive(Debug, Serialize)]
 pub struct Frame {

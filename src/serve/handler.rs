@@ -27,7 +27,7 @@ impl<R: BufRead, W: Write> JniHandler for Session<R, W> {
                 return crate::Resume::Abort;
             }
         };
-        let question = response::break_value(stop, emu.symbolize(stop.address), registers);
+        let question = response::break_value(stop, emu, registers);
         match self.ask(emu, Response::Break(question), Question::Stop) {
             Some(Reply::Resume(resume)) => resume,
             _ => crate::Resume::Abort,

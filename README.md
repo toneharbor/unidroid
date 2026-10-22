@@ -90,83 +90,7 @@ unhandled JNI call: CallStaticObjectMethodV java/lang/System->getProperty(Ljava/
 
 Add the matching method to `JniHandler` and run again. It's the same idea as setting up the environment in unidbg.
 
-Guest failures carry a `Crash`. Its `Display` is the same error message; `report()` adds the thread, backtrace, registers and stack:
-
-```rust
-if let Err(error) = emu.call_function(f, &[]) {
-    if let Some(crash) = error.downcast_ref::<unidroid::Crash>() {
-        eprintln!("{}", crash.report());
-    }
-}
-```
-
-`Crash` has `message`, `thread`, `registers` (name/value pairs), `backtrace` and `stack`. The stack holds up to 32 `(address, value)` pairs of pointer-size words starting at the crash's sp, stopping at the first unreadable word. `report()` prints them after the registers, four words per address-labelled line. Each `Frame` has `address`, `location` and an optional `symbol`. Both types serialize with serde. A crash keeps the state at the failure, including failures in guest threads or nested calls. Host function failures start at the guest caller. `emu.registers()?` and `emu.backtrace()?` read the current state. The backtrace follows frame pointers, skips repeated neighbors and stops at 32 frames or a zero return address. Code without frame pointers may give a short backtrace; look for app return addresses in `crash.stack`. The stack window is read only while building a crash.
-
-`emu.location(address)` stays `libfoo.so+0x1234`. `emu.symbolize(address)` adds a covering function name, like `libc.so+0x1f2a4 (strlen+0x10)`. It uses function symbols with a nonzero size from `.dynsym` and `.symtab`, when present. The symbol table is built on first use and shared between instances.
-
-`emu.add_breakpoint(address)?` stops before the instruction at that address. `emu.remove_breakpoint(address)?` removes it and errors if none is there. Both clear the Thumb bit; adding the same address twice keeps one breakpoint. Breakpoints also work on code that already ran and in any guest thread. With no breakpoints or step active, no debugger hook is installed.
-
-A Thumb `IT` instruction and the instructions it makes conditional run as one step. A breakpoint hit inside an `IT` block is reported at the first instruction after the block, or at the next Unicorn stop if the block branches away; a conditional instruction that is skipped does not hit a breakpoint.
-
-Stops go to the running call's `JniHandler::stopped(&mut self, emu: &mut Emulator, stop: &Stop) -> Resume`. The default returns `Resume::Continue`, including for `()` and `Probe`. `Stop` has `reason: StopReason` (`Breakpoint`, `Step` or `Finish`), `address: u64` (Thumb bit cleared) and `thread: u32`. The handler can inspect or change registers and memory, or make a nested call that has stops of its own. Return one of:
-
-| `Resume` | what happens |
-|---|---|
-| `Continue` | run on, skipping the current breakpoint hit once |
-| `Step` | execute one guest instruction, then stop with `Step`; `bl` enters the callee, and entering a host function (JNI, dl or system property) runs that whole host function as one step |
-| `Finish` | save lr and sp; stop with `Finish` in the same thread when `pc == (saved_lr & !1)` and `sp >= saved_sp`, including at the end of a top-level call |
-| `Return(bits)` | return immediately to lr; set arm64 `x0`, or arm32 `r0` to the low 32 bits and `r1` to the high 32 bits |
-| `Abort` | fail the running call with a `Crash` whose message is `stopped by the debugger at <symbolize(address)>` |
-
-`Finish` relies on lr, so use it at a function's first instruction, before the function changes lr. Its stack check prevents stopping at a deeper recursive return. `Return(bits)` is also meant for the first instruction: it replaces the function's result without running the body. This is a function hook.
-
-For a plain C call, use `emu.call_function_with(&mut handler, function, args)?` to receive stops and JNI questions in that handler. It takes the same arguments and returns the same result as `call_function`.
-
-`emu.resolve(text)?` accepts `libfoo.so+0x1234`, an absolute hex address such as `0x50001000`, or an exported symbol name searched in module load order. Errors name the unknown module, bad number or unknown symbol. `emu.modules()` returns `Vec<ModuleInfo>` in load order: each entry has `name: String`, the host `path: PathBuf` recorded at load, `base: u64` and `size: u64`. Its index is the `Module` number.
-
-`emu.maps()?` returns `Vec<Mapping>` sorted by start, one entry per current Unicorn region. Each entry has `start` and exclusive `end` addresses, `perms` such as `r-x` or `rw-`, and `name`. Names are checked in order: a loaded module's name, `[trampoline]`, `[host malloc]` (allocations from `emu.malloc` and `new_cstring`), `[mmap]`, `[heap]` (brk), `[stack]`, `[vectors]` (ARM32), or an empty string for an unnamed range. Use it to identify an address before reading memory.
-
-`emu.snapshot()?` captures the current thread ID, general registers, modules and every mapped byte, including code and memory without read permission. `Snapshot::save(path)` writes a JSON header followed by raw memory; `Snapshot::load(path)` reads it back. `before.diff(&after)` returns changed registers, newly mapped and unmapped ranges, and changed bytes with locations. It compares by address even when mappings split, ignores permission changes, and merges byte changes separated by fewer than eight unchanged bytes. `diff.report()` formats all four sections as text:
-
-```rust
-let before = emu.snapshot()?;
-before.save("before.snap")?;
-emu.call_function(f, &[1, 2])?;
-emu.snapshot()?.save("after.snap")?;
-let after = unidroid::Snapshot::load("after.snap")?;
-println!("{}", before.diff(&after).report());
-```
-
-Maps and snapshots install no hooks and store no copies until called. A snapshot holds all guest memory, including keys and inputs; keep snapshot files out of git. This repository ignores `*.snap`.
-
-`emu.register(name)?` reads a register and `emu.set_register(name, value)?` writes it. Names are `x0`–`x28`, `fp`, `lr`, `sp`, `pc`, `nzcv` on arm64; `r0`–`r12`, `sp`, `lr`, `pc`, `cpsr` on arm32; and `d0`–`d31` on both. The `d` registers hold 64-bit floating-point bits and are available through named reads and writes, including serve's `set_register`. Dumps from `registers()`, crash reports, break questions and serve's `registers` list only the general registers, sp, lr, pc and flags, in the order above. An unknown name lists the valid names.
-
-`Trace` has three booleans (`jni`, `syscalls` and `imports`, default `false`) and `code: Vec<String>` (default empty). Set them with `.trace(Trace { .. })` on the builder, or `emu.set_trace(Trace { .. })?` at runtime. `emu.trace()` reads the settings. Each change replaces all settings. With traces off, no trace hook is installed.
-
-Each `code` entry is a module file name, such as `libfoo.so`, or a module with a hex offset range, such as `libfoo.so+0x1000-0x2000` (end exclusive). It matches libraries already loaded and libraries loaded later, by file name. Bad specifications fail `build` or `set_trace`. For example, `Trace { code: vec!["libfoo.so+0x1000-0x2000".into()], ..Trace::default() }` traces that part of the library.
-
-Instruction events show the bytes in memory, Capstone disassembly, registers read before the instruction, and registers written after it. ARM32 follows the current ARM or Thumb mode, including Thumb conditional blocks. The text looks like this:
-
-```text
-[libfoo.so+0x1234 (fn+0x10)] [0010a0e1] mov r1, r0 ; r0=0x7 => r1=0x7
-```
-
-`Event::Instruction` has `at` (from `symbolize`), `address`, `bytes` (hex), `text`, `read` and `written`. The last two are name/value pairs (`Vec<(String, u128)>`, covering vector registers too). In JSON, `address` and register values are hex strings, such as `"address":"0x10001000"` and `[["r0","0x7"]]`, preserving full precision in JavaScript. Pairs stay in instruction order; the event tag is `instruction`. Events wait for the next instruction or a run stop so written values are available. A range exit also captures the result before untraced code changes it. Syscall results are captured after dispatch; a faulting instruction has an empty `written` array. Stops before execution do not duplicate an instruction on resume. Turning code tracing off removes all its hooks. If an instruction cannot be decoded or a register cannot be read, a `Warning` names its address and tracing continues. Capstone also names SVE/SME and legacy registers that Unicorn does not expose; those reads warn instead of inventing a value.
-
-Syscall events show the guest number, arguments, signed result, errno name, instruction location and caller. Import events show calls from app libraries into other modules, including dl, property and unresolved-symbol stubs. The previous executed block in the same guest thread must be in an app library; app PLT stubs count, but internal tail calls within a dependency do not. The caller location comes from lr. They show the first four argument registers, with known C strings quoted and capped at 256 bytes. Dependencies next to an app count as app libraries; dependencies found in rootfs do not.
-
-All diagnostics go through `Event`: `Jni`, `JniCall`, `Syscall`, `Call`, `Instruction` or `Warning`. By default they print their text form on stderr. Capture them with the builder's `on_event`:
-
-```rust
-let emu = Emulator::builder()
-    .trace(Trace { syscalls: true, ..Trace::default() })
-    .on_event(|event| eprintln!("{}", serde_json::to_string(event).unwrap()))
-    .build()?;
-```
-
-Events serialize as objects tagged with `event`: `jni`, `jni_call`, `syscall`, `call`, `instruction` or `warning`. Arguments are arrays of text; JNI member arguments keep their typed debug form, such as `Object(Handle(7))`. Syscall numbers and returned results are JSON numbers. If dispatch fails, ends the thread or process, or switches away from the thread, `result` is `null` and `errno` is absent. Its text line ends with `= (no return)`. The event is emitted before any crash propagates. Otherwise `errno` is present only for a Linux error result. JNI locations keep the existing text; syscall and import locations include symbols.
-
-`Probe::default()` is a `JniHandler` that answers calls with null, zero, false or void. `is_assignable` answers false. Pass it to `call_jni_onload` to explore calls without writing a handler. `probe.calls()` returns `&[ProbedCall]` in first-seen order. Each entry has `op`, `is_static`, `class`, `name`, `signature`, `count` and the first `from` location. For `is_assignable`, `class` is the source and `name` the target class. Defaults can make the library return early or crash.
+For crash reports, debugger controls, memory inspection and traces, see [the library debugging reference](DEBUGGING.md#library).
 
 32-bit or 64-bit is picked by the first library you load. There's no setting for it. Load that library before `malloc`, `read_bytes`, `write_bytes` or `call_function`; before it, they return an error. One emulator runs one kind: loading a 64-bit library after a 32-bit one is an error.
 
@@ -315,52 +239,13 @@ How values are written in JSON:
 
 Addresses are decimal strings too. Bytes are base64.
 
-A guest failure adds `crash` to the error response. Other errors still have only `error`. Inside `crash`, frame addresses, register values, and both entries of each `stack` pair are decimal strings; the thread ID is a number. `stack` keeps up to 32 pointer-size words as `[address, value]` pairs starting at the crash's sp, in address order. `registers` is an object keyed by register name, so `crash.registers.pc` reads the program counter. For example:
-
-```json
-{"error":"unhandled JNI call: ...","crash":{"message":"unhandled JNI call: ...","thread":1234,"registers":{"pc":"65820","x0":"7"},"backtrace":[{"address":"268471236","location":"libjnidispatch.so+0x8bc4","symbol":"JNI_OnLoad+0x3c0"}],"stack":[["1879048160","0"],["1879048168","268471236"]]}}
-```
-
-The example abbreviates the registers and stack. If a bad JNI answer replaces the command's error message, `crash` still holds the original guest failure.
-
-Change traces during a session with `{"cmd":"trace","jni":true,"syscalls":true,"imports":false,"code":["libfoo.so+0x1000-0x2000"]}`. Omitted booleans become `false`; omitted `code` becomes empty. `{"cmd":"trace"}` turns all traces off. Log format is chosen when starting the CLI; JSON logs go to stderr and protocol replies go to stdout.
-
-Debugger stops arrive as `{"break": ...}` questions. The fields are `reason` (`breakpoint`, `step` or `finish`), `address` (decimal string, Thumb bit cleared), `location` (from `symbolize`), `thread` (number), and `registers` (the same object, in register table order, as `registers` and a crash). While stopped, any command can run, including a nested `call_function`. Resume the innermost stop with `continue`, `step`, `finish`, `return` (with a decimal string `value`), or `abort`. These have the same behavior as Rust's `Resume`; they have no separate reply. The original command continues and ends with its own `ok` or `error`.
-
-A short exchange after loading SignUtil and creating the arguments (register objects abbreviated; Java questions during `finish` are answered as above):
-
-```text
-→ {"cmd":"break","at":"Java_com_anjuke_mobile_sign_SignUtil_getSign0"}
-← {"ok":"268442540"}
-→ {"cmd":"call_static","class":"com/anjuke/mobile/sign/SignUtil","method":"getSign0(Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/String;I)Ljava/lang/String;","args":[7,8,9,10,10]}
-← {"break":{"reason":"breakpoint","address":"268442540","location":"libsignutil.so+0x1bac (Java_com_anjuke_mobile_sign_SignUtil_getSign0)","thread":1234,"registers":{"pc":"268442540","lr":"131072"}}}
-→ {"cmd":"registers"}
-← {"ok":{"pc":"268442540","lr":"131072"}}
-→ {"cmd":"finish"}
-   ... answer JNI questions ...
-← {"break":{"reason":"finish","address":"131072","location":"0x20000","thread":1234,"registers":{"pc":"131072","r0":"16"}}}
-→ {"cmd":"continue"}
-← {"ok":16}
-```
-
-A resume command with no stop open errors with `no breakpoint stop is waiting`. An open stop expects a resume command; an open JNI question expects `answer` or `unhandled`. Sending the other kind gives an error and leaves the question open. With nested questions, answer or resume the innermost one first.
+For crash responses, traces and debugger stop questions, see [the serve debugging reference](DEBUGGING.md#serve).
 
 Commands:
 
 | command | fields | result |
 |---|---|---|
 | `load` | `path` | module number |
-| `trace` | `jni`, `syscalls`, `imports` (booleans, omitted means false), `code` (list of specifications, omitted means empty) | `null` |
-| `break` / `unbreak` | `at` (text for `resolve`) | address with Thumb bit cleared / `null` |
-| `resolve` | `at` (module + hex offset, absolute hex or exported symbol) | address (decimal string) |
-| `registers` | | register object, values as decimal strings, in table order |
-| `set_register` | `name`, `value` (decimal string) | `null` |
-| `backtrace` | | frames, in the same JSON as a crash's `backtrace` |
-| `modules` | | list of `{name, path, base, size}`, in load order; base and size are decimal strings |
-| `maps` | | list of `{start, end, perms, name}`, sorted by start; start and exclusive end are decimal strings |
-| `snapshot` | `path` (relative to the serve process's directory) | `null`; saves all guest memory, registers and modules, between calls or while stopped |
-| `continue` / `step` / `finish` / `abort` | | (resumes the open stop) |
-| `return` | `value` (decimal string) | (returns from the stopped function) |
 | `alias` | `name`, `target` | `null` |
 | `superclass` | `class`, `superclass` | `null` |
 | `onload` | `module` | `JNI_OnLoad`'s return |
@@ -380,6 +265,8 @@ Commands:
 | `answer` | `value` (left out for `void` and field sets) | (answers the open question) |
 | `unhandled` | | (answers the open question) |
 
+For debugging and resume commands, see [DEBUGGING.md](DEBUGGING.md#commands).
+
 A question looks like this:
 
 ```json
@@ -392,52 +279,11 @@ A question looks like this:
 
 ### Record a session and replay it
 
-Start the service with `serve --record FILE`. stdin, stdout and JNI questions stay the same. Each recording entry is one JSON line, flushed immediately so completed entries survive a crash. A recording contains every input, including keys. Keep recordings out of git.
-
-```bash
-target/release/unidroid serve --rootfs rootfs --record session.jsonl
-target/release/unidroid replay session.jsonl --trace-syscalls --trace-code libsignutil.so
-```
-
-The recording starts with `{"record":1,"version":"<crate version>","options":{...}}`. `options` holds `rootfs`, `process_name`, `prop`, `alias`, `superclass` and `translation_cache_mb`; the three repeatable settings are arrays of key/value pairs. Defaults are recorded too. Trace and log options are not in the header. Subsequent entries stay in consumption order:
-
-| entry | what it holds |
-|---|---|
-| `{"in":"<line>"}` | the input exactly as read, with its line ending removed |
-| `{"out":<JSON value>}` | a response or question |
-| `{"time":{"clock":"realtime","sec":123,"nsec":456}}` | a clock read; `clock` can also be `monotonic` |
-| `{"random":"<base64>"}` | bytes read from `/dev/urandom` or `/dev/random` |
-
-`replay FILE` rebuilds the recorded setup, feeds the inputs through the serve loop, and compares every response and question as JSON. Guest `clock_gettime`, `gettimeofday` and random-device reads use the recording instead of the host. Keep the same libraries and rootfs; relative rootfs and `load` paths resolve against the current directory, so run replay from the directory the service ran in.
-
-Replaying a recording that took snapshots writes those snapshot files again, using paths relative to the replay process's directory.
-
-Replay accepts only `--verbose`, `--trace-syscalls`, `--trace-imports`, repeatable `--trace-code`, and `--log-format text|json`. It adds no breakpoints. Diagnostics go to stderr. Success prints `replayed <n> commands, all responses match` on stdout and exits 0; `n` counts input lines, including JNI answers. The first difference exits 1 with one stdout line naming the recording line: differing responses include expected and actual JSON; missing or extra responses, wrong time/random order, exhausted values and unused values also name the mismatch.
-
-The library exposes `serve::Options` (the shared options and `build`), `serve::record(options, builder, file, input, output)` and `serve::replay(file, builder)`. Replay returns the input count; the builder supplies diagnostic settings. The clock/random source and recording entries remain crate-internal.
+See [recording and replay](DEBUGGING.md#record-a-session-and-replay-it) for the session format and replay command.
 
 ### `diff`: compare two memory snapshots
 
-Take snapshots before and after a call with serve's `snapshot` command or the library API, then run:
-
-```bash
-target/release/unidroid diff before.snap after.snap
-```
-
-It prints the differences and exits 0, even when memory changed. For example:
-
-```text
-registers:
-  x0 0x0 -> 0x7
-mapped:
-  (none)
-unmapped:
-  (none)
-changes:
-  0x40000000 [host malloc], 4 bytes
-    0000 - 00 00 00 00
-    0000 + 01 02 03 04
-```
+See [the `diff` command](DEBUGGING.md#diff-compare-two-memory-snapshots) to compare saved snapshots.
 
 ## What it does and doesn't support
 

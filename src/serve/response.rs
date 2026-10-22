@@ -69,18 +69,28 @@ pub(super) struct Break {
     location: String,
     thread: u32,
     registers: Registers,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    watch: Option<Value>,
 }
 
-pub(super) fn break_value(stop: &Stop, location: String, registers: Registers) -> Break {
+pub(super) fn break_value(stop: &Stop, emu: &crate::Emulator, registers: Registers) -> Break {
     Break {
         reason: match stop.reason {
             StopReason::Breakpoint => "breakpoint",
+            StopReason::Watchpoint => "watchpoint",
             StopReason::Step => "step",
             StopReason::Finish => "finish",
         },
         address: stop.address.to_string(),
-        location,
+        location: emu.symbolize(stop.address),
         thread: stop.thread,
         registers,
+        watch: stop.watch.map(|watch| {
+            json!({
+                "pc": watch.pc.to_string(), "location": emu.symbolize(watch.pc),
+                "address": watch.address.to_string(), "size": watch.size,
+                "write": watch.write, "value": watch.value.to_string(),
+            })
+        }),
     }
 }

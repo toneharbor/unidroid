@@ -8,7 +8,7 @@ repository = "https://github.com/zhoupb01/unidroid"
 readme = "README.md"
 keywords = ["android", "emulator", "unicorn", "jni", "unidbg"]
 categories = ["emulators", "development-tools"]
-include = ["/src", "/README.md", "/LICENSE", "/NOTICE", "/Cargo.toml"]
+include = ["/src", "/README.md", "/DEBUGGING.md", "/LICENSE", "/NOTICE", "/Cargo.toml"]
 
 [profile.release]
 lto = true

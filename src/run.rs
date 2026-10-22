@@ -100,15 +100,29 @@ impl Emulator {
             let result = self.run_cpu(pc, stepping);
             let (restart, location) = self.restart_pc()?;
             pc = restart;
+            // MEM_WRITE fires before Unicorn checks mapping and permissions.
+            // A fault in that instruction is a crash, not a completed watch hit.
+            if result.is_err()
+                && self
+                    .cpu()?
+                    .get_data()
+                    .watch
+                    .is_some_and(|hit| hit.pc == pc & !1)
+            {
+                self.cpu_mut()?.get_data_mut().watch = None;
+            }
             control.skip = self.cpu()?.get_data().skip_breakpoint;
             let interrupt = self.cpu()?.get_data().interrupt;
             let finished = control.finished(self, pc)?;
             let pending = self.cpu()?.get_data().stop;
-            if pending.is_some() || finished {
+            let watched = self.cpu()?.get_data().watch.is_some();
+            if pending.is_some() || finished || watched {
                 if self.trace.imports || !self.trace.code.is_empty() {
                     self.suspend_traces(pc & !1)?;
                 }
-                let reason = if finished || pending == Some(crate::StopReason::Finish) {
+                let reason = if watched {
+                    crate::StopReason::Watchpoint
+                } else if finished || pending == Some(crate::StopReason::Finish) {
                     crate::StopReason::Finish
                 } else if stepping && self.cpu()?.get_data().step_started {
                     crate::StopReason::Step

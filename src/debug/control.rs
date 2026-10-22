@@ -4,6 +4,7 @@ use unicorn_engine::UcHookId;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopReason {
     Breakpoint,
+    Watchpoint,
     Step,
     Finish,
 }
@@ -13,6 +14,7 @@ pub struct Stop {
     pub reason: StopReason,
     pub address: u64,
     pub thread: u32,
+    pub watch: Option<crate::WatchHit>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,13 +74,15 @@ impl RunControl {
         let thread = emu.threads.tid();
         self.step = None;
         self.clear_finish(emu)?;
-        self.skip = Some((thread, address));
+        self.skip = (reason != StopReason::Watchpoint).then_some((thread, address));
+        let watch = emu.cpu_mut()?.get_data_mut().watch.take();
         match handler.stopped(
             emu,
             &Stop {
                 reason,
                 address,
                 thread,
+                watch,
             },
         ) {
             Resume::Continue => {}

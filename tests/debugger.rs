@@ -10,6 +10,8 @@ mod imports;
 mod lifecycle;
 #[path = "debugger/resume.rs"]
 mod resume;
+#[path = "debugger/watch.rs"]
+mod watch;
 
 struct Handler<F>(F);
 impl<F: FnMut(&mut Emulator, &Stop) -> Resume> JniHandler for Handler<F> {

@@ -37,7 +37,7 @@ jobs:
           fi
           package="unidroid-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir "$package"
-          cp target/release/unidroid LICENSE NOTICE README.md "$package/"
+          cp target/release/unidroid LICENSE NOTICE README.md DEBUGGING.md "$package/"
           cp -R rootfs skills "$package/"
           tar -czf "$ARCHIVE" "$package"
           if command -v sha256sum >/dev/null 2>&1; then

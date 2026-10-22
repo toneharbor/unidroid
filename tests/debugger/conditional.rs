@@ -110,7 +110,8 @@ fn deferred_breakpoint_preserves_the_host_call_at_its_next_stop() -> Result<()> 
                     [Stop {
                         reason: StopReason::Breakpoint,
                         address: if arm64 { address } else { property + 4 },
-                        thread: 1234
+                        thread: 1234,
+                        watch: None,
                     }]
                 );
             } else {
@@ -146,7 +147,8 @@ fn a_deferred_hit_is_reported_even_when_the_branch_target_faults() -> Result<()>
             [Stop {
                 reason: StopReason::Breakpoint,
                 address: if arm64 { CODE } else { 0x30000000 },
-                thread: 1234
+                thread: 1234,
+                watch: None,
             }]
         );
     }

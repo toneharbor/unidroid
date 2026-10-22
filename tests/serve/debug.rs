@@ -3,6 +3,59 @@ use std::{cell::RefCell, rc::Rc};
 use unidroid::{Emulator, Result};
 
 #[test]
+fn search_replies_use_the_same_locations_as_snapshot_changes() -> Result<()> {
+    use base64::{Engine, prelude::BASE64_STANDARD};
+    for dir in ["lib64", "lib"] {
+        let mut emu = Emulator::builder().build()?;
+        emu.load_library(format!("rootfs/{dir}/libc.so"))?;
+        let allocation = emu.malloc(32)?;
+        let library = emu
+            .maps()?
+            .into_iter()
+            .find(|m| m.name == "libc.so")
+            .unwrap()
+            .start;
+        let library_pattern = emu.read_bytes(library, 32)?;
+        let before = emu.snapshot()?;
+        let pattern = b"known-search-input";
+        emu.write_bytes(allocation, pattern)?;
+        let location = before
+            .diff(&emu.snapshot()?)
+            .changes
+            .into_iter()
+            .find(|c| c.address == allocation)
+            .unwrap()
+            .location;
+        let input = [
+            json!({"cmd":"search", "base64":BASE64_STANDARD.encode(pattern)}),
+            json!({"cmd":"search", "base64":BASE64_STANDARD.encode(library_pattern)}),
+            json!({"cmd":"search", "base64":""}),
+        ]
+        .map(|v| v.to_string())
+        .join("\n");
+        let mut output = Vec::new();
+        unidroid::serve::serve(&mut emu, input.as_bytes(), &mut output)?;
+        let replies: Vec<Value> = String::from_utf8(output)?
+            .lines()
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        assert_eq!(location, format!("0x{allocation:x} [host malloc]"));
+        assert_eq!(
+            replies[0],
+            json!({"ok":[{"address":allocation.to_string(), "location":location}]})
+        );
+        assert!(
+            replies[1]["ok"]
+                .as_array()
+                .unwrap()
+                .contains(&json!({"address":library.to_string(), "location":"libc.so+0x0"}))
+        );
+        assert_eq!(replies[2], json!({"error":"empty search pattern"}));
+    }
+    Ok(())
+}
+
+#[test]
 fn maps_and_snapshots_work_between_calls_and_at_breakpoints() -> Result<()> {
     for (dir, ret, register) in [("lib64", 0xd65f03c0u32, "x0"), ("lib", 0xe12fff1e, "r0")] {
         let mut emu = Emulator::builder().build()?;

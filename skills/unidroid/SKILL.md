@@ -8,7 +8,7 @@ description: >-
 
 ## 1. Inspect before writing a driver
 
-Read the command section of [README.md](../../README.md) for the options, commands, fields and JSON shapes you need. In a release download, README.md is next to the binary. If this skill was copied elsewhere, use the README from your unidroid checkout or download; the [online README](https://github.com/zhoupb01/unidroid/blob/main/README.md) describes main.
+Read the command section of [README.md](../../README.md) for the basic options, calling commands and JNI protocol, and [DEBUGGING.md](../../DEBUGGING.md) for debugging commands, fields and JSON shapes. In a release download, README.md and DEBUGGING.md are next to the binary. If this skill was copied elsewhere, use both files from your unidroid checkout or download; the [online README](https://github.com/zhoupb01/unidroid/blob/main/README.md) and [online debugging reference](https://github.com/zhoupb01/unidroid/blob/main/DEBUGGING.md) describe main.
 
 Run `inspect`, then `inspect --probe` on the target library. These commands use the committed SignUtil sample, from the repo root:
 
@@ -47,11 +47,11 @@ For an unknown Java call, send `unhandled` and keep the resulting crash. Add the
 
 ## 3. Read the crash before changing the setup
 
-Save the whole error response. For an error without `crash`, check the command and setup against README. For a guest failure, read `crash.message`, the thread, backtrace and registers together. Start with the first guest frame and its symbol. At a host or JNI stub, that frame can identify the caller better than the saved PC. Use `symbolize`d locations in diagnostics to choose the routine to inspect.
+Save the whole error response. For an error without `crash`, check the command and setup against README or [DEBUGGING.md](../../DEBUGGING.md), whichever covers it. For a guest failure, read `crash.message`, the thread, backtrace and registers together. Start with the first guest frame and its symbol. At a host or JNI stub, that frame can identify the caller better than the saved PC. Use `symbolize`d locations in diagnostics to choose the routine to inspect.
 
 Follow a short backtrace with a breakpoint or a narrow trace. Backtraces follow frame pointers; code that omits them can leave only one frame. Read `crash.stack` for app code addresses that may be return addresses; it keeps the words from the moment of the crash. Treat a short backtrace as a limit on the evidence.
 
-Keep protocol addresses as decimal strings. Location text uses hex offsets, such as `libfoo.so+0x1234`; pass that text to `resolve` or a breakpoint's `at`. Use the bare location, without a parenthesized symbol suffix. Read instruction-event addresses as hex strings, as specified in README.
+Keep protocol addresses as decimal strings. Location text uses hex offsets, such as `libfoo.so+0x1234`; pass that text to `resolve` or a breakpoint's `at`. Use the bare location, without a parenthesized symbol suffix. Read instruction-event addresses as hex strings, as specified in [DEBUGGING.md](../../DEBUGGING.md#traces-and-events).
 
 For a concrete failure, breakpoint and replay exchange, read [serve-debugging.md](serve-debugging.md). Its commands run against the committed fixture and show how to interpret the replies.
 
@@ -69,8 +69,12 @@ Pick the row that answers the current question:
 | What does a routine compute? | `--trace-code` over that routine's range | Instruction bytes, disassembly, registers read before and written after. Find the first value that diverges. |
 | What is a value at this point? | Breakpoint, then `registers` and `read` | Argument registers and the bytes at their pointers. Decode `read`'s base64 before interpreting memory. |
 | Which memory does a call write? | Serve `snapshot` before and after the call, then `unidroid diff before.snap after.snap` | Changed bytes with locations, newly mapped ranges, and changed registers. |
+| Where is this value in memory? | Serve `search` | Matching addresses and locations. A full list of 1000 may hide more matches; narrow the pattern. |
+| Which instruction writes (or reads) this memory? | Serve `watch`, then `backtrace` and `registers` at the stop | `watch.pc` identifies the accessing instruction; `watch.address`, `size`, `write` and `value` describe its access. |
 | Which range is this address in? | Serve `maps` | Start and exclusive end, permissions, and the library or memory area's name. |
 | What changes if this function returns a known value? | Breakpoint, then `return` | Whether replacing the result changes the failing path. Use it as an experiment to test the cause. |
+
+Use `snapshot`/`diff` or `search` to find the address, then `watch` to find the writer on the next call. Choose `read` or `access` when following reads. Host JNI writes do not trigger watchpoints; check the watchpoint limits in [DEBUGGING.md](../../DEBUGGING.md#breakpoints-watchpoints-and-stops) when a known write does not stop.
 
 Turn traces on with the serve `trace` command just before the call under study, then turn them off after it ends. Each change replaces the whole trace selection; include every trace you want to keep. Use `--log-format json` when a program reads stderr. Start with the caller's module and narrow instruction traces to a range once the routine is known.
 

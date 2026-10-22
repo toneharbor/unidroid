@@ -117,6 +117,15 @@ impl<R: BufRead, W: Write> Session<R, W> {
                 emu.remove_breakpoint(emu.resolve(&at)?)?;
                 Value::Null
             }
+            Command::Watch { at, size, kind } => {
+                let address = emu.resolve(&at)?;
+                emu.add_watchpoint(address, size, kind)?;
+                json!(address.to_string())
+            }
+            Command::Unwatch { at } => {
+                emu.remove_watchpoint(emu.resolve(&at)?)?;
+                Value::Null
+            }
             Command::Resolve { at } => json!(emu.resolve(&at)?.to_string()),
             Command::Registers => return Ok(Response::Registers(response::registers_value(&emu.registers()?))),
             Command::SetRegister { name, value } => {
@@ -130,6 +139,15 @@ impl<R: BufRead, W: Write> Session<R, W> {
             Command::Maps => json!(emu.maps()?.iter().map(|m| json!({
                 "start": m.start.to_string(), "end": m.end.to_string(), "perms": m.perms, "name": m.name,
             })).collect::<Vec<_>>()),
+            Command::Search { base64 } => {
+                let addresses = emu.search(&BASE64_STANDARD.decode(base64)?)?;
+                let maps = emu.maps()?;
+                let modules = emu.modules();
+                json!(addresses.into_iter().map(|address| json!({
+                    "address": address.to_string(),
+                    "location": crate::debug::memory_location(address, &modules, maps.iter().find(|m| m.start <= address && address < m.end)),
+                })).collect::<Vec<_>>())
+            }
             Command::Snapshot { path } => {
                 emu.snapshot()?.save(path)?;
                 Value::Null
