@@ -65,9 +65,7 @@ impl Clone for JniState {
 }
 impl JniState {
     pub(crate) fn rewind(&mut self, saved: &Self) {
-        let history = std::mem::take(&mut self.history);
         *self = saved.clone();
-        self.history = history;
     }
 }
 impl Drop for JniState {

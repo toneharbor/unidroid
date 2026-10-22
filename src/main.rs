@@ -21,6 +21,17 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         record: Option<PathBuf>,
     },
+    /// Run independent JSON Lines jobs and print a JSON report.
+    Batch {
+        #[command(flatten)]
+        options: unidroid::serve::Options,
+        #[command(flatten)]
+        batch: unidroid::serve::BatchOptions,
+        /// Format diagnostic events on stderr.
+        #[arg(long, value_enum, default_value = "text")]
+        log_format: LogFormat,
+        jobs: PathBuf,
+    },
     /// Replay a recorded serve session and compare every response.
     Replay {
         file: PathBuf,
@@ -78,15 +89,21 @@ struct Diagnostics {
 
 impl Diagnostics {
     fn builder(self, inspect: bool) -> unidroid::EmulatorBuilder {
-        let mut builder = Emulator::builder().trace(Trace {
+        self.log_format.builder().trace(Trace {
             jni: inspect || self.verbose,
             syscalls: self.trace_syscalls,
             imports: self.trace_imports,
             code: self.trace_code,
             calls: self.trace_calls,
             coverage: Vec::new(),
-        });
-        if matches!(self.log_format, LogFormat::Json) {
+        })
+    }
+}
+
+impl LogFormat {
+    fn builder(self) -> unidroid::EmulatorBuilder {
+        let mut builder = Emulator::builder();
+        if matches!(self, LogFormat::Json) {
             builder = builder.on_event(|event| {
                 use std::io::Write;
                 let mut stderr = std::io::stderr().lock();
@@ -228,6 +245,25 @@ fn run() -> Result<ExitCode> {
                 )?;
             }
             Ok(ExitCode::SUCCESS)
+        }
+        Command::Batch {
+            options,
+            batch,
+            log_format,
+            jobs,
+        } => {
+            let report = unidroid::serve::batch(
+                &options,
+                &batch,
+                || log_format.builder(),
+                std::io::BufReader::new(fs::File::open(jobs)?),
+            )?;
+            println!("{report}");
+            Ok(if report["summary"]["failed"] == 0 {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
         }
         Command::Replay { file, diagnostics } => {
             let result = fs::File::open(file)

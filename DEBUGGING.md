@@ -53,7 +53,7 @@ Rewind restores:
 - The fixed clock and its elapsed counter, and the seeded random generator including partly consumed output. Host clock/random values still come from the host when those settings were omitted.
 - JNI handles, objects, classes, members, registered natives, references and exceptions. Object graphs are copied deeply, preserving aliases and cycles, including inside object arrays. `new_object`'s `Object::User` payload (`Rc<dyn Any>`) is shared: changes inside that Rust payload remain visible across rewinds and copies.
 
-Breakpoints, watchpoints, trace settings, coverage counts, the event handler, translation-cache size and the JNI crash-history ring stay with the target emulator. Reset coverage explicitly with `reset_coverage()` when comparing runs. Trace selections are reapplied when the module list changes. Changed mappings and pages lose their translated code; unchanged pages in matching mappings keep it warm. Checkpoints do not use Unicorn's built-in memory snapshot mode, so guest `mprotect`, `munmap` and thread switching keep working.
+Breakpoints, watchpoints, trace settings, coverage counts, the event handler and translation-cache size stay with the target emulator. Rewind clears the JNI crash-history ring because its calls belong to the discarded state. Reset coverage explicitly with `reset_coverage()` when comparing runs. Trace selections are reapplied when the module list changes. Changed mappings and pages lose their translated code; unchanged pages in matching mappings keep it warm. Checkpoints do not use Unicorn's built-in memory snapshot mode, so guest `mprotect`, `munmap` and thread switching keep working.
 
 Create an independent instance from the same checkpoint:
 
@@ -202,6 +202,8 @@ Events serialize as objects tagged with `event`: `jni`, `jni_call`, `syscall`, `
 ## Serve
 
 For the basic protocol, calling and object commands, see [README.md](README.md#serve-drive-it-from-your-program).
+
+`unidroid batch` uses this protocol without a driver. Its jobs and setup refuse `break`, `unbreak`, `watch`, `unwatch`, `continue`, `step`, `finish`, `return`, `abort`, `answer`, `unhandled`, `checkpoint`, `rewind` and `drop_checkpoint`. Unanswered JNI calls fail immediately; traces, coverage, snapshots and crash responses remain available. See [README.md](README.md) for batch jobs and reports.
 
 ### Crash responses
 

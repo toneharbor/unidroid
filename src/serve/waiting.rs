@@ -18,6 +18,9 @@ impl<R: BufRead, W: Write> Session<R, W> {
         response: Response,
         question: Question<'_>,
     ) -> Option<Reply> {
+        if !self.driver {
+            return None;
+        }
         match self.wait(emu, response, question) {
             Ok(reply) => Some(reply),
             Err(error) => {

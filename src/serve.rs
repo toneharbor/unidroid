@@ -6,6 +6,8 @@ use std::{
     io::{BufRead, Write},
 };
 
+mod batch;
+pub use batch::{BatchOnly, BatchOptions, batch};
 mod options;
 pub use options::Options;
 mod journal;
@@ -37,6 +39,7 @@ pub fn serve(
         policy,
         checkpoints: HashMap::new(),
         next_checkpoint: 0,
+        driver: true,
     };
     session.run(emu)
 }
@@ -51,6 +54,7 @@ struct Session<R, W> {
     policy: Option<Policy>,
     checkpoints: HashMap<u64, (crate::Checkpoint, Option<Policy>)>,
     next_checkpoint: u64,
+    driver: bool,
 }
 impl<R: BufRead, W: Write> Session<R, W> {
     fn run(&mut self, emu: &mut Emulator) -> Result<()> {
@@ -97,10 +101,14 @@ impl<R: BufRead, W: Write> Session<R, W> {
         emu: &mut Emulator,
         command: std::result::Result<Command, serde_json::Error>,
     ) -> Result<()> {
-        let mut result = match command {
-            Ok(command) => self.execute(emu, command),
-            Err(error) => Err(format!("bad message: {error}").into()),
-        };
+        let response = self.dispatch(
+            emu,
+            command.map_err(|error| format!("bad message: {error}").into()),
+        )?;
+        self.write(response)
+    }
+    fn dispatch(&mut self, emu: &mut Emulator, command: Result<Command>) -> Result<Response> {
+        let mut result = command.and_then(|command| self.execute(emu, command));
         let crash = result
             .as_ref()
             .err()
@@ -110,9 +118,9 @@ impl<R: BufRead, W: Write> Session<R, W> {
             result = Err(error);
         }
         if self.fatal {
-            return result.map(|_| ());
+            return result;
         }
-        self.write(match result {
+        Ok(match result {
             Ok(response) => response,
             Err(error) => Response::Error {
                 error: error.to_string(),

@@ -55,15 +55,32 @@ fn calls_and_other_architectures_reject_rewind_without_changing_the_checkpoint()
         let error = emu.call_jni_onload(module, &mut handler).unwrap_err();
         assert!(error.to_string().contains("java/lang/Void->TYPE"));
         assert_eq!(handler.checked, 2);
-        emu.rewind(&checkpoint)?;
-        // Crash history stays with the emulator, even though handles were rewound.
-        let error = emu.call_function(0x30000000, &[]).unwrap_err();
         assert!(
             !error
                 .downcast_ref::<unidroid::Crash>()
                 .unwrap()
                 .jni
                 .is_empty()
+        );
+        emu.rewind(&checkpoint)?;
+        // Rewind clears calls from the discarded state.
+        let error = emu.call_function(0x30000000, &[]).unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<unidroid::Crash>()
+                .unwrap()
+                .jni
+                .is_empty()
+        );
+        let error = emu.call_jni_onload(module, &mut ()).unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<unidroid::Crash>()
+                .unwrap()
+                .jni
+                .last()
+                .unwrap()
+                .contains("java/lang/Void->TYPE")
         );
         emu.checkpoint()?;
         let mut other = emulator(!arm64)?;

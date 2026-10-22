@@ -130,7 +130,7 @@ For other languages (TypeScript, Python, Go, ...) there's a command-line program
 cargo build --release
 ```
 
-It lands at `target/release/unidroid`. It has four subcommands.
+It lands at `target/release/unidroid`. It has five subcommands.
 
 ### `inspect`: look at a library first
 
@@ -326,6 +326,63 @@ handler.finish(result)?;
 ```
 
 Call `finish(result)` after each emulator call to surface policy errors across `JniHandler`'s `Option` return type. Uncovered calls and debugger stops go to `env`. Sequence positions stay with the policy across calls and new handler wrappers; loading or parsing a new policy starts them over. The library serve entry point is `serve::serve(&mut emu, Some(policy), input, output)`; pass `None` when no policy is needed. `serve::Options::load_policy()` reads its optional `policy` path; `serve::record` loads it automatically. Without a policy, no policy rules, sequence state or hooks are allocated.
+
+### `batch`: run many inputs and compare reports
+
+```bash
+target/release/unidroid batch --setup setup.jsonl --workers 4 \
+  --fixed-clock 1700000000 --random-seed 42 jobs.jsonl > report.json
+```
+
+`jobs.jsonl` has one job per line. Each worker runs serve commands in order, using a policy file for Java answers. An unanswered Java call fails the command with the usual `unhandled JNI call: ...` error and crash report. A job stops at its first failing command; other jobs continue.
+
+Load the library in `--setup` so jobs share a checkpoint; without a library loaded by setup, every attempt starts a fresh emulator and reruns setup. Every worker completes its initial setup before any job runs. A setup failure exits 1 with `error: setup command N: <message>` on stderr and no report; command numbers here start at 1.
+
+For example, `setup.jsonl` can contain:
+
+```json
+{"cmd":"load","path":"rootfs/lib64/libc.so"}
+{"cmd":"find_symbol","module":{"$ref":0},"name":"strlen"}
+```
+
+And `jobs.jsonl`:
+
+```json
+{"id":"hello","commands":[{"cmd":"new_cstring","value":"hello"},{"cmd":"call_function","address":{"$setup":1},"args":[{"$ref":0}]}]}
+{"id":"world!","commands":[{"cmd":"new_cstring","value":"world!"},{"cmd":"call_function","address":{"$setup":1},"args":[{"$ref":0}]}],"coverage":["libc.so"],"diff":true}
+```
+
+Anywhere inside a command, an object containing only `{"$ref":N}` uses the `ok` value of this job's earlier command N; `{"$setup":N}` uses setup command N in that worker. Both indices start at 0. Setup commands can use `$ref` for earlier setup results. Missing or forward references fail with `bad reference ...`. When setup loads no library, `$setup` refers to the results of that attempt's setup run.
+
+| job field | meaning |
+|---|---|
+| `commands` | required array of serve commands |
+| `id` | any JSON value; defaults to the 1-based input line number |
+| `policy` | policy file for this job, replacing `--policy`; each attempt starts at its first rule position |
+| `coverage` | list of coverage specs added to the current trace settings; returns this attempt's block counts in serve's `coverage` JSON format |
+| `diff` | `true` captures memory and registers before and after the job, including a failed job |
+
+Batch accepts `--rootfs`, `--process-name`, repeatable `--prop`, `--alias` and `--superclass`, `--policy`, `--translation-cache-mb`, `--fixed-clock` and `--random-seed` as described above, plus:
+
+| option | meaning |
+|---|---|
+| `--setup FILE` | optional JSON Lines of serve commands to prepare each worker |
+| `--workers N` | worker threads; defaults to `std::thread::available_parallelism()` (1 if unavailable) |
+| `--retries N` | up to N extra attempts after a job fails; default 0 |
+| `--only ok\|failed` | include only matching jobs in the report; summary and exit code still count all jobs |
+| `--log-format text\|json` | stderr diagnostics in text (default) or JSON |
+
+Each checkpoint restores guest state and the batch policy's positions after setup. Policy files are loaded once per path per worker; jobs with their own policy use a fresh clone. Coverage counts and JNI crash history start fresh on each attempt. A job's `trace` settings apply only to that attempt; the worker restores its setup trace settings afterward. Diagnostics are not tagged with a job; `--workers 1` keeps them in job order.
+
+Batch refuses `break`, `unbreak`, `watch`, `unwatch`, `continue`, `step`, `finish`, `return`, `abort`, `answer`, `unhandled`, `checkpoint`, `rewind` and `drop_checkpoint` in both jobs and setup, with `<cmd> is not available in batch`. Other commands use the same parser, execution and response encoding as serve.
+
+Stdout contains one JSON document: `{"summary":{"jobs":N,"ok":N,"failed":N,"ms":N},"jobs":[...]}`. Jobs stay in input order. Each has `id`, `ok` (boolean), `results` (the `ok` values of completed commands), integer `ms` for its last attempt, and `attempts`. Failed jobs also have `error`, and `crash` when serve would supply one. Malformed JSON or command syntax fails only that job with `bad job: ...`. `summary.ms` measures the whole batch. Exit code is 0 if every job succeeds, otherwise 1.
+
+Requested `coverage` is a list of `{address, location, count}`. Requested `diff` contains `registers` (name to `[before, after]` decimal strings), `mapped` and `unmapped` (lists of `{start, end}` decimal strings), and `changes` (a list of `{address, location, size, after}`; address is a decimal string, size is bytes, and after is base64). Lists keep the library `Diff` order. Before the first library load, the diff baseline has no CPU registers or mapped memory.
+
+To compare reports, keep the same libraries, rootfs, options, policy and trace settings, set `--fixed-clock` and `--random-seed`, and remove the timing fields, for example with `jq -S 'del(.summary.ms, .jobs[].ms)' report.json`. See [DEBUGGING.md](DEBUGGING.md) for other inputs that affect deterministic runs.
+
+The library entry point is `serve::batch(&options, &batch_options, builder_factory, jobs) -> Result<serde_json::Value>`, with `serve::Options`, `serve::BatchOptions` and a `BufRead` jobs source. `BatchOptions::default()` supplies the CLI defaults; `only` takes `serve::BatchOnly::Ok` or `Failed`. The factory is `Fn() -> EmulatorBuilder + Sync`, such as `Emulator::builder`; it runs inside each worker so builders, emulators and event handlers can stay on their own thread. Setup errors return `Err`; failed jobs are recorded in the returned report.
 
 ### Record a session and replay it
 
