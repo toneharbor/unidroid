@@ -8,7 +8,33 @@ pub(crate) enum GuestFile {
     Host { file: File, path: String },
     Random { path: String },
 }
+pub(crate) enum FileState {
+    Host { path: String, offset: u64 },
+    Random { path: String },
+}
+impl FileState {
+    pub fn reopen(&self, emu: &Emulator) -> Result<GuestFile> {
+        match self {
+            Self::Host { path, offset } => {
+                let mut file = emu.open_guest(path)?;
+                file.seek(SeekFrom::Start(*offset))?;
+                Ok(file)
+            }
+            Self::Random { path } => Ok(GuestFile::Random { path: path.clone() }),
+        }
+    }
+}
+
 impl GuestFile {
+    pub fn checkpoint(&mut self) -> Result<FileState> {
+        Ok(match self {
+            Self::Host { file, path } => FileState::Host {
+                path: path.clone(),
+                offset: file.stream_position()?,
+            },
+            Self::Random { path } => FileState::Random { path: path.clone() },
+        })
+    }
     pub fn seek(&mut self, from: SeekFrom) -> std::io::Result<u64> {
         match self {
             Self::Host { file, .. } => file.seek(from),

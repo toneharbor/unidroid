@@ -29,6 +29,45 @@ Other inputs can still make two runs differ:
 - Thread interleaving and coverage counts depend on translation-block boundaries. Breakpoints, stepping, watchpoints, code traces and coverage itself can split blocks. Compare with the same debugger and trace settings, emulator/Unicorn version and translation-cache size.
 - Prior calls and setup choices, such as process name, properties, aliases and load order. Clock ticks, random bytes, allocations and guest state carry across calls; use fresh emulators with the same setup and call sequence.
 
+### Checkpoints and rewind
+
+After loading libraries, running `JNI_OnLoad` and creating objects, save a reusable prepared state with `emu.checkpoint() -> Result<Checkpoint>`. `Checkpoint` is an opaque in-memory value exported from the crate root; dropping it frees the saved state.
+
+```rust
+let input = emu.new_cstring("first")?;
+let prepared = emu.checkpoint()?;
+emu.call_function(function, &[input])?;
+emu.rewind(&prepared)?;
+emu.write_bytes(input, b"other\0")?;
+emu.call_function(function, &[input])?;
+```
+
+Load a library before taking a checkpoint so the CPU architecture is known. `checkpoint` and `rewind` work only between calls. A JNI handler, debugger stop or nested call gets `checkpoint and rewind work only between calls`; a suspended call is still running.
+
+Rewind restores:
+
+- All CPU registers, the current thread identity, saved guest threads and their registers, PCs and waits, thread IDs and virtual scheduling time.
+- Memory mappings, permissions and bytes, including allocations, stacks, TLS and library data. Later mappings and libraries disappear; later host allocations and JNI handles are no longer live, and their addresses and handle numbers can be reused.
+- Loaded modules and loader state, host function stubs, symbol aliases, library directories, rootfs, properties, process name, host malloc/free state and `dlerror` state.
+- Open files and their offsets. Files reopen and seek on each rewind, so reads in one run or copy never move the checkpoint's offset. Keep the rootfs files available and unchanged.
+- The fixed clock and its elapsed counter, and the seeded random generator including partly consumed output. Host clock/random values still come from the host when those settings were omitted.
+- JNI handles, objects, classes, members, registered natives, references and exceptions. Object graphs are copied deeply, preserving aliases and cycles, including inside object arrays. `new_object`'s `Object::User` payload (`Rc<dyn Any>`) is shared: changes inside that Rust payload remain visible across rewinds and copies.
+
+Breakpoints, watchpoints, trace settings, coverage counts, the event handler, translation-cache size and the JNI crash-history ring stay with the target emulator. Reset coverage explicitly with `reset_coverage()` when comparing runs. Trace selections are reapplied when the module list changes. Changed mappings and pages lose their translated code; unchanged pages in matching mappings keep it warm. Checkpoints do not use Unicorn's built-in memory snapshot mode, so guest `mprotect`, `munmap` and thread switching keep working.
+
+Create an independent instance from the same checkpoint:
+
+```rust
+let mut copy = Emulator::builder().build()?;
+copy.rewind(&prepared)?;
+```
+
+A fresh emulator creates its CPU for the checkpoint's architecture. An existing CPU must have the same architecture; a mismatch error names both. The copy keeps its own debugger, trace, event and cache settings. Shared read-only library mappings retain the same `Arc<Image>`; writable memory and other private mappings are copied. Each checkpoint and copy therefore costs about the writable bytes, plus private read-only pages, JNI objects, thread contexts and host bookkeeping. Copies remain usable after the original emulator and checkpoint are dropped.
+
+Rust handlers and policies live outside the emulator. Save `policy.clone()` beside a checkpoint and restore that clone alongside `rewind`; cloning a `Policy` includes its current `values` sequence positions. Save any other handler state yourself.
+
+In serve, `{"cmd":"checkpoint"}` returns a session-local numeric ID, starting at 1 and increasing without reuse. `{"cmd":"rewind","id":1}` restores it and returns `null`; `{"cmd":"drop_checkpoint","id":1}` frees it and returns `null`. Unknown or dropped IDs error with `no checkpoint N`. Serve also captures and restores its policy's sequence positions. These commands are recorded and replayed like ordinary commands. The recording journal and replay cursor always continue forward; rewinding guest state never rewinds either stream.
+
 ### Crash reports and locations
 
 Guest failures carry a `Crash`. Its `Display` is the same error message; `report()` adds the thread, backtrace, registers, stack and recent JNI calls:
@@ -182,7 +221,7 @@ Change traces during a session with `{"cmd":"trace","jni":true,"syscalls":true,"
 
 Use `{"cmd":"watch","at":"0x40001000","size":4,"kind":"write","log":true}` to record hits throughout a call. Log hits go to stderr as text or JSON according to `--log-format`, just like traces, and never ask a `break` question. Omitting `log` or setting it to `false` selects stop mode.
 
-Debugger stops arrive as `{"break": ...}` questions. The fields are `reason` (`breakpoint`, `watchpoint`, `step` or `finish`), `address` (decimal string, Thumb bit cleared), `location` (from `symbolize`), `thread` (number), and `registers` (the same object, in register table order, as `registers` and a crash). Watchpoint stops also have `watch: {pc, location, address, size, write, value}`: `pc`, `address` and `value` are decimal strings, `size` is a number, `write` is a boolean, and `location` is the `symbolize` text of `pc`. Other stops omit `watch`. While stopped, any command can run, including a nested `call_function`. Resume the innermost stop with `continue`, `step`, `finish`, `return` (with a decimal string `value`), or `abort`. These have the same behavior as Rust's `Resume`; they have no separate reply. The original command continues and ends with its own `ok` or `error`.
+Debugger stops arrive as `{"break": ...}` questions. The fields are `reason` (`breakpoint`, `watchpoint`, `step` or `finish`), `address` (decimal string, Thumb bit cleared), `location` (from `symbolize`), `thread` (number), and `registers` (the same object, in register table order, as `registers` and a crash). Watchpoint stops also have `watch: {pc, location, address, size, write, value}`: `pc`, `address` and `value` are decimal strings, `size` is a number, `write` is a boolean, and `location` is the `symbolize` text of `pc`. Other stops omit `watch`. While stopped, any command can run, including a nested `call_function`, except `checkpoint` and `rewind`, which need the call to have ended (see [Checkpoints and rewind](DEBUGGING.md#checkpoints-and-rewind)). Resume the innermost stop with `continue`, `step`, `finish`, `return` (with a decimal string `value`), or `abort`. These have the same behavior as Rust's `Resume`; they have no separate reply. The original command continues and ends with its own `ok` or `error`.
 
 A short exchange after loading SignUtil and creating the arguments (register objects abbreviated; Java questions during `finish` are answered as in [README.md](README.md#serve-drive-it-from-your-program)):
 
@@ -234,6 +273,9 @@ A resume command with no stop open errors with `no breakpoint stop is waiting`. 
 | `backtrace` | | frames, in the same JSON as a crash's `backtrace` |
 | `modules` | | list of `{name, path, base, size}`, in load order; base and size are decimal strings |
 | `maps` | | list of `{start, end, perms, name}`, sorted by start; start and exclusive end are decimal strings |
+| `checkpoint` | | numeric checkpoint ID (1, 2, 3, ... per session); captures guest state and policy sequence positions between calls |
+| `rewind` | `id` (number) | `null`; restores the checkpoint and policy positions between calls; unknown IDs error with `no checkpoint N` |
+| `drop_checkpoint` | `id` (number) | `null`; frees the checkpoint; unknown IDs error with `no checkpoint N` |
 | `snapshot` | `path` (relative to the serve process's directory) | `null`; saves all guest memory, registers and modules, between calls or while stopped |
 | `continue` / `step` / `finish` / `abort` | | (resumes the open stop) |
 | `return` | `value` (decimal string) | (returns from the stopped function) |

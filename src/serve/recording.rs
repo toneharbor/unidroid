@@ -21,6 +21,8 @@ pub fn record(
         fatal: false,
         journal: Some(journal),
         policy,
+        checkpoints: Default::default(),
+        next_checkpoint: 0,
     };
     session.run(&mut emu)
 }
@@ -37,6 +39,8 @@ pub fn replay(file: impl BufRead, builder: EmulatorBuilder) -> Result<usize> {
         fatal: false,
         journal: Some(journal.clone()),
         policy,
+        checkpoints: Default::default(),
+        next_checkpoint: 0,
     };
     session.run(&mut emu)?;
     Ok(journal.borrow().commands)

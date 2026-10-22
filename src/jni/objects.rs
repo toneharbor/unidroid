@@ -1,6 +1,94 @@
-use super::{Handle, MEMBER_ID_BASE, Object, PrimitiveType, Reference};
+use super::{Handle, JniState, MEMBER_ID_BASE, Object, PrimitiveType, Reference};
 use crate::{Emulator, Result};
-use std::{any::Any, cell::RefCell, rc::Rc};
+use std::{
+    any::Any,
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
+
+impl Clone for JniState {
+    fn clone(&self) -> Self {
+        fn copy(
+            object: &Rc<RefCell<Object>>,
+            seen: &mut HashMap<*const RefCell<Object>, Rc<RefCell<Object>>>,
+        ) -> Rc<RefCell<Object>> {
+            let address = Rc::as_ptr(object);
+            if let Some(copied) = seen.get(&address) {
+                return copied.clone();
+            }
+            let mut value = object.borrow().clone();
+            // Register a placeholder before descending so cycles keep their identity.
+            let copied = Rc::new(RefCell::new(Object::ObjectArray(Vec::new(), String::new())));
+            seen.insert(address, copied.clone());
+            if let Object::ObjectArray(items, _) = &mut value {
+                for item in items.iter_mut().flatten() {
+                    *item = copy(item, seen);
+                }
+            }
+            *copied.borrow_mut() = value;
+            copied
+        }
+        let mut seen = HashMap::new();
+        Self {
+            objects: self
+                .objects
+                .iter()
+                .map(|(&handle, reference)| {
+                    (
+                        handle,
+                        Reference {
+                            object: copy(&reference.object, &mut seen),
+                            scope: reference.scope,
+                        },
+                    )
+                })
+                .collect(),
+            classes: self
+                .classes
+                .iter()
+                .map(|(name, (handle, object))| (name.clone(), (*handle, copy(object, &mut seen))))
+                .collect(),
+            superclasses: self.superclasses.clone(),
+            members: self.members.clone(),
+            member_ids: self.member_ids.clone(),
+            natives: self.natives.clone(),
+            next_handle: self.next_handle,
+            scope: self.scope,
+            env: self.env,
+            vm: self.vm,
+            weak: self.weak.clone(),
+            pending: self.pending,
+            history: Default::default(),
+        }
+    }
+}
+impl JniState {
+    pub(crate) fn rewind(&mut self, saved: &Self) {
+        let history = std::mem::take(&mut self.history);
+        *self = saved.clone();
+        self.history = history;
+    }
+}
+impl Drop for JniState {
+    fn drop(&mut self) {
+        // Each state owns its graph. Break array cycles when replacing or dropping it.
+        let mut pending: Vec<_> = self
+            .objects
+            .values()
+            .map(|r| r.object.clone())
+            .chain(self.classes.values().map(|(_, object)| object.clone()))
+            .collect();
+        let mut seen = HashSet::new();
+        while let Some(object) = pending.pop() {
+            if seen.insert(Rc::as_ptr(&object))
+                && let Object::ObjectArray(items, _) = &mut *object.borrow_mut()
+            {
+                pending.extend(std::mem::take(items).into_iter().flatten());
+            }
+        }
+    }
+}
 
 impl Emulator {
     pub(super) fn insert_ref(&mut self, object: Rc<RefCell<Object>>, scope: usize) -> Handle {

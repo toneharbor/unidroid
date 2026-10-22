@@ -40,6 +40,13 @@ pub(super) enum Command {
         #[serde(default)]
         reset: bool,
     },
+    Checkpoint,
+    Rewind {
+        id: u64,
+    },
+    DropCheckpoint {
+        id: u64,
+    },
     Snapshot {
         path: String,
     },

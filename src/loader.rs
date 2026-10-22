@@ -1,4 +1,7 @@
-use crate::{Emulator, HostFunction, Image, Loaded, Module, Region, Result, page_down, page_up};
+use crate::{
+    Emulator, HostFunction, Image, Loaded, Module, Region, Result, SharedMapping, page_down,
+    page_up,
+};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -109,7 +112,11 @@ impl Emulator {
             self.regions.push(Region {
                 start,
                 end,
-                shared: !private,
+                shared: (!private).then(|| SharedMapping {
+                    image: image.clone(),
+                    start,
+                    file_offset: page_down(segment.p_offset) as usize,
+                }),
             });
         }
         let id = Module(self.modules.len());

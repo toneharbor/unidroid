@@ -41,6 +41,7 @@ pub(crate) enum Mode {
     Replaying(Box<dyn Replay>),
 }
 
+#[derive(Clone)]
 struct SplitMix64 {
     state: u64,
     bytes: [u8; 8],
@@ -63,23 +64,31 @@ impl SplitMix64 {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct Source {
-    pub mode: Mode,
-    random: Option<File>,
+#[derive(Clone, Default)]
+pub(crate) struct State {
     pub fixed_clock: Option<i64>,
     elapsed_ns: u64,
     seeded_random: Option<SplitMix64>,
 }
+
+#[derive(Default)]
+pub(crate) struct Source {
+    pub mode: Mode,
+    random: Option<File>,
+    pub state: State,
+}
 impl Source {
     pub fn new(fixed_clock: Option<i64>, random_seed: Option<u64>) -> Self {
         Self {
-            fixed_clock,
-            seeded_random: random_seed.map(|state| SplitMix64 {
-                state,
-                bytes: [0; 8],
-                position: 8,
-            }),
+            state: State {
+                fixed_clock,
+                elapsed_ns: 0,
+                seeded_random: random_seed.map(|state| SplitMix64 {
+                    state,
+                    bytes: [0; 8],
+                    position: 8,
+                }),
+            },
             ..Self::default()
         }
     }
@@ -87,16 +96,16 @@ impl Source {
         if let Mode::Replaying(replay) = &mut self.mode {
             return replay.time(clock);
         }
-        let time = if let Some(seconds) = self.fixed_clock {
+        let time = if let Some(seconds) = self.state.fixed_clock {
             let time = Time {
                 clock,
                 sec: match clock {
                     Clock::Realtime => seconds,
                     Clock::Monotonic => 1,
-                } + (self.elapsed_ns / 1_000_000_000) as i64,
-                nsec: (self.elapsed_ns % 1_000_000_000) as i64,
+                } + (self.state.elapsed_ns / 1_000_000_000) as i64,
+                nsec: (self.state.elapsed_ns % 1_000_000_000) as i64,
             };
-            self.elapsed_ns += 1_000;
+            self.state.elapsed_ns += 1_000;
             time
         } else {
             let mut time = libc::timespec {
@@ -129,7 +138,7 @@ impl Source {
             buffer[..bytes.len()].copy_from_slice(&bytes);
             return Ok(bytes.len());
         }
-        let count = if let Some(random) = &mut self.seeded_random {
+        let count = if let Some(random) = &mut self.state.seeded_random {
             random.fill(buffer);
             buffer.len()
         } else {

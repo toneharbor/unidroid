@@ -1,7 +1,7 @@
 use crate::{Emulator, MMAP_END, MMAP_START, Prot, Region, Result, page_up};
 use std::{fs::File, io::SeekFrom, path::Component};
 mod files;
-pub(crate) use files::GuestFile;
+pub(crate) use files::{FileState, GuestFile};
 impl Emulator {
     pub(crate) fn syscall(&mut self, guest_nr: u64, mut a: [u64; 6], pc: u64) -> Result<u64> {
         let nr = self
@@ -92,8 +92,10 @@ impl Emulator {
                 }
             }
             79 | 80 => {
-                let stat =
-                    |file: &GuestFile| file.stat(self.architecture(), self.source.fixed_clock).ok();
+                let stat = |file: &GuestFile| {
+                    file.stat(self.architecture(), self.source.state.fixed_clock)
+                        .ok()
+                };
                 let metadata = if nr == 80 {
                     self.files.get(&a[0]).and_then(stat)
                 } else {
@@ -265,7 +267,7 @@ impl Emulator {
                 self.regions.push(Region {
                     start: address,
                     end: address + length,
-                    shared: false,
+                    shared: None,
                 });
                 address
             }
@@ -305,7 +307,7 @@ impl Emulator {
         (cursor + length <= MMAP_END).then_some(cursor)
     }
 
-    fn open_guest(&self, path: &str) -> std::io::Result<GuestFile> {
+    pub(super) fn open_guest(&self, path: &str) -> std::io::Result<GuestFile> {
         if path == "/dev/urandom" || path == "/dev/random" {
             return Ok(GuestFile::Random { path: path.into() });
         }
@@ -326,7 +328,7 @@ impl Emulator {
             path: path.into(),
         })
     }
-    fn unmap(&mut self, start: u64, size: u64) -> Result<()> {
+    pub(super) fn unmap(&mut self, start: u64, size: u64) -> Result<()> {
         let end = start + size;
         for region in self.cpu()?.mem_regions()? {
             let lo = start.max(region.begin);

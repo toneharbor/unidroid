@@ -60,6 +60,7 @@ const ARRAY_TYPES: [PrimitiveType; 8] = [
     PrimitiveType::Double,
 ];
 #[allow(clippy::enum_variant_names)]
+#[derive(Clone)]
 enum Object {
     Class(String),
     String(Vec<u16>),

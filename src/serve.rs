@@ -1,7 +1,10 @@
 use crate::{Emulator, Handle, JniCall, JniHandler, JniValue, Module, Policy, Result};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use serde_json::{Value, json};
-use std::io::{BufRead, Write};
+use std::{
+    collections::HashMap,
+    io::{BufRead, Write},
+};
 
 mod options;
 pub use options::Options;
@@ -32,6 +35,8 @@ pub fn serve(
         fatal: false,
         journal: None,
         policy,
+        checkpoints: HashMap::new(),
+        next_checkpoint: 0,
     };
     session.run(emu)
 }
@@ -44,6 +49,8 @@ struct Session<R, W> {
     fatal: bool,
     journal: Option<journal::Shared>,
     policy: Option<Policy>,
+    checkpoints: HashMap<u64, (crate::Checkpoint, Option<Policy>)>,
+    next_checkpoint: u64,
 }
 impl<R: BufRead, W: Write> Session<R, W> {
     fn run(&mut self, emu: &mut Emulator) -> Result<()> {
@@ -175,6 +182,23 @@ impl<R: BufRead, W: Write> Session<R, W> {
                     "location": block.location,
                     "count": block.count,
                 })).collect::<Vec<_>>())
+            }
+            Command::Checkpoint => {
+                let checkpoint = emu.checkpoint()?;
+                self.next_checkpoint += 1;
+                self.checkpoints.insert(self.next_checkpoint, (checkpoint, self.policy.clone()));
+                json!(self.next_checkpoint)
+            }
+            Command::Rewind { id } => {
+                let (checkpoint, policy) = self.checkpoints.get(&id)
+                    .ok_or_else(|| format!("no checkpoint {id}"))?;
+                emu.rewind(checkpoint)?;
+                self.policy = policy.clone();
+                Value::Null
+            }
+            Command::DropCheckpoint { id } => {
+                self.checkpoints.remove(&id).ok_or_else(|| format!("no checkpoint {id}"))?;
+                Value::Null
             }
             Command::Snapshot { path } => {
                 emu.snapshot()?.save(path)?;

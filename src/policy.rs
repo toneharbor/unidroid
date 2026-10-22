@@ -9,14 +9,14 @@ pub(crate) mod value;
 pub use handler::PolicyHandler;
 
 /// Ordered Java answers. Sequence positions belong to this policy, not its handlers.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
     #[serde(deserialize_with = "parse::rules")]
     rules: Vec<Rule>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Rule {
     #[serde(default, skip_serializing_if = "Option::is_none")]

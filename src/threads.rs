@@ -1,6 +1,6 @@
-use crate::{Emulator, Result};
+use crate::{CpuData, Emulator, Result};
 use std::collections::VecDeque;
-use unicorn_engine::Context;
+use unicorn_engine::{Context, Unicorn};
 
 pub(crate) const MAIN_TID: u32 = 1234;
 // About 10,000 A64 or ARM instructions; Thumb code runs more per slice.
@@ -19,7 +19,7 @@ pub(crate) struct Wait {
     order: u64,
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub(crate) enum Action {
     #[default]
     Continue,
@@ -41,7 +41,7 @@ pub(crate) struct Threads {
     next_tid: u32,
     time: u128,
     wait_order: u64,
-    slice_hook_installed: bool,
+    pub(crate) slice_hook_installed: bool,
     pub depth: usize,
     pub action: Action,
 }
@@ -65,6 +65,39 @@ impl Default for Threads {
 }
 
 impl Threads {
+    pub(crate) fn copy(&self, cpu: &mut Unicorn<'_, CpuData>) -> Result<Self> {
+        let current = cpu.context_init()?;
+        let saved = self
+            .saved
+            .iter()
+            .map(|thread| {
+                cpu.context_restore(&thread.context)?;
+                Ok(SavedThread {
+                    identity: thread.identity,
+                    context: cpu.context_init()?,
+                    pc: thread.pc,
+                    wait: thread.wait,
+                })
+            })
+            .collect::<Result<_>>();
+        // Restore even if copying a context failed.
+        cpu.context_restore(&current)?;
+        Ok(Self {
+            saved: saved?,
+            current: self.current,
+            next_tid: self.next_tid,
+            time: self.time,
+            wait_order: self.wait_order,
+            slice_hook_installed: false,
+            depth: self.depth,
+            action: self.action,
+        })
+    }
+
+    pub(crate) fn has_saved(&self) -> bool {
+        !self.saved.is_empty()
+    }
+
     pub fn tid(&self) -> u32 {
         self.current.tid
     }
@@ -80,6 +113,25 @@ impl Threads {
 }
 
 impl Emulator {
+    pub(crate) fn install_thread_slice_hook(&mut self) -> Result<()> {
+        if !self.threads.slice_hook_installed {
+            let uc = self.cpu_mut()?;
+            uc.add_block_hook(1, 0, |uc, _, size| {
+                let remaining = &mut uc.get_data_mut().slice_remaining;
+                if *remaining == 0 {
+                    return;
+                }
+                *remaining = remaining.saturating_sub(u64::from(size));
+                if *remaining == 0 {
+                    let _ = uc.emu_stop();
+                }
+            })?;
+            uc.ctl_flush_tb()?;
+            self.threads.slice_hook_installed = true;
+        }
+        Ok(())
+    }
+
     pub(crate) fn clone_thread(&mut self, a: [u64; 6]) -> Result<u64> {
         const CLONE_VM: u64 = 0x100;
         const CLONE_THREAD: u64 = 0x10000;
@@ -104,21 +156,7 @@ impl Emulator {
             self.write_bytes(a[4], &tid.to_le_bytes())?;
         }
         let pc = self.restart_pc()?.0;
-        if !self.threads.slice_hook_installed {
-            let uc = self.cpu_mut()?;
-            uc.add_block_hook(1, 0, |uc, _, size| {
-                let remaining = &mut uc.get_data_mut().slice_remaining;
-                if *remaining == 0 {
-                    return;
-                }
-                *remaining = remaining.saturating_sub(u64::from(size));
-                if *remaining == 0 {
-                    let _ = uc.emu_stop();
-                }
-            })?;
-            uc.ctl_flush_tb()?;
-            self.threads.slice_hook_installed = true;
-        }
+        self.install_thread_slice_hook()?;
         self.threads.saved.push_back(SavedThread {
             identity: Identity {
                 tid,

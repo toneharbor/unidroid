@@ -102,11 +102,9 @@ impl Emulator {
     pub fn write_bytes(&mut self, address: u64, bytes: &[u8]) -> Result<()> {
         // Unicorn's host write API bypasses guest permissions. Never let it
         // write through a read-only host mmap; guest mprotect privatizes first.
-        if self
-            .regions
-            .iter()
-            .any(|r| r.shared && address < r.end && address + bytes.len() as u64 > r.start)
-        {
+        if self.regions.iter().any(|r| {
+            r.shared.is_some() && address < r.end && address + bytes.len() as u64 > r.start
+        }) {
             return Err(uc_error::WRITE_PROT.into());
         }
         self.cpu_mut()?.mem_write(address, bytes)?;
@@ -143,7 +141,7 @@ impl Emulator {
         for region in std::mem::take(&mut self.regions) {
             let lo = start.max(region.start);
             let hi = end.min(region.end);
-            if lo < hi && region.shared && permissions.0 & Prot::WRITE.0 != 0 {
+            if lo < hi && region.shared.is_some() && permissions.0 & Prot::WRITE.0 != 0 {
                 let bytes = self.read_bytes(lo, (hi - lo) as usize)?;
                 self.cpu_mut()?.mem_unmap(lo, hi - lo)?;
                 self.cpu_mut()?.mem_map(lo, hi - lo, permissions)?;
@@ -157,7 +155,7 @@ impl Emulator {
                 regions.push(Region {
                     start: lo,
                     end: hi,
-                    shared: false,
+                    shared: None,
                 });
                 if hi < region.end {
                     regions.push(Region {

@@ -1,6 +1,8 @@
 mod arch;
 mod builder;
 pub use builder::EmulatorBuilder;
+mod checkpoint;
+pub use checkpoint::Checkpoint;
 mod debug;
 mod dl;
 mod elf;
@@ -61,6 +63,7 @@ fn page_down(n: u64) -> u64 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Module(pub usize);
+#[derive(Clone)]
 struct Loaded {
     app: bool,
     path: PathBuf,
@@ -78,7 +81,18 @@ struct Loaded {
 struct Region {
     start: u64,
     end: u64,
-    shared: bool,
+    shared: Option<SharedMapping>,
+}
+#[derive(Clone)]
+struct SharedMapping {
+    image: Arc<Image>,
+    start: u64,
+    file_offset: usize,
+}
+impl SharedMapping {
+    fn offset(&self, address: u64) -> usize {
+        self.file_offset + (address - self.start) as usize
+    }
 }
 #[derive(Clone)]
 enum HostFunction {
@@ -148,7 +162,7 @@ pub struct Emulator {
     watchpoints: debug::watch::Watchpoints,
 }
 impl Emulator {
-    fn setup_cpu(&mut self, arch: Architecture) -> Result<()> {
+    fn create_cpu(&mut self, arch: Architecture) -> Result<()> {
         let (cpu_arch, mode) = arch.cpu();
         let mut uc = Unicorn::new_with_data(cpu_arch, mode, CpuData::default())?;
         // Set before the first CPU access: this allocates Unicorn's TCG cache.
@@ -175,6 +189,13 @@ impl Emulator {
             });
             false
         })?;
+        self.uc = Some(uc);
+        self.arch = Some(arch);
+        Ok(())
+    }
+    fn setup_cpu(&mut self, arch: Architecture) -> Result<()> {
+        self.create_cpu(arch)?;
+        let uc = self.cpu_mut()?;
         uc.mem_map(TRAMPOLINE, TRAMPOLINE_SIZE, Prot::READ | Prot::EXEC)?;
         uc.mem_map(RETURN, PAGE, Prot::READ | Prot::EXEC)?;
         uc.mem_map(STACK, STACK_SIZE, Prot::READ | Prot::WRITE)?;
@@ -223,8 +244,6 @@ impl Emulator {
             uc.mem_write(0xffff0fe4, &0xe12fff1eu32.to_le_bytes())?; // bx lr
             uc.mem_write(0xffff0ffc, &5u32.to_le_bytes())?;
         }
-        self.uc = Some(uc);
-        self.arch = Some(arch);
         self.setup_tls(&self.process_name.clone())?;
         let property = self.stub(HostFunction::Property)?;
         self.overrides
