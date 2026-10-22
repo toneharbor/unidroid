@@ -159,6 +159,14 @@ fn inspect(options: Options, lib: PathBuf, probe: bool) -> Result<ExitCode> {
     for (class, method, address) in natives {
         println!("  {class}.{method} at {}", emu.location(address));
     }
+    println!("Crypto constants:");
+    let constants = emu.crypto_constants()?;
+    if constants.is_empty() {
+        println!("  (none)");
+    }
+    for constant in constants {
+        println!("  {} at {}", constant.name, constant.location);
+    }
     if probe {
         println!("Probed calls:");
         if answers.calls().is_empty() {

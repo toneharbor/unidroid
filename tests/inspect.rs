@@ -204,8 +204,35 @@ fn inspect_reports_arm32_exports_and_no_registered_natives() {
             .lines()
             .any(|line| line == "  Java_com_anjuke_mobile_sign_SignUtil_getSign0")
     );
-    let natives = stdout.split_once("Registered natives:\n").unwrap().1;
+    let natives = stdout
+        .split_once("Registered natives:\n")
+        .unwrap()
+        .1
+        .split_once("Crypto constants:\n")
+        .unwrap()
+        .0;
     assert_eq!(natives, "  (none)\n");
+}
+
+#[test]
+fn inspect_prints_crypto_constants_before_probed_calls() {
+    let output = Command::new(env!("CARGO_BIN_EXE_unidroid"))
+        .args([
+            "inspect",
+            "--rootfs",
+            "rootfs",
+            "--probe",
+            "tests/fixtures/armeabi-v7a/libsignutil.so",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let registered = stdout.find("Registered natives:\n").unwrap();
+    let crypto = stdout.find("Crypto constants:\n").unwrap();
+    let probed = stdout.find("Probed calls:\n").unwrap();
+    assert!(registered < crypto && crypto < probed);
+    assert!(stdout.contains("Crypto constants:\n  Base64 alphabet at libc.so+"));
 }
 
 #[test]
@@ -225,6 +252,9 @@ fn inspect_lists_registered_natives_in_order() {
         .split_once("Registered natives:\n")
         .unwrap()
         .1
+        .split_once("Crypto constants:\n")
+        .unwrap()
+        .0
         .lines()
         .collect();
     assert!(natives.contains(

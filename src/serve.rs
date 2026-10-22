@@ -148,6 +148,15 @@ impl<R: BufRead, W: Write> Session<R, W> {
                     "location": crate::debug::memory_location(address, &modules, maps.iter().find(|m| m.start <= address && address < m.end)),
                 })).collect::<Vec<_>>())
             }
+            Command::Crypto => json!(emu
+                .crypto_constants()?
+                .into_iter()
+                .map(|constant| json!({
+                    "name": constant.name,
+                    "address": constant.address.to_string(),
+                    "location": constant.location,
+                }))
+                .collect::<Vec<_>>()),
             Command::Snapshot { path } => {
                 emu.snapshot()?.save(path)?;
                 Value::Null

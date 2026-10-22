@@ -33,6 +33,7 @@ pub(super) enum Command {
     Search {
         base64: String,
     },
+    Crypto,
     Snapshot {
         path: String,
     },

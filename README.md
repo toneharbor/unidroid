@@ -90,7 +90,7 @@ unhandled JNI call: CallStaticObjectMethodV java/lang/System->getProperty(Ljava/
 
 Add the matching method to `JniHandler` and run again. It's the same idea as setting up the environment in unidbg.
 
-For crash reports, debugger controls, memory inspection and traces, see [the library debugging reference](DEBUGGING.md#library).
+For crash reports, debugger controls, memory inspection and traces, see [the library debugging reference](DEBUGGING.md#library). `emu.crypto_constants()` scans mapped memory when called and names known algorithm tables and constants. It sees values stored as data, including tables made during `JNI_OnLoad`; values built by instructions and custom Base64 alphabets are not found.
 
 32-bit or 64-bit is picked by the first library you load. There's no setting for it. Load that library before `malloc`, `read_bytes`, `write_bytes` or `call_function`; before it, they return an error. One emulator runs one kind: loading a 64-bit library after a 32-bit one is an error.
 
@@ -136,7 +136,7 @@ It lands at `target/release/unidroid`. It has four subcommands.
 target/release/unidroid inspect --rootfs rootfs libfoo.so
 ```
 
-No code needed. It prints what the library is, which libraries it needs, its `Java_` functions, and whether it has `JNI_OnLoad`. Then it runs `JNI_OnLoad` and prints each Java call it makes (on stderr). It stops at the first one, because nothing answers it yet. Last, it lists the methods registered through `RegisterNatives`. Now you know what to call and which Java calls you'll have to answer.
+No code needed. It prints what the library is, which libraries it needs, its `Java_` functions, and whether it has `JNI_OnLoad`. Then it runs `JNI_OnLoad` and prints each Java call it makes (on stderr). It stops at the first one, because nothing answers it yet. Last, it lists the methods registered through `RegisterNatives` and the crypto constants found in mapped memory. Now you know what to call, which Java calls you'll have to answer and which algorithm tables to inspect.
 
 For the SignUtil sample:
 
@@ -150,6 +150,8 @@ JNI_OnLoad: yes
 JNI_OnLoad returned 0x10004
 Registered natives:
   (none)
+Crypto constants:
+  Base64 alphabet at libc.so+0x6caa0
 ```
 
 This one asks Java nothing in `JNI_OnLoad`, so it runs to the end. Its two Java methods are plain `Java_` exports.
@@ -257,6 +259,7 @@ Commands:
 | `malloc` / `free` | `size` / `address` | address / `null` |
 | `new_cstring` | `value` | address |
 | `read` / `write` | `address`, `size` / `address`, `base64` | base64 / `null` |
+| `crypto` | | list of `{name, address, location}` constants; address is a decimal string |
 | `new_string` / `string` | `value` / `handle` | handle / the string |
 | `new_array` / `array` | `type` (`Z B C S I J F D`), `base64` / `handle` | handle / base64 |
 | `new_object_array` / `object_array` | `class`, `items` / `handle` | handle / list of handles |

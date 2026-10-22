@@ -50,6 +50,8 @@ For a plain C call, use `emu.call_function_with(&mut handler, function, args)?` 
 
 `emu.search(pattern: &[u8])?` returns matching addresses in ascending order across all mapped memory, up to `SEARCH_LIMIT` (1000). Matches can overlap or span adjacent mappings. An empty pattern errors with `empty search pattern`. Each call reads the current memory mapping by mapping and keeps no copies afterward. A full list of 1000 means there may be more: narrow the pattern. Serve's `search` adds the same locations as snapshot diff, including library offsets and names such as `[host malloc]`.
 
+`emu.crypto_constants()?` returns `CryptoConstant` entries for known hash, cipher, checksum and encoding constants found in mapped memory. Each entry has the name, address and a location such as `libfoo.so+0x1234` or `0x40001000 [host malloc]`; results are in address order. It reads memory only for the call and keeps no scan state. It finds tables stored as data, including tables built during initialization, but not values assembled by instructions such as `movz`/`movk` or `movw`/`movt`. A custom Base64 alphabet is not recognized.
+
 `emu.snapshot()?` captures the current thread ID, general registers, modules and every mapped byte, including code and memory without read permission. `Snapshot::save(path)` writes a JSON header followed by raw memory; `Snapshot::load(path)` reads it back. `before.diff(&after)` returns changed registers, newly mapped and unmapped ranges, and changed bytes with locations. It compares by address even when mappings split, ignores permission changes, and merges byte changes separated by fewer than eight unchanged bytes. `diff.report()` formats all four sections as text:
 
 ```rust
@@ -174,6 +176,7 @@ A resume command with no stop open errors with `no breakpoint stop is waiting`. 
 | `watch` | `at` (text for `resolve`), `size` (number), `kind` (`read`, `write` or `access`) | watched address (decimal string) |
 | `unwatch` | `at` (text for `resolve`) | `null` |
 | `search` | `base64` (nonempty byte pattern) | up to 1000 `{address, location}` matches in address order; address is a decimal string |
+| `crypto` | | list of `{name, address, location}` constants; address is a decimal string |
 | `resolve` | `at` (module + hex offset, absolute hex or exported symbol) | address (decimal string) |
 | `registers` | | register object, values as decimal strings, in table order |
 | `set_register` | `name`, `value` (decimal string) | `null` |

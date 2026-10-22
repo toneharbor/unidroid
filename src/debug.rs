@@ -6,6 +6,7 @@ use unicorn_engine::{RegisterARM, RegisterARM64};
 pub(crate) mod calls;
 pub(crate) mod code;
 pub(crate) mod control;
+pub(crate) mod crypto;
 pub(crate) mod events;
 pub(crate) mod imports;
 pub(crate) mod maps;

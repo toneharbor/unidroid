@@ -15,6 +15,7 @@ mod threads;
 pub use debug::{
     Crash, Frame,
     control::{Resume, Stop, StopReason},
+    crypto::CryptoConstant,
     events::{Event, MemoryAccess, Trace},
     maps::Mapping,
     modules::ModuleInfo,

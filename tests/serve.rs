@@ -68,6 +68,8 @@ impl Client {
     }
 }
 
+#[path = "serve/crypto.rs"]
+mod crypto;
 #[path = "serve/debug.rs"]
 mod debug;
 #[path = "serve/errors.rs"]

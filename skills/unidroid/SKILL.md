@@ -21,6 +21,8 @@ Read the architecture, dependencies, `Java_` exports, registered natives and Jav
 
 Treat probe results as a lower bound. `Probe` answers null, zero, false or void. A null can end `JNI_OnLoad` early, so an empty list only describes the path reached with those answers.
 
+Read the `Crypto constants` section as a lead for which algorithm the library uses. Tables built during `JNI_OnLoad` appear there after initialization.
+
 **Done when:** you have the target architecture, entry point and signature, dependency warnings, and the first Java calls or failure reached by both inspections.
 
 ## 2. Drive one call and answer Java
@@ -63,6 +65,7 @@ Pick the row that answers the current question:
 
 | Symptom or question | Tool | What to read |
 |---|---|---|
+| Which algorithm is this? | Serve `crypto` after the call, for tables built at runtime; then `watch` the table's address as `read` | The named constant and its location; at the stop, the code that reads the table. |
 | Which file does it try to open? | `--trace-syscalls` | Path, result, errno and caller. Look for `ENOENT`; ordinary paths outside rootfs are reported as not found. Check the requested path against rootfs. |
 | What does it ask libc or another dependency? | `--trace-imports` | Imported function, argument values and app caller. Follow the call that first receives an unexpected value. |
 | Which Java behavior is missing or wrong? | JNI trace: `--verbose` or serve `trace` with `jni` enabled | Method, signature, arguments and caller. Match these against the driver's answer. |
