@@ -104,6 +104,28 @@ if let Err(error) = emu.call_function(f, &[]) {
 
 `emu.location(address)` stays `libfoo.so+0x1234`. `emu.symbolize(address)` adds a covering function name, like `libc.so+0x1f2a4 (strlen+0x10)`. It uses function symbols with a nonzero size from `.dynsym` and `.symtab`, when present. The symbol table is built on first use and shared between instances.
 
+`emu.add_breakpoint(address)?` stops before the instruction at that address. `emu.remove_breakpoint(address)?` removes it and errors if none is there. Both clear the Thumb bit; adding the same address twice keeps one breakpoint. Breakpoints also work on code that already ran and in any guest thread. With no breakpoints or step active, no debugger hook is installed.
+
+A Thumb `IT` instruction and the instructions it makes conditional run as one step. A breakpoint hit inside an `IT` block is reported at the first instruction after the block, or at the next Unicorn stop if the block branches away; a conditional instruction that is skipped does not hit a breakpoint.
+
+Stops go to the running call's `JniHandler::stopped(&mut self, emu: &mut Emulator, stop: &Stop) -> Resume`. The default returns `Resume::Continue`, including for `()` and `Probe`. `Stop` has `reason: StopReason` (`Breakpoint`, `Step` or `Finish`), `address: u64` (Thumb bit cleared) and `thread: u32`. The handler can inspect or change registers and memory, or make a nested call that has stops of its own. Return one of:
+
+| `Resume` | what happens |
+|---|---|
+| `Continue` | run on, skipping the current breakpoint hit once |
+| `Step` | execute one guest instruction, then stop with `Step`; `bl` enters the callee, and entering a host function (JNI, dl or system property) runs that whole host function as one step |
+| `Finish` | save lr and sp; stop with `Finish` in the same thread when `pc == (saved_lr & !1)` and `sp >= saved_sp`, including at the end of a top-level call |
+| `Return(bits)` | return immediately to lr; set arm64 `x0`, or arm32 `r0` to the low 32 bits and `r1` to the high 32 bits |
+| `Abort` | fail the running call with a `Crash` whose message is `stopped by the debugger at <symbolize(address)>` |
+
+`Finish` relies on lr, so use it at a function's first instruction, before the function changes lr. Its stack check prevents stopping at a deeper recursive return. `Return(bits)` is also meant for the first instruction: it replaces the function's result without running the body. This is a function hook.
+
+For a plain C call, use `emu.call_function_with(&mut handler, function, args)?` to receive stops and JNI questions in that handler. It takes the same arguments and returns the same result as `call_function`.
+
+`emu.resolve(text)?` accepts `libfoo.so+0x1234`, an absolute hex address such as `0x50001000`, or an exported symbol name searched in module load order. Errors name the unknown module, bad number or unknown symbol. `emu.modules()` returns `Vec<ModuleInfo>` in load order: each entry has `name: String`, the host `path: PathBuf` recorded at load, `base: u64` and `size: u64`. Its index is the `Module` number.
+
+`emu.register(name)?` reads a register and `emu.set_register(name, value)?` writes it. Names are `x0`–`x28`, `fp`, `lr`, `sp`, `pc`, `nzcv` on arm64; `r0`–`r12`, `sp`, `lr`, `pc`, `cpsr` on arm32; and `d0`–`d31` on both. The `d` registers hold 64-bit floating-point bits and are available through named reads and writes, including serve's `set_register`. Dumps from `registers()`, crash reports, break questions and serve's `registers` list only the general registers, sp, lr, pc and flags, in the order above. An unknown name lists the valid names.
+
 `Trace` has three booleans: `jni`, `syscalls` and `imports`. All default to `false`. Set them with `.trace(Trace { .. })` on the builder, or `emu.set_trace(Trace { .. })?` at runtime. `emu.trace()` reads the settings. Each change replaces all settings. With traces off, no trace hook is installed.
 
 Syscall events show the guest number, arguments, signed result, errno name, instruction location and caller. Import events show calls from app libraries into other modules, including dl, property and unresolved-symbol stubs. The previous executed block in the same guest thread must be in an app library; app PLT stubs count, but internal tail calls within a dependency do not. The caller location comes from lr. They show the first four argument registers, with known C strings quoted and capped at 256 bytes. Dependencies next to an app count as app libraries; dependencies found in rootfs do not.
@@ -275,12 +297,40 @@ The example abbreviates the registers. If a bad JNI answer replaces the command'
 
 Change traces during a session with `{"cmd":"trace","jni":true,"syscalls":true,"imports":false}`. Omitted fields become `false`. `{"cmd":"trace"}` turns all traces off. Log format is chosen when starting the CLI; JSON logs go to stderr and protocol replies go to stdout.
 
+Debugger stops arrive as `{"break": ...}` questions. The fields are `reason` (`breakpoint`, `step` or `finish`), `address` (decimal string, Thumb bit cleared), `location` (from `symbolize`), `thread` (number), and `registers` (the same object, in register table order, as `registers` and a crash). While stopped, any command can run, including a nested `call_function`. Resume the innermost stop with `continue`, `step`, `finish`, `return` (with a decimal string `value`), or `abort`. These have the same behavior as Rust's `Resume`; they have no separate reply. The original command continues and ends with its own `ok` or `error`.
+
+A short exchange after loading SignUtil and creating the arguments (register objects abbreviated; Java questions during `finish` are answered as above):
+
+```text
+→ {"cmd":"break","at":"Java_com_anjuke_mobile_sign_SignUtil_getSign0"}
+← {"ok":"268442540"}
+→ {"cmd":"call_static","class":"com/anjuke/mobile/sign/SignUtil","method":"getSign0(Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/String;I)Ljava/lang/String;","args":[7,8,9,10,10]}
+← {"break":{"reason":"breakpoint","address":"268442540","location":"libsignutil.so+0x1bac (Java_com_anjuke_mobile_sign_SignUtil_getSign0)","thread":1234,"registers":{"pc":"268442540","lr":"131072"}}}
+→ {"cmd":"registers"}
+← {"ok":{"pc":"268442540","lr":"131072"}}
+→ {"cmd":"finish"}
+   ... answer JNI questions ...
+← {"break":{"reason":"finish","address":"131072","location":"0x20000","thread":1234,"registers":{"pc":"131072","r0":"16"}}}
+→ {"cmd":"continue"}
+← {"ok":16}
+```
+
+A resume command with no stop open errors with `no breakpoint stop is waiting`. An open stop expects a resume command; an open JNI question expects `answer` or `unhandled`. Sending the other kind gives an error and leaves the question open. With nested questions, answer or resume the innermost one first.
+
 Commands:
 
 | command | fields | result |
 |---|---|---|
 | `load` | `path` | module number |
 | `trace` | `jni`, `syscalls`, `imports` (booleans, omitted means false) | `null` |
+| `break` / `unbreak` | `at` (text for `resolve`) | address with Thumb bit cleared / `null` |
+| `resolve` | `at` (module + hex offset, absolute hex or exported symbol) | address (decimal string) |
+| `registers` | | register object, values as decimal strings, in table order |
+| `set_register` | `name`, `value` (decimal string) | `null` |
+| `backtrace` | | frames, in the same JSON as a crash's `backtrace` |
+| `modules` | | list of `{name, path, base, size}`, in load order; base and size are decimal strings |
+| `continue` / `step` / `finish` / `abort` | | (resumes the open stop) |
+| `return` | `value` (decimal string) | (returns from the stopped function) |
 | `alias` | `name`, `target` | `null` |
 | `superclass` | `class`, `superclass` | `null` |
 | `onload` | `module` | `JNI_OnLoad`'s return |
@@ -326,7 +376,6 @@ Not supported:
 
 - iOS
 - Signals and `fork`
-- Debugger, inline hooks
 - File access outside `rootfs`. `/dev/urandom` is allowed. Every other path is "not found".
 
 A library's dependencies are looked for first in the folders of the libraries you loaded, then in rootfs. That's how an app's own `lib/arm64-v8a` folder works on a phone, so copy an app's libraries together and load the one you need. `dlopen` from the library searches the same way.

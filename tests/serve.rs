@@ -68,6 +68,12 @@ impl Client {
 mod debug;
 #[path = "serve/errors.rs"]
 mod errors;
+#[path = "serve/sign_debug.rs"]
+mod sign_debug;
+#[path = "serve/stop_errors.rs"]
+mod stop_errors;
+#[path = "serve/stops.rs"]
+mod stops;
 
 #[test]
 fn eof_during_a_question_fails_the_process() {

@@ -16,7 +16,7 @@ pub(crate) struct Imports {
 struct Targets {
     exports: HashMap<u64, Target>,
     apps: Vec<App>,
-    suspended: HashSet<(u32, u64)>,
+    suspended: HashSet<(usize, u32, u64)>,
     blocks: HashMap<u32, Blocks>,
 }
 #[derive(Default)]
@@ -120,9 +120,17 @@ impl Emulator {
             blocks.current = blocks.previous;
         }
         if data.import == Some(pc) {
-            targets.suspended.insert((data.thread, pc));
+            targets.suspended.insert((data.depth, data.thread, pc));
         }
         Ok(())
+    }
+
+    pub(crate) fn discard_suspended_import(&mut self, address: u64) {
+        self.imports.targets.borrow_mut().suspended.remove(&(
+            self.threads.depth,
+            self.threads.tid(),
+            address,
+        ));
     }
 
     pub(crate) fn trace_imports(&mut self, enabled: bool) -> Result<()> {
@@ -144,7 +152,11 @@ impl Emulator {
                     let previous = blocks.current.replace(address);
                     blocks.previous = previous;
                     // A later scheduling hook may have stopped this block before execution.
-                    if targets.suspended.remove(&(thread, address)) {
+                    if targets
+                        .suspended
+                        .remove(&(uc.get_data().depth, thread, address))
+                    {
+                        uc.get_data_mut().import = Some(address);
                         return;
                     }
                     let Some(target) = targets.exports.get(&address) else {

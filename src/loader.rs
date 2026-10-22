@@ -117,6 +117,7 @@ impl Emulator {
         self.write_bytes(info_ptr + 3 * p, &image.phnum.to_le_bytes())?;
         self.modules.push(Loaded {
             app,
+            path: path.to_owned(),
             name: name.clone(),
             image: image.clone(),
             base,

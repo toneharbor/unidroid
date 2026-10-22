@@ -10,6 +10,19 @@ impl Emulator {
             &mut (),
         )
     }
+    pub fn call_function_with(
+        &mut self,
+        handler: &mut dyn JniHandler,
+        function: u64,
+        args: &[u64],
+    ) -> Result<u64> {
+        self.invoke(
+            function,
+            args.iter().map(|&bits| (b'L', bits)),
+            b'L',
+            handler,
+        )
+    }
     pub(crate) fn invoke(
         &mut self,
         function: u64,
@@ -37,35 +50,90 @@ impl Emulator {
     }
     fn run(&mut self, pc: u64, handler: &mut dyn JniHandler) -> Result<u64> {
         self.threads.depth += 1;
+        let mut control = crate::debug::control::RunControl::default();
         let result = self
-            .run_loop(pc, handler)
+            .run_loop(pc, handler, &mut control)
             .map_err(|error| self.crash(error));
+        let cleanup = control.clear_finish(self);
+        let result = result.and_then(|value| cleanup.map(|_| value));
         self.threads.depth -= 1;
         if self.threads.depth == 0 && result.is_err() {
             self.restore_main_thread()?;
         }
         result
     }
-    fn run_loop(&mut self, mut pc: u64, handler: &mut dyn JniHandler) -> Result<u64> {
+    fn run_loop(
+        &mut self,
+        mut pc: u64,
+        handler: &mut dyn JniHandler,
+        control: &mut crate::debug::control::RunControl,
+    ) -> Result<u64> {
         let outermost = self.threads.depth == 1;
         loop {
-            let slice_remaining = if outermost && self.threads.has_runnable() {
+            let mut stepping = control.step == Some(self.threads.tid());
+            let slice_remaining = if !stepping && outermost && self.threads.has_runnable() {
                 threads::SLICE_CODE_BYTES
             } else {
                 0
             };
             let thread = self.threads.tid();
+            let depth = self.threads.depth;
             *self.cpu_mut()?.get_data_mut() = CpuData {
                 slice_remaining,
                 thread,
+                depth,
+                skip_breakpoint: control.skip,
+                finish: control.finish_target(),
                 ..CpuData::default()
             };
-            if let Err(error) = self.cpu_mut()?.emu_start(pc, RETURN, 0, 0) {
-                return Err(self.emulation_error(error));
+            if pc & !1 == RETURN {
+                if !outermost || thread == threads::MAIN_TID {
+                    return self.reg(0);
+                }
+                return Err(format!(
+                    "guest thread {thread} returned to RETURN at {}",
+                    self.location(pc)
+                )
+                .into());
             }
+            let result = self.run_cpu(pc, stepping);
             let (restart, location) = self.restart_pc()?;
             pc = restart;
-            let Some(interrupt) = self.cpu()?.get_data().interrupt else {
+            control.skip = self.cpu()?.get_data().skip_breakpoint;
+            let interrupt = self.cpu()?.get_data().interrupt;
+            let finished = control.finished(self, pc)?;
+            let pending = self.cpu()?.get_data().stop;
+            if pending.is_some() || finished {
+                if self.trace.imports {
+                    self.suspend_import(pc & !1)?;
+                }
+                let reason = if finished || pending == Some(crate::StopReason::Finish) {
+                    crate::StopReason::Finish
+                } else if stepping && self.cpu()?.get_data().step_started {
+                    crate::StopReason::Step
+                } else {
+                    crate::StopReason::Breakpoint
+                };
+                self.cpu_mut()?.get_data_mut().stop = None;
+                pc = control.stopped(self, handler, reason)?;
+                // An IT block can branch out of the hook range and only stop at
+                // an interrupt. Dispatch that instruction after the debugger resumes.
+                if result.is_err() || interrupt.is_none() || pc != restart {
+                    continue;
+                }
+                stepping = control.step == Some(thread);
+            }
+            result?;
+            let Some(interrupt) = interrupt else {
+                if stepping {
+                    if self.trace.imports {
+                        self.suspend_import(pc & !1)?;
+                    }
+                    if !(TRAMPOLINE..RETURN).contains(&(pc & !1)) {
+                        pc = control.stopped(self, handler, crate::StopReason::Step)?;
+                    }
+                    continue;
+                }
                 if pc & !1 == RETURN {
                     if !outermost || self.threads.tid() == threads::MAIN_TID {
                         return self.reg(0);
@@ -96,6 +164,11 @@ impl Emulator {
                     continue;
                 }
                 self.write_host_result(result?)?;
+                if stepping {
+                    pc = self.lr()?;
+                    let reg = self.architecture().pc();
+                    self.cpu_mut()?.reg_write(reg, pc)?;
+                }
             } else {
                 let args = [
                     self.reg(0)?,
@@ -112,12 +185,15 @@ impl Emulator {
                 )?;
                 self.write_reg(0, result)?;
             }
+            if stepping {
+                pc = control.stopped(self, handler, crate::StopReason::Step)?;
+            }
             if outermost && !matches!(self.threads.action, threads::Action::Continue) {
                 pc = self.switch_thread(pc)?;
             }
         }
     }
-    fn emulation_error(&self, error: uc_error) -> Box<dyn std::error::Error> {
+    pub(crate) fn emulation_error(&self, error: uc_error) -> Box<dyn std::error::Error> {
         let pc = self.pc().unwrap_or(0);
         let lr = self.lr().unwrap_or(0);
         let mut message = format!(

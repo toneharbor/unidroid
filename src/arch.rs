@@ -312,7 +312,10 @@ impl Emulator {
         let pc = self.pc()?;
         let thumb = self.architecture() == Architecture::Arm32
             && self.cpu()?.reg_read(Arm::CPSR)? & 32 != 0;
-        Ok((pc | u64::from(thumb), pc - if thumb { 2 } else { 4 }))
+        Ok((
+            pc | u64::from(thumb),
+            pc.wrapping_sub(if thumb { 2 } else { 4 }),
+        ))
     }
     pub(crate) fn reg(&self, index: usize) -> Result<u64> {
         Ok(self.cpu()?.reg_read(self.architecture().gp(index))?)

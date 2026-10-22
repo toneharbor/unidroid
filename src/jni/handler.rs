@@ -11,6 +11,9 @@ pub struct JniCall<'a> {
 }
 
 pub trait JniHandler {
+    fn stopped(&mut self, _emu: &mut Emulator, _stop: &crate::Stop) -> crate::Resume {
+        crate::Resume::Continue
+    }
     fn is_assignable(&mut self, _emu: &mut Emulator, _from: &str, _to: &str) -> Option<bool> {
         None
     }

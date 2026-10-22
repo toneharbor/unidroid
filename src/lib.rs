@@ -13,7 +13,9 @@ mod syscalls;
 mod threads;
 pub use debug::{
     Crash, Frame,
+    control::{Resume, Stop, StopReason},
     events::{Event, Trace},
+    modules::ModuleInfo,
 };
 pub use jni::{Handle, JniCall, JniHandler, JniValue, PrimitiveType};
 
@@ -49,6 +51,7 @@ fn page_down(n: u64) -> u64 {
 pub struct Module(pub usize);
 struct Loaded {
     app: bool,
+    path: PathBuf,
     name: String,
     image: Arc<Image>,
     base: u64,
@@ -118,7 +121,12 @@ struct CpuData {
     memory_access: Option<MemoryAccess>,
     slice_remaining: u64,
     thread: u32,
+    depth: usize,
     import: Option<u64>,
+    stop: Option<StopReason>,
+    step_started: bool,
+    skip_breakpoint: Option<(u32, u64)>,
+    finish: Option<debug::control::FinishTarget>,
 }
 struct MemoryAccess {
     kind: MemType,
@@ -157,6 +165,7 @@ pub struct Emulator {
     jni: jni::JniState,
     threads: threads::Threads,
     imports: debug::imports::Imports,
+    breakpoints: HashMap<u64, unicorn_engine::UcHookId>,
 }
 impl Emulator {
     pub fn builder() -> EmulatorBuilder {
@@ -202,6 +211,7 @@ impl Emulator {
             jni: jni::JniState::default(),
             threads: threads::Threads::default(),
             imports: debug::imports::Imports::default(),
+            breakpoints: HashMap::new(),
         })
     }
     fn setup_cpu(&mut self, arch: Architecture) -> Result<()> {
