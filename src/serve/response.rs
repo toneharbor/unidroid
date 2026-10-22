@@ -45,6 +45,7 @@ pub(super) struct CrashResponse {
     thread: u32,
     registers: Registers,
     backtrace: Value,
+    stack: Vec<[String; 2]>,
 }
 
 pub(super) fn crash_value(crash: &Crash) -> CrashResponse {
@@ -53,6 +54,11 @@ pub(super) fn crash_value(crash: &Crash) -> CrashResponse {
         thread: crash.thread,
         registers: registers_value(&crash.registers),
         backtrace: frames_value(&crash.backtrace),
+        stack: crash
+            .stack
+            .iter()
+            .map(|(address, value)| [address.to_string(), value.to_string()])
+            .collect(),
     }
 }
 

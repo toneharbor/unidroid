@@ -21,6 +21,10 @@ pub(super) enum Command {
     },
     Backtrace,
     Modules,
+    Maps,
+    Snapshot {
+        path: String,
+    },
     Continue,
     Step,
     Finish,

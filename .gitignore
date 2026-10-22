@@ -1,3 +1,4 @@
 /target
 /bench/unidbg-baseline/target
 /bench/unidbg-baseline/cp.txt
+*.snap

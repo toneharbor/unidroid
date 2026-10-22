@@ -16,7 +16,9 @@ pub use debug::{
     Crash, Frame,
     control::{Resume, Stop, StopReason},
     events::{Event, Trace},
+    maps::Mapping,
     modules::ModuleInfo,
+    snapshot::{Change, Diff, Snapshot},
 };
 pub use jni::{Handle, JniCall, JniHandler, JniValue, PrimitiveType};
 
@@ -35,6 +37,7 @@ const TRAMPOLINE: u64 = 0x10000;
 const TRAMPOLINE_SIZE: u64 = 0x10000;
 const TRAMPOLINE_STUBS: usize = 8192;
 const RETURN: u64 = TRAMPOLINE + TRAMPOLINE_SIZE;
+const HOST_MALLOC_START: u64 = 0x40000000;
 pub(crate) const MMAP_START: u64 = 0x50000000;
 pub(crate) const MMAP_END: u64 = 0x60000000;
 const STACK: u64 = 0x70000000;
@@ -202,12 +205,12 @@ impl Emulator {
                 handler: builder.on_event,
             })),
             next_module: 0x10000000,
-            heap: 0x40000000,
-            heap_end: 0x40000000,
+            heap: HOST_MALLOC_START,
+            heap_end: HOST_MALLOC_START,
             brk: BRK_START,
             free_blocks: Vec::new(),
             allocations: HashMap::new(),
-            heap_high_water: 0x40000000,
+            heap_high_water: HOST_MALLOC_START,
             process_name: builder.process_name.clone(),
             dlerror_buf: 0,
             dlerror_pending: false,

@@ -1,12 +1,22 @@
 use crate::{Emulator, Module, Result};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModuleInfo {
     pub name: String,
     pub path: PathBuf,
     pub base: u64,
     pub size: u64,
+}
+
+pub(crate) fn module_location<'a>(
+    address: u64,
+    mut modules: impl Iterator<Item = (&'a str, u64, u64)>,
+) -> Option<String> {
+    modules
+        .find(|&(_, base, size)| address >= base && address < base + size)
+        .map(|(name, base, _)| format!("{name}+0x{:x}", address - base))
 }
 
 impl Emulator {

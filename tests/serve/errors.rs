@@ -62,6 +62,17 @@ fn errors_leave_the_server_ready_for_the_next_command() {
                     .is_some_and(|text| text.parse::<u64>().is_ok())
             }));
             assert!(registers["pc"].is_string());
+            let stack = response["crash"]["stack"].as_array().unwrap();
+            assert_eq!(stack.len(), 32);
+            assert_eq!(stack[0][0], registers["sp"]);
+            let sp = registers["sp"].as_str().unwrap().parse::<u64>().unwrap();
+            let width = if abi == "arm64-v8a" { 8 } else { 4 };
+            for (i, pair) in stack.iter().enumerate() {
+                let pair = pair.as_array().unwrap();
+                assert_eq!(pair.len(), 2);
+                assert_eq!(pair[0], (sp + i as u64 * width).to_string());
+                assert!(pair[1].as_str().unwrap().parse::<u64>().is_ok());
+            }
             assert!(registers[if abi == "arm64-v8a" { "x0" } else { "r0" }].is_string());
             client.request(json!({"cmd":"new_string", "value":"after unanswered question"}));
         }

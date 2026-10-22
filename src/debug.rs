@@ -7,9 +7,13 @@ pub(crate) mod code;
 pub(crate) mod control;
 pub(crate) mod events;
 pub(crate) mod imports;
+pub(crate) mod maps;
 pub(crate) mod modules;
 mod registers;
+pub(crate) mod snapshot;
 mod syscalls;
+
+const STACK_WORDS: usize = 32;
 
 #[derive(Debug, Serialize)]
 pub struct Frame {
@@ -24,6 +28,7 @@ pub struct Crash {
     pub thread: u32,
     pub registers: Vec<(&'static str, u64)>,
     pub backtrace: Vec<Frame>,
+    pub stack: Vec<(u64, u64)>,
 }
 
 impl fmt::Display for Crash {
@@ -51,6 +56,13 @@ impl Crash {
             }
             text.push('\n');
         }
+        for row in self.stack.chunks(4) {
+            let _ = write!(text, "0x{:x}:", row[0].0);
+            for (_, value) in row {
+                let _ = write!(text, " 0x{value:x}");
+            }
+            text.push('\n');
+        }
         text.pop();
         text
     }
@@ -66,7 +78,21 @@ impl Emulator {
             thread: self.threads.tid(),
             registers: self.registers().unwrap_or_default(),
             backtrace: self.backtrace().unwrap_or_default(),
+            stack: self.stack_window().unwrap_or_default(),
         })
+    }
+
+    fn stack_window(&self) -> Result<Vec<(u64, u64)>> {
+        let sp = self.sp()?;
+        let mut words = Vec::new();
+        for i in 0..STACK_WORDS {
+            let address = sp + i as u64 * self.pointer_size();
+            let Ok(value) = self.read_pointer(address) else {
+                break;
+            };
+            words.push((address, value));
+        }
+        Ok(words)
     }
 
     pub fn backtrace(&self) -> Result<Vec<Frame>> {

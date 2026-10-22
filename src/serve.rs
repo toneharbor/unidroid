@@ -127,6 +127,13 @@ impl<R: BufRead, W: Write> Session<R, W> {
             Command::Modules => json!(emu.modules().iter().map(|m| json!({
                 "name": m.name, "path": m.path, "base": m.base.to_string(), "size": m.size.to_string(),
             })).collect::<Vec<_>>()),
+            Command::Maps => json!(emu.maps()?.iter().map(|m| json!({
+                "start": m.start.to_string(), "end": m.end.to_string(), "perms": m.perms, "name": m.name,
+            })).collect::<Vec<_>>()),
+            Command::Snapshot { path } => {
+                emu.snapshot()?.save(path)?;
+                Value::Null
+            }
             Command::Continue | Command::Step | Command::Finish | Command::Return { .. } | Command::Abort => {
                 return Err("no breakpoint stop is waiting".into());
             }

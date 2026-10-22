@@ -1,6 +1,58 @@
 use unidroid::{Crash, Emulator, Result};
 
 #[test]
+fn crash_captures_stack_words_before_memory_changes() -> Result<()> {
+    for (dir, width, fault) in [("lib64", 8, 0xf9400000u32), ("lib", 4, 0xe5900000)] {
+        let mut emu = Emulator::builder().build()?;
+        emu.load_library(format!("rootfs/{dir}/libc.so"))?;
+        let sp = emu.register("sp")?;
+        for i in 0..32u64 {
+            emu.write_bytes(
+                sp + i * width as u64,
+                &(0x12340000 + i).to_le_bytes()[..width],
+            )?;
+        }
+        emu.write_bytes(0x20100, &fault.to_le_bytes())?;
+        let error = emu.call_function(0x20100, &[0x18]).unwrap_err();
+        let crash = error.downcast_ref::<Crash>().unwrap();
+        assert_eq!(crash.registers.iter().find(|r| r.0 == "sp").unwrap().1, sp);
+        assert_eq!(crash.stack.len(), 32);
+        for (i, &(address, value)) in crash.stack.iter().enumerate() {
+            assert_eq!(address, sp + (i * width) as u64);
+            assert_eq!(value, 0x12340000 + i as u64);
+        }
+        emu.write_bytes(sp, &vec![0; 32 * width])?;
+        let report = crash.report();
+        assert!(report.contains(&format!(
+            "\n0x{sp:x}: 0x12340000 0x12340001 0x12340002 0x12340003\n"
+        )));
+        assert!(!report.ends_with('\n'));
+    }
+    Ok(())
+}
+
+#[test]
+fn crash_stack_stops_at_the_first_unreadable_word() -> Result<()> {
+    for (dir, width, fault) in [("lib64", 8, 0xf9400000u32), ("lib", 4, 0xe5900000)] {
+        let mut emu = Emulator::builder().build()?;
+        emu.load_library(format!("rootfs/{dir}/libc.so"))?;
+        emu.write_bytes(0x20100, &fault.to_le_bytes())?;
+        let sp = 0x701ffff0;
+        emu.set_register("sp", sp)?;
+        emu.write_bytes(sp, &[0x12; 16])?;
+        let error = emu.call_function(0x20100, &[0x18]).unwrap_err();
+        let crash = error.downcast_ref::<Crash>().unwrap();
+        assert_eq!(crash.stack.len(), 16 / width);
+        assert_eq!(crash.stack[0].0, sp);
+        assert_eq!(crash.stack.last().unwrap().0, 0x70200000 - width as u64);
+        emu.set_register("sp", 0x80000000)?;
+        let error = emu.call_function(0x20100, &[0x18]).unwrap_err();
+        assert!(error.downcast_ref::<Crash>().unwrap().stack.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
 fn zero_return_addresses_end_the_backtrace() -> Result<()> {
     for (dir, width, words) in [
         ("lib64", 8, [0xaa0103fdu32, 0xaa0203fe, 0xf9400000]),

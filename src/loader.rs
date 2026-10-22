@@ -264,13 +264,13 @@ impl Emulator {
         Ok(())
     }
     pub fn location(&self, address: u64) -> String {
-        self.modules
-            .iter()
-            .find(|m| address >= m.base && address < m.base + m.image.size)
-            .map_or_else(
-                || format!("0x{address:x}"),
-                |m| format!("{}+0x{:x}", m.name, address - m.base),
-            )
+        crate::debug::modules::module_location(
+            address,
+            self.modules
+                .iter()
+                .map(|m| (m.name.as_str(), m.base, m.image.size)),
+        )
+        .unwrap_or_else(|| format!("0x{address:x}"))
     }
 }
 

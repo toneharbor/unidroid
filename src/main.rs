@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use goblin::elf::{Elf, sym};
 use std::{fs, path::PathBuf, process::ExitCode};
-use unidroid::{Crash, Emulator, JniHandler, Probe, Result, Trace};
+use unidroid::{Crash, Emulator, JniHandler, Probe, Result, Snapshot, Trace};
 
 #[derive(Parser)]
 struct Cli {
@@ -11,6 +11,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Compare two memory snapshots.
+    Diff { before: PathBuf, after: PathBuf },
     /// Serve JSON Lines commands over stdin and stdout.
     Serve {
         #[command(flatten)]
@@ -176,6 +178,15 @@ fn inspect(options: Options, lib: PathBuf, probe: bool) -> Result<ExitCode> {
 
 fn run() -> Result<ExitCode> {
     match Cli::parse().command {
+        Command::Diff { before, after } => {
+            println!(
+                "{}",
+                Snapshot::load(before)?
+                    .diff(&Snapshot::load(after)?)
+                    .report()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Serve { options, record } => {
             let builder = options.diagnostics.builder(false);
             if let Some(path) = record {

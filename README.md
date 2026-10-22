@@ -90,7 +90,7 @@ unhandled JNI call: CallStaticObjectMethodV java/lang/System->getProperty(Ljava/
 
 Add the matching method to `JniHandler` and run again. It's the same idea as setting up the environment in unidbg.
 
-Guest failures carry a `Crash`. Its `Display` is the same error message; `report()` adds the thread, backtrace and registers:
+Guest failures carry a `Crash`. Its `Display` is the same error message; `report()` adds the thread, backtrace, registers and stack:
 
 ```rust
 if let Err(error) = emu.call_function(f, &[]) {
@@ -100,7 +100,7 @@ if let Err(error) = emu.call_function(f, &[]) {
 }
 ```
 
-`Crash` has `message`, `thread`, `registers` (name/value pairs) and `backtrace`. Each `Frame` has `address`, `location` and an optional `symbol`. Both types serialize with serde. A crash keeps the state at the failure, including failures in guest threads or nested calls. Host function failures start at the guest caller. `emu.registers()?` and `emu.backtrace()?` read the current state. The backtrace follows frame pointers, skips repeated neighbors and stops at 32 frames or a zero return address. Code without frame pointers may give a short backtrace.
+`Crash` has `message`, `thread`, `registers` (name/value pairs), `backtrace` and `stack`. The stack holds up to 32 `(address, value)` pairs of pointer-size words starting at the crash's sp, stopping at the first unreadable word. `report()` prints them after the registers, four words per address-labelled line. Each `Frame` has `address`, `location` and an optional `symbol`. Both types serialize with serde. A crash keeps the state at the failure, including failures in guest threads or nested calls. Host function failures start at the guest caller. `emu.registers()?` and `emu.backtrace()?` read the current state. The backtrace follows frame pointers, skips repeated neighbors and stops at 32 frames or a zero return address. Code without frame pointers may give a short backtrace; look for app return addresses in `crash.stack`. The stack window is read only while building a crash.
 
 `emu.location(address)` stays `libfoo.so+0x1234`. `emu.symbolize(address)` adds a covering function name, like `libc.so+0x1f2a4 (strlen+0x10)`. It uses function symbols with a nonzero size from `.dynsym` and `.symtab`, when present. The symbol table is built on first use and shared between instances.
 
@@ -123,6 +123,21 @@ Stops go to the running call's `JniHandler::stopped(&mut self, emu: &mut Emulato
 For a plain C call, use `emu.call_function_with(&mut handler, function, args)?` to receive stops and JNI questions in that handler. It takes the same arguments and returns the same result as `call_function`.
 
 `emu.resolve(text)?` accepts `libfoo.so+0x1234`, an absolute hex address such as `0x50001000`, or an exported symbol name searched in module load order. Errors name the unknown module, bad number or unknown symbol. `emu.modules()` returns `Vec<ModuleInfo>` in load order: each entry has `name: String`, the host `path: PathBuf` recorded at load, `base: u64` and `size: u64`. Its index is the `Module` number.
+
+`emu.maps()?` returns `Vec<Mapping>` sorted by start, one entry per current Unicorn region. Each entry has `start` and exclusive `end` addresses, `perms` such as `r-x` or `rw-`, and `name`. Names are checked in order: a loaded module's name, `[trampoline]`, `[host malloc]` (allocations from `emu.malloc` and `new_cstring`), `[mmap]`, `[heap]` (brk), `[stack]`, `[vectors]` (ARM32), or an empty string for an unnamed range. Use it to identify an address before reading memory.
+
+`emu.snapshot()?` captures the current thread ID, general registers, modules and every mapped byte, including code and memory without read permission. `Snapshot::save(path)` writes a JSON header followed by raw memory; `Snapshot::load(path)` reads it back. `before.diff(&after)` returns changed registers, newly mapped and unmapped ranges, and changed bytes with locations. It compares by address even when mappings split, ignores permission changes, and merges byte changes separated by fewer than eight unchanged bytes. `diff.report()` formats all four sections as text:
+
+```rust
+let before = emu.snapshot()?;
+before.save("before.snap")?;
+emu.call_function(f, &[1, 2])?;
+emu.snapshot()?.save("after.snap")?;
+let after = unidroid::Snapshot::load("after.snap")?;
+println!("{}", before.diff(&after).report());
+```
+
+Maps and snapshots install no hooks and store no copies until called. A snapshot holds all guest memory, including keys and inputs; keep snapshot files out of git. This repository ignores `*.snap`.
 
 `emu.register(name)?` reads a register and `emu.set_register(name, value)?` writes it. Names are `x0`–`x28`, `fp`, `lr`, `sp`, `pc`, `nzcv` on arm64; `r0`–`r12`, `sp`, `lr`, `pc`, `cpsr` on arm32; and `d0`–`d31` on both. The `d` registers hold 64-bit floating-point bits and are available through named reads and writes, including serve's `set_register`. Dumps from `registers()`, crash reports, break questions and serve's `registers` list only the general registers, sp, lr, pc and flags, in the order above. An unknown name lists the valid names.
 
@@ -189,7 +204,7 @@ For other languages (TypeScript, Python, Go, ...) there's a command-line program
 cargo build --release
 ```
 
-It lands at `target/release/unidroid`. It has three subcommands.
+It lands at `target/release/unidroid`. It has four subcommands.
 
 ### `inspect`: look at a library first
 
@@ -300,13 +315,13 @@ How values are written in JSON:
 
 Addresses are decimal strings too. Bytes are base64.
 
-A guest failure adds `crash` to the error response. Other errors still have only `error`. Inside `crash`, frame addresses and register values are decimal strings; the thread ID is a number. `registers` is an object keyed by register name, so `crash.registers.pc` reads the program counter. For example:
+A guest failure adds `crash` to the error response. Other errors still have only `error`. Inside `crash`, frame addresses, register values, and both entries of each `stack` pair are decimal strings; the thread ID is a number. `stack` keeps up to 32 pointer-size words as `[address, value]` pairs starting at the crash's sp, in address order. `registers` is an object keyed by register name, so `crash.registers.pc` reads the program counter. For example:
 
 ```json
-{"error":"unhandled JNI call: ...","crash":{"message":"unhandled JNI call: ...","thread":1234,"registers":{"pc":"65820","x0":"7"},"backtrace":[{"address":"268471236","location":"libjnidispatch.so+0x8bc4","symbol":"JNI_OnLoad+0x3c0"}]}}
+{"error":"unhandled JNI call: ...","crash":{"message":"unhandled JNI call: ...","thread":1234,"registers":{"pc":"65820","x0":"7"},"backtrace":[{"address":"268471236","location":"libjnidispatch.so+0x8bc4","symbol":"JNI_OnLoad+0x3c0"}],"stack":[["1879048160","0"],["1879048168","268471236"]]}}
 ```
 
-The example abbreviates the registers. If a bad JNI answer replaces the command's error message, `crash` still holds the original guest failure.
+The example abbreviates the registers and stack. If a bad JNI answer replaces the command's error message, `crash` still holds the original guest failure.
 
 Change traces during a session with `{"cmd":"trace","jni":true,"syscalls":true,"imports":false,"code":["libfoo.so+0x1000-0x2000"]}`. Omitted booleans become `false`; omitted `code` becomes empty. `{"cmd":"trace"}` turns all traces off. Log format is chosen when starting the CLI; JSON logs go to stderr and protocol replies go to stdout.
 
@@ -342,6 +357,8 @@ Commands:
 | `set_register` | `name`, `value` (decimal string) | `null` |
 | `backtrace` | | frames, in the same JSON as a crash's `backtrace` |
 | `modules` | | list of `{name, path, base, size}`, in load order; base and size are decimal strings |
+| `maps` | | list of `{start, end, perms, name}`, sorted by start; start and exclusive end are decimal strings |
+| `snapshot` | `path` (relative to the serve process's directory) | `null`; saves all guest memory, registers and modules, between calls or while stopped |
 | `continue` / `step` / `finish` / `abort` | | (resumes the open stop) |
 | `return` | `value` (decimal string) | (returns from the stopped function) |
 | `alias` | `name`, `target` | `null` |
@@ -393,9 +410,34 @@ The recording starts with `{"record":1,"version":"<crate version>","options":{..
 
 `replay FILE` rebuilds the recorded setup, feeds the inputs through the serve loop, and compares every response and question as JSON. Guest `clock_gettime`, `gettimeofday` and random-device reads use the recording instead of the host. Keep the same libraries and rootfs; relative rootfs and `load` paths resolve against the current directory, so run replay from the directory the service ran in.
 
+Replaying a recording that took snapshots writes those snapshot files again, using paths relative to the replay process's directory.
+
 Replay accepts only `--verbose`, `--trace-syscalls`, `--trace-imports`, repeatable `--trace-code`, and `--log-format text|json`. It adds no breakpoints. Diagnostics go to stderr. Success prints `replayed <n> commands, all responses match` on stdout and exits 0; `n` counts input lines, including JNI answers. The first difference exits 1 with one stdout line naming the recording line: differing responses include expected and actual JSON; missing or extra responses, wrong time/random order, exhausted values and unused values also name the mismatch.
 
 The library exposes `serve::Options` (the shared options and `build`), `serve::record(options, builder, file, input, output)` and `serve::replay(file, builder)`. Replay returns the input count; the builder supplies diagnostic settings. The clock/random source and recording entries remain crate-internal.
+
+### `diff`: compare two memory snapshots
+
+Take snapshots before and after a call with serve's `snapshot` command or the library API, then run:
+
+```bash
+target/release/unidroid diff before.snap after.snap
+```
+
+It prints the differences and exits 0, even when memory changed. For example:
+
+```text
+registers:
+  x0 0x0 -> 0x7
+mapped:
+  (none)
+unmapped:
+  (none)
+changes:
+  0x40000000 [host malloc], 4 bytes
+    0000 - 00 00 00 00
+    0000 + 01 02 03 04
+```
 
 ## What it does and doesn't support
 
