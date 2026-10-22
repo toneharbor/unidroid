@@ -32,6 +32,17 @@ enum Command {
         log_format: LogFormat,
         jobs: PathBuf,
     },
+    /// Identify which input fields change which output bytes.
+    Fields {
+        #[command(flatten)]
+        options: unidroid::serve::Options,
+        #[command(flatten)]
+        fields: unidroid::serve::FieldsOptions,
+        /// Format diagnostic events on stderr.
+        #[arg(long, value_enum, default_value = "text")]
+        log_format: LogFormat,
+        spec: PathBuf,
+    },
     /// Replay a recorded serve session and compare every response.
     Replay {
         file: PathBuf,
@@ -265,6 +276,21 @@ fn run() -> Result<ExitCode> {
             } else {
                 ExitCode::FAILURE
             })
+        }
+        Command::Fields {
+            options,
+            fields,
+            log_format,
+            spec,
+        } => {
+            let report = unidroid::serve::fields(
+                &options,
+                &fields,
+                || log_format.builder(),
+                serde_json::from_reader(fs::File::open(spec)?)?,
+            )?;
+            println!("{report}");
+            Ok(ExitCode::SUCCESS)
         }
         Command::Replay { file, diagnostics } => {
             let result = fs::File::open(file)

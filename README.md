@@ -132,7 +132,7 @@ For other languages (TypeScript, Python, Go, ...) there's a command-line program
 cargo build --release
 ```
 
-It lands at `target/release/unidroid`. It has five subcommands.
+It lands at `target/release/unidroid`. It has six subcommands.
 
 ### `inspect`: look at a library first
 
@@ -385,6 +385,57 @@ Requested `coverage` is a list of `{address, location, count}`. Requested `diff`
 To compare reports, keep the same libraries, rootfs, options, policy and trace settings, set `--fixed-clock` and `--random-seed`, and remove the timing fields, for example with `jq -S 'del(.summary.ms, .jobs[].ms)' report.json`. See [DEBUGGING.md](DEBUGGING.md) for other inputs that affect deterministic runs.
 
 The library entry point is `serve::batch(&options, &batch_options, builder_factory, jobs) -> Result<serde_json::Value>`, with `serve::Options`, `serve::BatchOptions` and a `BufRead` jobs source. `BatchOptions::default()` supplies the CLI defaults; `only` takes `serve::BatchOnly::Ok` or `Failed`. The factory is `Fn() -> EmulatorBuilder + Sync`, such as `Emulator::builder`; it runs inside each worker so builders, emulators and event handlers can stay on their own thread. Setup errors return `Err`; failed jobs are recorded in the returned report.
+
+### `fields`: which inputs change which output bytes
+
+```bash
+target/release/unidroid fields --workers 4 --fixed-clock 1700000000 \
+  --random-seed 42 spec.json > fields.json
+```
+
+`spec.json` is one JSON object. `setup` is optional; it and `commands` use batch's serve commands, `$ref` / `$setup` references and refused commands. Load a library in setup to restore each worker's checkpoint before every run; without one, batch rebuilds the emulator and reruns setup. Fields uses the same batch runner and accepts its emulator options, `--workers` (with the same default) and `--log-format`.
+
+```json
+{
+  "commands": [
+    {"cmd":"new_string", "value":"12345678:1234567890"},
+    {"cmd":"string", "handle":{"$ref":0}}
+  ],
+  "output": 1,
+  "fields": [
+    {"name":"uid", "command":0, "offset":0, "length":8},
+    {"name":"ts", "command":0, "offset":9, "length":10, "values":["MTIzNDU2Nzg5MQ=="]}
+  ]
+}
+```
+
+`output` selects a zero-based command index, defaulting to the last command. Its `ok` value becomes bytes: base64-decoded for `read` or `array`, UTF-8 for `string`, and UTF-8 compact JSON text for every other command (including JSON quotes around string values).
+
+Each field selects a byte range in one command's payload: decoded `base64` for `write` / `new_array`, or the UTF-8 bytes of `value` for `new_string` / `new_cstring`. An unsupported command, invalid payload or out-of-range field fails the spec before any setup runs and names the field. Indices and offsets start at zero.
+
+By default, one run XORs every byte of the field with `0x01`; ASCII digits and letters stay printable. With `values`, each base64 value replaces that range in a separate run and must decode to exactly `length` bytes. Invalid base64 or a wrong length fails the spec. An empty list requests no runs. A mutation that makes a string invalid UTF-8 fails only that run. Each run changes only one field, starting from the original commands.
+
+The unmodified job runs twice before any field jobs. A failed base run exits 1 with its error; differing base outputs exit 1 with `error: the unmodified run is not repeatable; use --fixed-clock and --random-seed`. Spec and setup errors also exit 1. These errors go to stderr without a report. Otherwise stdout is one JSON document and exit status is 0, even if field runs fail:
+
+```json
+{
+  "output":{"length":19,"base64":"MTIzNDU2Nzg6MTIzNDU2Nzg5MA=="},
+  "fields":[
+    {"name":"uid","runs":1,"changed":[[0,8]]},
+    {"name":"ts","runs":1,"changed":[[18,19]]}
+  ],
+  "by_output":[{"start":0,"end":8,"fields":["uid"]},{"start":18,"end":19,"fields":["ts"]}],
+  "unaffected":[[8,18]]
+}
+```
+
+`changed` is the union of changed byte offsets across successful runs, merged into adjacent half-open `[start,end)` ranges. If output length changes, added or removed bytes count as changed and the field includes `length_changed: true`; `changed` can extend beyond the base length, while `by_output` and `unaffected` describe only `[0, output.length)`. Failed runs contribute no offsets and add messages such as `"value 0: ..."` to the field's `errors`; value indices start at zero, including the default mutation. `runs` counts all requested variants, including failures. Absent errors and false `length_changed` are omitted.
+
+Fields stay in input order. `by_output` groups consecutive base bytes with the same nonempty field set, in offset order; each set keeps input field order. `unaffected` lists base ranges that no successful run changed.
+
+Only the changes tried are observed; an unchanged byte may still depend on a field for other values. A hash-like output that changes everywhere for an input change shows that field on every byte. Non-repeatable runs need `--fixed-clock` and `--random-seed`; other external inputs must also stay the same, as described in [DEBUGGING.md](DEBUGGING.md).
+
+The library entry point is `serve::fields(&options, &fields_options, builder_factory, spec) -> Result<serde_json::Value>`, with `serve::Options`, `serve::FieldsOptions { workers }` and a `serde_json::Value` spec. `FieldsOptions::default()` supplies the CLI worker default. The factory is `Fn() -> EmulatorBuilder + Sync`, like batch's. Implementation: [src/serve/fields.rs](src/serve/fields.rs).
 
 ### Record a session and replay it
 

@@ -54,7 +54,7 @@ pub(super) fn run(
     Ok(serde_json::to_value(session.dispatch(emu, Ok(command))?)?)
 }
 
-fn resolve(value: &Value, results: &[Value], setup: &[Value]) -> Result<Value> {
+pub(super) fn resolve(value: &Value, results: &[Value], setup: &[Value]) -> Result<Value> {
     match value {
         Value::Object(object) => {
             if object.len() == 1 {

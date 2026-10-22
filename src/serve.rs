@@ -8,6 +8,8 @@ use std::{
 
 mod batch;
 pub use batch::{BatchOnly, BatchOptions, batch};
+mod fields;
+pub use fields::{FieldsOptions, fields};
 mod options;
 pub use options::Options;
 mod journal;

@@ -39,8 +39,17 @@ pub enum BatchOnly {
     Failed,
 }
 
-fn workers() -> usize {
+pub(super) use worker::Worker;
+
+pub(super) fn workers() -> usize {
     thread::available_parallelism().map_or(1, usize::from)
+}
+
+pub(super) fn check_workers(count: usize) -> Result<()> {
+    if count == 0 {
+        return Err("workers must be greater than zero".into());
+    }
+    Ok(())
 }
 
 impl Default for BatchOptions {
@@ -64,29 +73,57 @@ pub fn batch(
     jobs: impl BufRead,
 ) -> Result<Value> {
     let start = Instant::now();
-    if settings.workers == 0 {
-        return Err("workers must be greater than zero".into());
-    }
+    check_workers(settings.workers)?;
     let setup = settings
         .setup
         .as_ref()
         .map(std::fs::read_to_string)
         .transpose()?
         .unwrap_or_default();
-    let queue = Mutex::new(
-        jobs.lines()
-            .collect::<std::io::Result<Vec<_>>>()?
-            .into_iter()
-            .enumerate()
-            .collect::<VecDeque<_>>(),
-    );
+    let lines = jobs.lines().collect::<std::io::Result<Vec<_>>>()?;
+    let mut jobs = run(
+        options,
+        settings,
+        &builder,
+        &setup,
+        lines,
+        |_| Ok(()),
+        |_, report| report,
+    )?;
+    let total = jobs.len();
+    let ok = jobs.iter().filter(|job| job["ok"] == true).count();
+    if let Some(only) = settings.only {
+        jobs.retain(|job| job["ok"] == matches!(only, BatchOnly::Ok));
+    }
+    Ok(json!({"summary":{"jobs":total, "ok":ok, "failed":total-ok,
+        "ms":start.elapsed().as_millis()}, "jobs":jobs}))
+}
+
+// The preflight runs on one prepared worker before any queued jobs. Fields uses
+// it to check the base twice, keeping the same pool and checkpoints for variants.
+pub(super) fn run<F: Fn() -> EmulatorBuilder + Sync, T: Send>(
+    options: &Options,
+    settings: &BatchOptions,
+    builder: &F,
+    setup: &str,
+    jobs: Vec<String>,
+    before: impl FnOnce(&mut Worker<'_, F>) -> Result<()> + Send,
+    finish: impl Fn(&Worker<'_, F>, Value) -> T + Sync,
+) -> Result<Vec<T>> {
+    let queue = Mutex::new(jobs.into_iter().enumerate().collect::<VecDeque<_>>());
     let ready = Barrier::new(settings.workers);
     let failure = Mutex::new(None);
+    let preflight_error = Mutex::new(None);
     let mut jobs = thread::scope(|scope| {
+        let mut before = Some(before);
         let handles: Vec<_> = (0..settings.workers)
             .map(|_| {
-                scope.spawn(|| {
-                    let worker = worker::Worker::new(options, &builder, &setup);
+                let before = before.take();
+                let finish = &finish;
+                let (queue, ready, failure, preflight_error) =
+                    (&queue, &ready, &failure, &preflight_error);
+                scope.spawn(move || {
+                    let worker = Worker::new(options, builder, setup);
                     if let Err(error) = &worker {
                         failure
                             .lock()
@@ -98,6 +135,15 @@ pub fn batch(
                         return Vec::new();
                     }
                     let mut worker = worker.unwrap();
+                    if let Some(before) = before
+                        && let Err(error) = before(&mut worker)
+                    {
+                        *preflight_error.lock().unwrap() = Some(error.to_string());
+                    }
+                    ready.wait();
+                    if preflight_error.lock().unwrap().is_some() {
+                        return Vec::new();
+                    }
                     let mut results = Vec::new();
                     loop {
                         let Some((index, line)) = queue.lock().unwrap().pop_front() else {
@@ -110,7 +156,7 @@ pub fn batch(
                             attempts += 1;
                         }
                         report["attempts"] = json!(attempts);
-                        results.push((index, report));
+                        results.push((index, finish(&worker, report)));
                     }
                     results
                 })
@@ -121,16 +167,13 @@ pub fn batch(
             .flat_map(|handle| handle.join().unwrap())
             .collect::<Vec<_>>()
     });
-    if let Some(error) = failure.into_inner().unwrap() {
+    if let Some(error) = failure
+        .into_inner()
+        .unwrap()
+        .or(preflight_error.into_inner().unwrap())
+    {
         return Err(error.into());
     }
     jobs.sort_by_key(|(index, _)| *index);
-    let mut jobs: Vec<_> = jobs.into_iter().map(|(_, job)| job).collect();
-    let total = jobs.len();
-    let ok = jobs.iter().filter(|job| job["ok"] == true).count();
-    if let Some(only) = settings.only {
-        jobs.retain(|job| job["ok"] == matches!(only, BatchOnly::Ok));
-    }
-    Ok(json!({"summary":{"jobs":total, "ok":ok, "failed":total-ok,
-        "ms":start.elapsed().as_millis()}, "jobs":jobs}))
+    Ok(jobs.into_iter().map(|(_, job)| job).collect())
 }

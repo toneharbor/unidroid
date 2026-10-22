@@ -21,7 +21,7 @@ struct Job {
     diff: bool,
 }
 
-pub(super) struct Worker<'a, F> {
+pub(in crate::serve) struct Worker<'a, F> {
     options: &'a Options,
     builder: &'a F,
     setup: &'a str,
@@ -77,7 +77,11 @@ impl<'a, F: Fn() -> EmulatorBuilder> Worker<'a, F> {
         Ok(())
     }
 
-    pub(super) fn run(&mut self, index: usize, line: &str) -> Value {
+    pub(in crate::serve) fn resolve(&self, command: &Value, results: &[Value]) -> Result<Value> {
+        commands::resolve(command, results, &self.setup_results)
+    }
+
+    pub(in crate::serve) fn run(&mut self, index: usize, line: &str) -> Value {
         let start = Instant::now();
         let mut report = json!({"id":index + 1, "ok":false, "results":[]});
         let mut before = None;
