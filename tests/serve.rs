@@ -80,6 +80,8 @@ mod sign_debug;
 mod stop_errors;
 #[path = "serve/stops.rs"]
 mod stops;
+#[path = "serve/traces.rs"]
+mod traces;
 
 #[test]
 fn eof_during_a_question_fails_the_process() {

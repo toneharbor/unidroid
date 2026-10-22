@@ -67,21 +67,37 @@ Maps and snapshots install no hooks and store no copies until called. A snapshot
 
 ### Traces and events
 
-`Trace` has three booleans (`jni`, `syscalls` and `imports`, default `false`) and `code: Vec<String>` (default empty). Set them with `.trace(Trace { .. })` on the builder, or `emu.set_trace(Trace { .. })?` at runtime. `emu.trace()` reads the settings. Each change replaces all settings. With traces off, no trace hook is installed.
+`Trace` has three booleans (`jni`, `syscalls` and `imports`, default `false`) and two specification lists (`code: Vec<String>` and `calls: Vec<String>`, default empty). Set them with `.trace(Trace { .. })` on the builder, or `emu.set_trace(Trace { .. })?` at runtime. `emu.trace()` reads the settings. Each change replaces all settings. With traces off, no trace hook is installed.
 
-Each `code` entry is a module file name, such as `libfoo.so`, or a module with a hex offset range, such as `libfoo.so+0x1000-0x2000` (end exclusive). It matches libraries already loaded and libraries loaded later, by file name. Bad specifications fail `build` or `set_trace`. For example, `Trace { code: vec!["libfoo.so+0x1000-0x2000".into()], ..Trace::default() }` traces that part of the library.
+Each `code` or `calls` entry is a module file name, such as `libfoo.so`, or a module with a hex offset range, such as `libfoo.so+0x1000-0x2000` (end exclusive). It matches libraries already loaded and libraries loaded later, by file name. Bad specifications fail `build` or `set_trace`. For example, `Trace { code: vec!["libfoo.so+0x1000-0x2000".into()], ..Trace::default() }` traces that part of the library.
 
-Instruction events show the bytes in memory, Capstone disassembly, registers read before the instruction, and registers written after it. ARM32 follows the current ARM or Thumb mode, including Thumb conditional blocks. The text looks like this:
+Instruction events show the bytes in memory, Capstone disassembly, registers read before the instruction, registers written after it, and memory reads and writes in access order. Each memory access gives its address, byte count and value at access time. ARM32 follows the current ARM or Thumb mode, including Thumb conditional blocks. The text looks like this:
 
 ```text
-[libfoo.so+0x1234 (fn+0x10)] [0010a0e1] mov r1, r0 ; r0=0x7 => r1=0x7
+[libfoo.so+0x1234] [e00740f9] ldr x0, [sp, #8] ; sp=0x701ffe00 => x0=0x7 | r 0x701ffe08:8=0x7
 ```
 
-`Event::Instruction` has `at` (from `symbolize`), `address`, `bytes` (hex), `text`, `read` and `written`. The last two are name/value pairs (`Vec<(String, u128)>`, covering vector registers too). In JSON, `address` and register values are hex strings, such as `"address":"0x10001000"` and `[["r0","0x7"]]`, preserving full precision in JavaScript. Pairs stay in instruction order; the event tag is `instruction`. Events wait for the next instruction or a run stop so written values are available. A range exit also captures the result before untraced code changes it. Syscall results are captured after dispatch; a faulting instruction has an empty `written` array. Stops before execution do not duplicate an instruction on resume. Turning code tracing off removes all its hooks. If an instruction cannot be decoded or a register cannot be read, a `Warning` names its address and tracing continues. Capstone also names SVE/SME and legacy registers that Unicorn does not expose; those reads warn instead of inventing a value.
+`Event::Instruction` has `at` (from `symbolize`), `address`, `bytes` (hex), `text`, `read`, `written` and `memory`. The register lists are name/value pairs (`Vec<(String, u128)>`, covering vector registers too). In JSON, `address` and register values are hex strings, such as `"address":"0x10001000"` and `[["r0","0x7"]]`, preserving full precision in JavaScript. Pairs stay in instruction order; the event tag is `instruction`. Events wait for the next instruction or a run stop so written values are available. A range exit also captures the result before untraced code changes it. Syscall results are captured after dispatch; a faulting instruction has an empty `written` array and keeps memory accesses reported before the fault. Stops before execution do not duplicate an instruction on resume. Turning code tracing off removes all its hooks and flushes translated code. If an instruction cannot be decoded or a register cannot be read, a `Warning` names its address and tracing continues. Capstone also names SVE/SME and legacy registers that Unicorn does not expose; those reads warn instead of inventing a value.
+
+`memory` is `Vec<MemoryAccess>`, with public fields `write: bool`, `address: u64`, `size: usize` and `value: u64`. Paired and vector transfers appear as separate accesses of up to eight bytes. Text appends ` | ` and comma-separated `r 0xADDRESS:SIZE=0xVALUE` or `w 0xADDRESS:SIZE=0xVALUE`; an empty list adds nothing. JSON always includes `memory`, using `access: "read"` or `"write"`, hex strings for address and value, and a number for size:
+
+```json
+{"event":"instruction","at":"libfoo.so+0x1234","address":"0x10001234","bytes":"e00740f9","text":"ldr x0, [sp, #8]","read":[["sp","0x701ffe00"]],"written":[["x0","0x7"]],"memory":[{"access":"read","address":"0x701ffe08","size":8,"value":"0x7"}]}
+```
+
+Memory capture is always included in code tracing. Only accesses from a pending traced instruction are recorded; host memory operations and untraced instructions add no accesses.
+
+Function call tracing uses `Trace { calls: vec!["libfoo.so+0x1000-0x2000".into()], ..Trace::default() }`. It reports executed `bl`/`blr` on arm64 and `bl`/`blx` on ARM32, including ARM and Thumb mode changes. The call site must be inside the selected range; the target can be anywhere, including a host trampoline. Plain branches and tail calls (`b`, `br`, `bx`) are excluded. `Event::FunctionCall` is emitted once as the target's first instruction is about to run. It has `to` and `from` from `symbolize` (`from` names the call instruction), `address: u64` for the target with the Thumb bit cleared, and `args: Vec<String>` for the first four argument registers as hex strings. JSON uses the tag `function_call` and a hex string for `address`. Code and call tracing work independently or together; removing call tracing removes its hooks, releases its state and flushes translated code.
+
+`--trace-code SPEC` and `--trace-calls SPEC` are repeatable options on `serve`, `inspect` and `replay`. For example, `unidroid inspect --trace-calls libfoo.so libfoo.so` can print:
+
+```text
+function libfoo.so+0x1800 (mix)(0x7, 0x8, 0x40001000, 0xa) from libfoo.so+0x1234 (sign+0x10)
+```
 
 Syscall events show the guest number, arguments, signed result, errno name, instruction location and caller. Import events show calls from app libraries into other modules, including dl, property and unresolved-symbol stubs. The previous executed block in the same guest thread must be in an app library; app PLT stubs count, but internal tail calls within a dependency do not. The caller location comes from lr. They show the first four argument registers, with known C strings quoted and capped at 256 bytes. Dependencies next to an app count as app libraries; dependencies found in rootfs do not.
 
-All diagnostics go through `Event`: `Jni`, `JniCall`, `Syscall`, `Call`, `Instruction` or `Warning`. By default they print their text form on stderr. Capture them with the builder's `on_event`:
+All diagnostics go through `Event`: `Jni`, `JniCall`, `Syscall`, `Call`, `FunctionCall`, `Instruction` or `Warning`. By default they print their text form on stderr. Capture them with the builder's `on_event`:
 
 ```rust
 let emu = Emulator::builder()
@@ -90,7 +106,7 @@ let emu = Emulator::builder()
     .build()?;
 ```
 
-Events serialize as objects tagged with `event`: `jni`, `jni_call`, `syscall`, `call`, `instruction` or `warning`. Arguments are arrays of text; JNI member arguments keep their typed debug form, such as `Object(Handle(7))`. Syscall numbers and returned results are JSON numbers. If dispatch fails, ends the thread or process, or switches away from the thread, `result` is `null` and `errno` is absent. Its text line ends with `= (no return)`. The event is emitted before any crash propagates. Otherwise `errno` is present only for a Linux error result. JNI locations keep the existing text; syscall and import locations include symbols.
+Events serialize as objects tagged with `event`: `jni`, `jni_call`, `syscall`, `call`, `function_call`, `instruction` or `warning`. Arguments are arrays of text; JNI member arguments keep their typed debug form, such as `Object(Handle(7))`. Syscall numbers and returned results are JSON numbers. If dispatch fails, ends the thread or process, or switches away from the thread, `result` is `null` and `errno` is absent. Its text line ends with `= (no return)`. The event is emitted before any crash propagates. Otherwise `errno` is present only for a Linux error result. JNI locations keep the existing text; syscall and import locations include symbols.
 
 `Probe::default()` is a `JniHandler` that answers calls with null, zero, false or void. `is_assignable` answers false. Pass it to `call_jni_onload` to explore calls without writing a handler. `probe.calls()` returns `&[ProbedCall]` in first-seen order. Each entry has `op`, `is_static`, `class`, `name`, `signature`, `count` and the first `from` location. For `is_assignable`, `class` is the source and `name` the target class. Defaults can make the library return early or crash.
 
@@ -110,7 +126,7 @@ The example abbreviates the registers and stack. If a bad JNI answer replaces th
 
 ### Traces
 
-Change traces during a session with `{"cmd":"trace","jni":true,"syscalls":true,"imports":false,"code":["libfoo.so+0x1000-0x2000"]}`. Omitted booleans become `false`; omitted `code` becomes empty. `{"cmd":"trace"}` turns all traces off. Log format is chosen when starting the CLI; JSON logs go to stderr and protocol replies go to stdout.
+Change traces during a session with `{"cmd":"trace","jni":true,"syscalls":true,"imports":false,"code":["libfoo.so+0x1000-0x2000"],"calls":["libfoo.so"]}`. Omitted booleans become `false`; omitted `code` and `calls` become empty. `{"cmd":"trace"}` turns all traces off. Log format is chosen when starting the CLI; JSON logs go to stderr and protocol replies go to stdout.
 
 ### Stops and questions
 
@@ -153,7 +169,7 @@ A resume command with no stop open errors with `no breakpoint stop is waiting`. 
 
 | command | fields | result |
 |---|---|---|
-| `trace` | `jni`, `syscalls`, `imports` (booleans, omitted means false), `code` (list of specifications, omitted means empty) | `null` |
+| `trace` | `jni`, `syscalls`, `imports` (booleans, omitted means false), `code`, `calls` (lists of specifications, omitted means empty) | `null` |
 | `break` / `unbreak` | `at` (text for `resolve`) | address with Thumb bit cleared / `null` |
 | `watch` | `at` (text for `resolve`), `size` (number), `kind` (`read`, `write` or `access`) | watched address (decimal string) |
 | `unwatch` | `at` (text for `resolve`) | `null` |
@@ -192,7 +208,7 @@ The recording starts with `{"record":1,"version":"<crate version>","options":{..
 
 Replaying a recording that took snapshots writes those snapshot files again, using paths relative to the replay process's directory.
 
-Replay accepts only `--verbose`, `--trace-syscalls`, `--trace-imports`, repeatable `--trace-code`, and `--log-format text|json`. It adds no breakpoints. Diagnostics go to stderr. Success prints `replayed <n> commands, all responses match` on stdout and exits 0; `n` counts input lines, including JNI answers. The first difference exits 1 with one stdout line naming the recording line: differing responses include expected and actual JSON; missing or extra responses, wrong time/random order, exhausted values and unused values also name the mismatch.
+Replay accepts only `--verbose`, `--trace-syscalls`, `--trace-imports`, repeatable `--trace-code` and `--trace-calls`, and `--log-format text|json`. It adds no breakpoints. Diagnostics go to stderr. Success prints `replayed <n> commands, all responses match` on stdout and exits 0; `n` counts input lines, including JNI answers. The first difference exits 1 with one stdout line naming the recording line: differing responses include expected and actual JSON; missing or extra responses, wrong time/random order, exhausted values and unused values also name the mismatch.
 
 The library exposes `serve::Options` (the shared options and `build`), `serve::record(options, builder, file, input, output)` and `serve::replay(file, builder)`. Replay returns the input count; the builder supplies diagnostic settings. The clock/random source and recording entries remain crate-internal.
 

@@ -52,6 +52,8 @@ pub(super) enum Command {
         imports: bool,
         #[serde(default)]
         code: Vec<String>,
+        #[serde(default)]
+        calls: Vec<String>,
     },
     Load {
         path: String,

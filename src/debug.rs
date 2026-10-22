@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::fmt::{self, Write};
 use unicorn_engine::{RegisterARM, RegisterARM64};
 
+pub(crate) mod calls;
 pub(crate) mod code;
 pub(crate) mod control;
 pub(crate) mod events;
@@ -16,6 +17,23 @@ mod syscalls;
 pub(crate) mod watch;
 
 const STACK_WORDS: usize = 32;
+
+pub(crate) fn symbolize<'a>(
+    address: u64,
+    mut modules: impl Iterator<Item = (u64, &'a str, &'a crate::Image)>,
+) -> String {
+    let Some((base, name, image)) =
+        modules.find(|(base, _, image)| (*base..*base + image.size).contains(&address))
+    else {
+        return format!("0x{address:x}");
+    };
+    let offset = address - base;
+    let mut at = format!("{name}+0x{offset:x}");
+    if let Some(symbol) = image.function(offset) {
+        at.push_str(&format!(" ({symbol})"));
+    }
+    at
+}
 
 pub(crate) fn memory_location(
     address: u64,
@@ -175,10 +193,11 @@ impl Emulator {
     }
 
     pub fn symbolize(&self, address: u64) -> String {
-        let location = self.location(address);
-        match self.symbol(address) {
-            Some(symbol) => format!("{location} ({symbol})"),
-            None => location,
-        }
+        symbolize(
+            address,
+            self.modules
+                .iter()
+                .map(|m| (m.base, m.name.as_str(), m.image.as_ref())),
+        )
     }
 }

@@ -66,7 +66,8 @@ Pick the row that answers the current question:
 | Which file does it try to open? | `--trace-syscalls` | Path, result, errno and caller. Look for `ENOENT`; ordinary paths outside rootfs are reported as not found. Check the requested path against rootfs. |
 | What does it ask libc or another dependency? | `--trace-imports` | Imported function, argument values and app caller. Follow the call that first receives an unexpected value. |
 | Which Java behavior is missing or wrong? | JNI trace: `--verbose` or serve `trace` with `jni` enabled | Method, signature, arguments and caller. Match these against the driver's answer. |
-| What does a routine compute? | `--trace-code` over that routine's range | Instruction bytes, disassembly, registers read before and written after. Find the first value that diverges. |
+| What does a routine compute? | `--trace-code` over that routine's range | Instruction bytes, disassembly, registers read before and written after, and memory reads and writes with addresses, sizes and values. Find the first value that diverges. |
+| Which functions does this routine call, in what order? | `--trace-calls` over the module or range | Call targets, arguments and call sites. Then narrow `--trace-code` to the function that matters. |
 | What is a value at this point? | Breakpoint, then `registers` and `read` | Argument registers and the bytes at their pointers. Decode `read`'s base64 before interpreting memory. |
 | Which memory does a call write? | Serve `snapshot` before and after the call, then `unidroid diff before.snap after.snap` | Changed bytes with locations, newly mapped ranges, and changed registers. |
 | Where is this value in memory? | Serve `search` | Matching addresses and locations. A full list of 1000 may hide more matches; narrow the pattern. |

@@ -8,6 +8,22 @@ pub struct Trace {
     pub syscalls: bool,
     pub imports: bool,
     pub code: Vec<String>,
+    pub calls: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MemoryAccess {
+    #[serde(rename = "access", serialize_with = "access_kind")]
+    pub write: bool,
+    #[serde(serialize_with = "hex_address")]
+    pub address: u64,
+    pub size: usize,
+    #[serde(serialize_with = "hex_address")]
+    pub value: u64,
+}
+
+fn access_kind<S: Serializer>(write: &bool, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    serializer.serialize_str(if *write { "write" } else { "read" })
 }
 
 #[derive(Debug, Serialize)]
@@ -42,6 +58,13 @@ pub enum Event {
         args: Vec<String>,
         from: String,
     },
+    FunctionCall {
+        to: String,
+        #[serde(serialize_with = "hex_address")]
+        address: u64,
+        args: Vec<String>,
+        from: String,
+    },
     Instruction {
         at: String,
         #[serde(serialize_with = "hex_address")]
@@ -52,6 +75,7 @@ pub enum Event {
         read: Vec<(String, u128)>,
         #[serde(serialize_with = "hex_registers")]
         written: Vec<(String, u128)>,
+        memory: Vec<MemoryAccess>,
     },
     Warning {
         message: String,
@@ -123,12 +147,16 @@ impl fmt::Display for Event {
                 "call {function}({}) in {module} from {from}",
                 args.join(", ")
             ),
+            Self::FunctionCall { to, args, from, .. } => {
+                write!(f, "function {to}({}) from {from}", args.join(", "))
+            }
             Self::Instruction {
                 at,
                 bytes,
                 text,
                 read,
                 written,
+                memory,
                 ..
             } => {
                 write!(f, "[{at}] [{bytes}] {text}")?;
@@ -142,6 +170,17 @@ impl fmt::Display for Event {
                             write!(f, "{name}=0x{value:x}")?;
                         }
                     }
+                }
+                for (i, access) in memory.iter().enumerate() {
+                    f.write_str(if i == 0 { " | " } else { ", " })?;
+                    write!(
+                        f,
+                        "{} 0x{:x}:{}=0x{:x}",
+                        if access.write { "w" } else { "r" },
+                        access.address,
+                        access.size,
+                        access.value
+                    )?;
                 }
                 Ok(())
             }
@@ -168,7 +207,11 @@ impl Emulator {
         &self.trace
     }
     pub fn set_trace(&mut self, trace: Trace) -> Result<()> {
+        for entry in &trace.calls {
+            super::code::Spec::parse(entry)?;
+        }
         self.trace_code(&trace.code)?;
+        self.trace_calls(&trace.calls)?;
         self.trace_imports(trace.imports)?;
         self.trace = trace;
         Ok(())

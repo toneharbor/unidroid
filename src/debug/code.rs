@@ -1,59 +1,29 @@
-use crate::{CpuData, Emulator, Event, Image, Result, arch::Architecture};
+use crate::{CpuData, Emulator, Event, Result, arch::Architecture};
 use capstone::prelude::*;
-use std::{cell::RefCell, rc::Rc, sync::Arc};
-use unicorn_engine::{RegisterARM, UcHookId, Unicorn};
+use std::{cell::RefCell, rc::Rc};
+use unicorn_engine::{
+    RegisterARM, UcHookId, Unicorn,
+    unicorn_const::{HookType, MemType},
+};
 
 mod registers;
 #[cfg(test)]
 mod tests;
 
-pub(crate) struct Spec {
-    name: String,
-    offsets: Option<(u64, u64)>,
-}
-impl Spec {
-    pub fn parse(spec: &str) -> Result<Self> {
-        let invalid = || {
-            format!("invalid code trace {spec:?}: expected libfoo.so or libfoo.so+0x1000-0x2000")
-        };
-        let (name, offsets) = if let Some((name, range)) = spec.split_once('+') {
-            let (start, end) = range.split_once('-').ok_or_else(invalid)?;
-            let hex = |value: &str| -> Result<u64> {
-                let value = value.strip_prefix("0x").ok_or_else(invalid)?;
-                if value.is_empty() || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
-                    return Err(invalid().into());
-                }
-                Ok(u64::from_str_radix(value, 16).map_err(|_| invalid())?)
-            };
-            let (start, end) = (hex(start)?, hex(end)?);
-            if start >= end {
-                return Err(invalid().into());
-            }
-            (name, Some((start, end)))
-        } else {
-            (spec, None)
-        };
-        if name.is_empty() || name.contains(['/', '\\', '+']) {
-            return Err(invalid().into());
-        }
-        Ok(Self {
-            name: name.into(),
-            offsets,
-        })
-    }
-}
+mod selection;
+pub(crate) use selection::{Selection, Spec};
 
 #[derive(Default)]
 pub(crate) struct Code {
     hooks: Vec<(u64, u64, UcHookId)>,
     block: Option<UcHookId>,
+    memory: Option<UcHookId>,
     state: Rc<RefCell<State>>,
 }
 #[derive(Default)]
 struct State {
     disassembler: Option<Capstone>,
-    ranges: Vec<(u64, u64)>,
-    modules: Vec<(u64, String, Arc<Image>)>,
+    selection: Selection,
     pending: Option<Pending>,
     block_start: u64,
 }
@@ -65,11 +35,6 @@ struct Pending {
     itstate: Option<u8>,
 }
 impl State {
-    fn contains(&self, address: u64) -> bool {
-        self.ranges
-            .iter()
-            .any(|&(start, end)| (start..end).contains(&address))
-    }
     fn finish(
         &mut self,
         cpu: &Unicorn<'_, CpuData>,
@@ -102,21 +67,6 @@ impl State {
             message: format!("instruction trace at {at} (0x{address:x}): {error}"),
         }
     }
-    fn location(&self, address: u64) -> String {
-        let Some((base, name, image)) = self
-            .modules
-            .iter()
-            .find(|(base, _, image)| (*base..*base + image.size).contains(&address))
-        else {
-            return format!("0x{address:x}");
-        };
-        let offset = address - base;
-        let mut at = format!("{name}+0x{offset:x}");
-        if let Some(symbol) = image.function(offset) {
-            at.push_str(&format!(" ({symbol})"));
-        }
-        at
-    }
     fn capture(
         &mut self,
         cpu: &Unicorn<'_, CpuData>,
@@ -124,7 +74,7 @@ impl State {
         address: u64,
         size: u32,
     ) -> Result<()> {
-        let at = self.location(address);
+        let at = self.selection.location(address);
         let cs = self
             .disassembler
             .as_mut()
@@ -216,6 +166,7 @@ impl State {
                 text,
                 read,
                 written: Vec::new(),
+                memory: Vec::new(),
             },
             writes,
             address,
@@ -228,10 +179,7 @@ impl State {
 
 impl Emulator {
     pub(crate) fn trace_code(&mut self, entries: &[String]) -> Result<()> {
-        let specs = entries
-            .iter()
-            .map(|entry| Spec::parse(entry))
-            .collect::<Result<Vec<_>>>()?;
+        let selection = Selection::new(entries, &self.modules)?;
         if self.uc.is_none() {
             return Ok(());
         }
@@ -243,35 +191,16 @@ impl Emulator {
             self.cpu_mut()?.remove_hook(hook)?;
             self.cpu_mut()?.ctl_flush_tb()?;
         }
+        if let Some(hook) = self.code.memory.take() {
+            self.cpu_mut()?.remove_hook(hook)?;
+            self.cpu_mut()?.ctl_flush_tb()?;
+        }
         let arch = self.architecture();
         let mut state = self.code.state.borrow_mut();
-        state.ranges.clear();
-        state.modules.clear();
-        for module in &self.modules {
-            for spec in specs.iter().filter(|s| s.name == module.name) {
-                let (start, end) = spec.offsets.unwrap_or((0, module.image.size));
-                let end = end.min(module.image.size);
-                if start < end {
-                    state.ranges.push((module.base + start, module.base + end));
-                }
-            }
-            state
-                .modules
-                .push((module.base, module.name.clone(), module.image.clone()));
-        }
-        state.ranges.sort_unstable();
-        let mut ranges: Vec<(u64, u64)> = Vec::new();
-        for &(start, end) in &state.ranges {
-            if let Some(last) = ranges.last_mut()
-                && start <= last.1
-            {
-                last.1 = last.1.max(end);
-            } else {
-                ranges.push((start, end));
-            }
-        }
-        state.ranges = ranges.clone();
+        let ranges = selection.instruction_hooks();
+        state.selection = selection;
         if ranges.is_empty() {
+            *state = State::default();
             return Ok(());
         }
         if state.disassembler.is_none() {
@@ -290,13 +219,34 @@ impl Emulator {
         }
         drop(state);
         let state = self.code.state.clone();
+        self.code.memory = Some(self.memory_hook(
+            HookType::MEM_READ_AFTER | HookType::MEM_WRITE,
+            1,
+            0,
+            move |_, kind, address, size, value| {
+                if let Some(Pending {
+                    event: Event::Instruction { memory, .. },
+                    ..
+                }) = &mut state.borrow_mut().pending
+                {
+                    memory.push(crate::MemoryAccess {
+                        write: kind == MemType::WRITE,
+                        address,
+                        size,
+                        value: value as u64,
+                    });
+                }
+                true
+            },
+        )?);
+        let state = self.code.state.clone();
         let events = self.events.clone();
         self.code.block = Some(
             self.cpu_mut()?
                 .add_block_hook(1, 0, move |cpu, address, _| {
                     let mut state = state.borrow_mut();
                     state.block_start = address;
-                    if !state.contains(address)
+                    if !state.selection.contains(address)
                         && let Some(event) = state.finish(cpu, arch, false)
                     {
                         events.borrow_mut().emit(event);
@@ -306,23 +256,23 @@ impl Emulator {
         for (start, end) in ranges {
             let state = self.code.state.clone();
             let events = self.events.clone();
-            let hook = self
-                .cpu_mut()?
-                .add_code_hook(start, end, move |cpu, address, size| {
-                    let mut state = state.borrow_mut();
-                    if let Some(event) = state.finish(cpu, arch, false) {
-                        events.borrow_mut().emit(event);
-                    }
-                    if state.contains(address)
-                        && let Err(error) = state.capture(cpu, arch, address, size)
-                    {
-                        events.borrow_mut().emit(State::warning(
-                            &state.location(address),
-                            address,
-                            error,
-                        ));
-                    }
-                })?;
+            let hook =
+                self.cpu_mut()?
+                    .add_code_hook(start, end - 1, move |cpu, address, size| {
+                        let mut state = state.borrow_mut();
+                        if let Some(event) = state.finish(cpu, arch, false) {
+                            events.borrow_mut().emit(event);
+                        }
+                        if state.selection.contains(address)
+                            && let Err(error) = state.capture(cpu, arch, address, size)
+                        {
+                            events.borrow_mut().emit(State::warning(
+                                &state.selection.location(address),
+                                address,
+                                error,
+                            ));
+                        }
+                    })?;
             self.code.hooks.push((start, end, hook));
             self.cpu_mut()?.ctl_remove_cache(start, end + 4)?;
         }

@@ -225,6 +225,7 @@ Options, the same for `inspect` and `serve`:
 | `--trace-syscalls` | print each guest syscall, arguments, result and caller |
 | `--trace-imports` | print app calls into other libraries |
 | `--trace-code SPEC` | print instructions in a module or `module+0xSTART-0xEND`, repeatable |
+| `--trace-calls SPEC` | print function calls from a module or `module+0xSTART-0xEND`, repeatable |
 | `--log-format text\|json` | text logs (default) or one JSON event per stderr line |
 | `--translation-cache-mb MB` | translation cache size (default 8), same as `translation_cache_size` |
 

@@ -40,6 +40,9 @@ impl Emulator {
         if !self.trace.code.is_empty() {
             self.trace_code(&self.trace.code.clone())?;
         }
+        if !self.trace.calls.is_empty() {
+            self.trace_calls(&self.trace.calls.clone())?;
+        }
         self.initialize(module)?;
         Ok(module)
     }

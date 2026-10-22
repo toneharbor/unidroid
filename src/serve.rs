@@ -160,12 +160,14 @@ impl<R: BufRead, W: Write> Session<R, W> {
                 syscalls,
                 imports,
                 code,
+                calls,
             } => {
                 emu.set_trace(crate::Trace {
                     jni,
                     syscalls,
                     imports,
                     code,
+                    calls,
                 })?;
                 Value::Null
             }

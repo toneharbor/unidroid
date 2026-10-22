@@ -46,7 +46,7 @@ impl Emulator {
             Watch::Write => HookType::MEM_WRITE,
             Watch::Access => HookType::MEM_READ_AFTER | HookType::MEM_WRITE,
         };
-        let hook = self.cpu_mut()?.add_mem_hook(
+        let hook = self.memory_hook(
             kind,
             address.saturating_sub(MAX_ACCESS_SIZE - 1),
             last,

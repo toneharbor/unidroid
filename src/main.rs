@@ -68,6 +68,9 @@ struct Diagnostics {
     /// Trace instructions in a module or module+0xSTART-0xEND.
     #[arg(long, value_name = "SPEC")]
     trace_code: Vec<String>,
+    /// Trace function calls from a module or module+0xSTART-0xEND.
+    #[arg(long, value_name = "SPEC")]
+    trace_calls: Vec<String>,
     /// Format diagnostic events on stderr.
     #[arg(long, value_enum, default_value = "text")]
     log_format: LogFormat,
@@ -80,6 +83,7 @@ impl Diagnostics {
             syscalls: self.trace_syscalls,
             imports: self.trace_imports,
             code: self.trace_code,
+            calls: self.trace_calls,
         });
         if matches!(self.log_format, LogFormat::Json) {
             builder = builder.on_event(|event| {

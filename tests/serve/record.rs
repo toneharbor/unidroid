@@ -70,7 +70,16 @@ fn signutil_session_records_and_replays_including_nested_jni_questions() {
         format!("replayed {count} commands, all responses match\n")
     );
     assert!(entries.iter().any(|v| v["out"]["ok"] == SIGN));
-    let traced = recording.replay(&["--trace-code", "libsignutil.so", "--log-format", "json"]);
+    let traced = recording.replay(&[
+        "--trace-code",
+        "libsignutil.so",
+        "--trace-calls",
+        "libsignutil.so",
+        "--trace-calls",
+        "libsignutil.so+0x1000-0x2000",
+        "--log-format",
+        "json",
+    ]);
     assert!(
         traced.status.success(),
         "{}{}",
@@ -81,11 +90,19 @@ fn signutil_session_records_and_replays_including_nested_jni_questions() {
         String::from_utf8(traced.stdout).unwrap(),
         format!("replayed {count} commands, all responses match\n")
     );
+    let events: Vec<Value> = String::from_utf8(traced.stderr)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(events.iter().any(|event| event["event"] == "instruction"));
+    assert!(events.iter().any(|event| event["event"] == "function_call"));
+    let invalid = recording.replay(&["--trace-calls", "libsignutil.so+1-2"]);
+    assert_eq!(invalid.status.code(), Some(1));
     assert!(
-        String::from_utf8(traced.stderr)
+        String::from_utf8(invalid.stdout)
             .unwrap()
-            .lines()
-            .any(|line| { serde_json::from_str::<Value>(line).unwrap()["event"] == "instruction" })
+            .contains("invalid code trace \"libsignutil.so+1-2\"")
     );
 }
 

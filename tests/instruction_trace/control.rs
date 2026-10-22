@@ -5,7 +5,11 @@ use unidroid::{JniHandler, Resume, Stop};
 
 type Captured = Rc<RefCell<Vec<Value>>>;
 
-fn emulator(arm64: bool, words: &[u32], before_load: bool) -> Result<(Emulator, u64, Captured)> {
+pub(super) fn emulator(
+    arm64: bool,
+    words: &[u32],
+    before_load: bool,
+) -> Result<(Emulator, u64, Captured)> {
     let events = Rc::new(RefCell::new(Vec::new()));
     let sink = events.clone();
     let trace = Trace {

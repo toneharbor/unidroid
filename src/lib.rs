@@ -15,7 +15,7 @@ mod threads;
 pub use debug::{
     Crash, Frame,
     control::{Resume, Stop, StopReason},
-    events::{Event, Trace},
+    events::{Event, MemoryAccess, Trace},
     maps::Mapping,
     modules::ModuleInfo,
     search::SEARCH_LIMIT,
@@ -124,7 +124,7 @@ impl EmulatorBuilder {
 #[derive(Default)]
 struct CpuData {
     interrupt: Option<u32>,
-    memory_access: Option<MemoryAccess>,
+    memory_access: Option<MemoryFault>,
     slice_remaining: u64,
     thread: u32,
     depth: usize,
@@ -135,7 +135,7 @@ struct CpuData {
     skip_breakpoint: Option<(u32, u64)>,
     finish: Option<debug::control::FinishTarget>,
 }
-struct MemoryAccess {
+struct MemoryFault {
     kind: MemType,
     address: u64,
     size: usize,
@@ -174,6 +174,7 @@ pub struct Emulator {
     threads: threads::Threads,
     imports: debug::imports::Imports,
     code: debug::code::Code,
+    calls: Option<debug::calls::Calls>,
     breakpoints: HashMap<u64, unicorn_engine::UcHookId>,
     watchpoints: debug::watch::Watchpoints,
 }
@@ -189,7 +190,7 @@ impl Emulator {
         }
     }
     fn build(builder: EmulatorBuilder) -> Result<Self> {
-        for spec in &builder.trace.code {
+        for spec in builder.trace.code.iter().chain(&builder.trace.calls) {
             debug::code::Spec::parse(spec)?;
         }
         Ok(Self {
@@ -226,6 +227,7 @@ impl Emulator {
             threads: threads::Threads::default(),
             imports: debug::imports::Imports::default(),
             code: debug::code::Code::default(),
+            calls: None,
             breakpoints: HashMap::new(),
             watchpoints: debug::watch::Watchpoints::default(),
         })
@@ -250,7 +252,7 @@ impl Emulator {
             let _ = uc.emu_stop();
         })?;
         uc.add_mem_hook(HookType::MEM_INVALID, 1, 0, |uc, kind, address, size, _| {
-            uc.get_data_mut().memory_access = Some(MemoryAccess {
+            uc.get_data_mut().memory_access = Some(MemoryFault {
                 kind,
                 address,
                 size,

@@ -55,6 +55,7 @@ impl Emulator {
             .run_loop(pc, handler, &mut control)
             .map_err(|error| self.crash(error));
         self.finish_code(result.is_err())?;
+        self.finish_calls();
         let cleanup = control.clear_finish(self);
         let result = result.and_then(|value| cleanup.map(|_| value));
         self.threads.depth -= 1;
@@ -117,7 +118,8 @@ impl Emulator {
             let pending = self.cpu()?.get_data().stop;
             let watched = self.cpu()?.get_data().watch.is_some();
             if pending.is_some() || finished || watched {
-                if self.trace.imports || !self.trace.code.is_empty() {
+                if self.trace.imports || !self.trace.code.is_empty() || !self.trace.calls.is_empty()
+                {
                     self.suspend_traces(pc & !1)?;
                 }
                 let reason = if watched {
@@ -141,7 +143,10 @@ impl Emulator {
             result?;
             let Some(interrupt) = interrupt else {
                 if stepping {
-                    if self.trace.imports || !self.trace.code.is_empty() {
+                    if self.trace.imports
+                        || !self.trace.code.is_empty()
+                        || !self.trace.calls.is_empty()
+                    {
                         self.suspend_traces(pc & !1)?;
                     }
                     if !(TRAMPOLINE..RETURN).contains(&(pc & !1)) {
@@ -160,7 +165,8 @@ impl Emulator {
                     )
                     .into());
                 }
-                if self.trace.imports || !self.trace.code.is_empty() {
+                if self.trace.imports || !self.trace.code.is_empty() || !self.trace.calls.is_empty()
+                {
                     self.suspend_traces(pc & !1)?;
                 }
                 pc = self.switch_thread(pc)?;

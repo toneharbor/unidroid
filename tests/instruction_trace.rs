@@ -3,6 +3,8 @@ use unidroid::{Emulator, Event, Result, Trace};
 
 #[path = "instruction_trace/control.rs"]
 mod control;
+#[path = "instruction_trace/memory.rs"]
+mod memory;
 
 #[test]
 fn instruction_json_keeps_full_width_values_as_hex_strings_in_order() -> Result<()> {
@@ -16,12 +18,13 @@ fn instruction_json_keeps_full_width_values_as_hex_strings_in_order() -> Result<
             ("v1".into(), 0xfedcba98765432100123456789abcdef),
         ],
         written: vec![("x1".into(), 0xfedcba9876543210)],
+        memory: Vec::new(),
     };
     assert_eq!(
         serde_json::to_value(&event)?,
         serde_json::json!({
             "event":"instruction", "at":"libtest.so+0x1000", "address":"0x10001000", "bytes":"e10300aa", "text":"mov x1, x0",
-            "read":[["x0","0xfedcba9876543210"],["v1","0xfedcba98765432100123456789abcdef"]], "written":[["x1","0xfedcba9876543210"]]
+            "read":[["x0","0xfedcba9876543210"],["v1","0xfedcba98765432100123456789abcdef"]], "written":[["x1","0xfedcba9876543210"]], "memory":[]
         })
     );
     Ok(())

@@ -74,6 +74,7 @@ fn an_unavailable_written_register_warns_once_with_the_instruction_address() -> 
                     text: String::new(),
                     read: Vec::new(),
                     written: Vec::new(),
+                    memory: Vec::new(),
                 },
                 writes: vec![name.into()],
                 address: 0x10001000,
