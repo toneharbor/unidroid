@@ -3,6 +3,7 @@ use crate::{CpuData, Emulator, Frame, Image, Result, arch::Architecture};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
+    ops::Bound::{Excluded, Included, Unbounded},
     rc::Rc,
     sync::Arc,
 };
@@ -23,6 +24,7 @@ pub(super) struct Pending {
     return_address: u64,
     sp: u64,
     args: [u64; 3],
+    allocation: Option<u64>,
     thread: u32,
     pub depth: usize,
     order: u64,
@@ -138,19 +140,27 @@ fn enter(
     let sp = cpu.reg_read(arch.sp()).expect("stack pointer");
     let args = std::array::from_fn(|i| cpu.reg_read(arch.gp(i)).expect("argument register"));
     let mut data = state.borrow_mut();
+    let allocation = if matches!(function, Function::Free | Function::Realloc) && args[0] != 0 {
+        data.live.get(&args[0]).copied()
+    } else {
+        None
+    };
     // A debugger stop can replay this entry before its first instruction executes.
-    if data
+    if let Some(pending) = data
         .pending
-        .get(&thread)
-        .and_then(|stack| stack.last())
-        .is_some_and(|pending| {
+        .get_mut(&thread)
+        .and_then(|stack| stack.last_mut())
+        .filter(|pending| {
             pending.function == function
                 && pending.sp == sp
                 && pending.return_address == return_address
                 && pending.depth == depth
-                && pending.args == args
         })
     {
+        if pending.args[0] != args[0] {
+            pending.allocation = allocation;
+        }
+        pending.args = args;
         return;
     }
     let backtrace = crate::debug::backtrace_addresses(cpu, arch, true)
@@ -172,6 +182,7 @@ fn enter(
         return_address,
         sp,
         args,
+        allocation,
         thread,
         depth,
         order,
@@ -228,9 +239,7 @@ fn record(
 ) {
     let (address, size, function) = match pending.function {
         Function::Free => {
-            if pending.args[0] != 0 {
-                release(state, pending.args[0], &pending.backtrace);
-            }
+            release(state, pending.allocation, &pending.backtrace);
             return;
         }
         Function::Malloc => (result, pending.args[0], "malloc"),
@@ -245,12 +254,15 @@ fn record(
                 return;
             }
             if result == pending.args[0] {
-                if let Some(order) = state.live.get(&result) {
-                    state.records.get_mut(order).unwrap().size = pending.args[1];
+                if let Some(order) = pending.allocation {
+                    if state.records.get(&order).is_some_and(|a| a.live) {
+                        retire_overlaps(state, result, pending.args[1], order);
+                        state.records.get_mut(&order).unwrap().size = pending.args[1];
+                    }
                     return;
                 }
-            } else if pending.args[0] != 0 {
-                release(state, pending.args[0], &pending.backtrace);
+            } else {
+                release(state, pending.allocation, &pending.backtrace);
             }
             (result, pending.args[1], "realloc")
         }
@@ -259,14 +271,19 @@ fn record(
                 return;
             }
             let mut bytes = [0; 8];
-            cpu.mem_read(pending.args[0], &mut bytes[..arch.pointer_size() as usize])
-                .expect("posix_memalign result");
+            if cpu
+                .mem_read(pending.args[0], &mut bytes[..arch.pointer_size() as usize])
+                .is_err()
+            {
+                return;
+            }
             (u64::from_le_bytes(bytes), pending.args[2], "posix_memalign")
         }
     };
     if address == 0 {
         return;
     }
+    retire_overlaps(state, address, size, pending.order);
     state.live.insert(address, pending.order);
     state.records.insert(
         pending.order,
@@ -282,11 +299,37 @@ fn record(
     );
 }
 
-fn release(state: &mut State, address: u64, backtrace: &[Frame]) {
-    if let Some(order) = state.live.remove(&address) {
+fn retire_overlaps(state: &mut State, address: u64, size: u64, keep: u64) {
+    // Include the same start even for a zero-size block; an overflowing end
+    // covers all remaining addresses, as the subtraction-based check did.
+    let end = address.checked_add(size.max(1)).map_or(Unbounded, Excluded);
+    let overlaps: Vec<_> = state
+        .live
+        .range(..address)
+        .next_back()
+        .filter(|&(_, order)| state.records[order].contains(address))
+        .into_iter()
+        .chain(state.live.range((Included(address), end)))
+        .filter(|&(_, &order)| order != keep)
+        .map(|(&start, &order)| (start, order))
+        .collect();
+    for (start, order) in overlaps {
         let allocation = state.records.get_mut(&order).unwrap();
         allocation.live = false;
+        allocation.freed = None;
+        state.live.remove(&start);
+    }
+}
+
+fn release(state: &mut State, order: Option<u64>, backtrace: &[Frame]) {
+    if let Some(order) = order
+        && let Some(allocation) = state.records.get_mut(&order).filter(|a| a.live)
+    {
+        allocation.live = false;
         allocation.freed = Some(backtrace.to_vec());
+        if state.live.get(&allocation.address) == Some(&order) {
+            state.live.remove(&allocation.address);
+        }
         state.freed_order.push(order);
     }
 }

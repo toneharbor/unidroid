@@ -224,7 +224,7 @@ Options, the same for `inspect` and `serve`:
 |---|---|
 | `--rootfs DIR` | Android system libraries (default `rootfs`) |
 | `--process-name NAME` | process name the library sees |
-| `--fixed-clock SECONDS` | start guest realtime at these Unix seconds; each clock read advances time by one microsecond; also fix file metadata |
+| `--fixed-clock SECONDS` | start guest realtime at these Unix seconds; guest clock syscalls and arm64 counter reads advance time by one microsecond per read; also fix file metadata |
 | `--random-seed N` | seed the shared guest random byte stream with SplitMix64 |
 | `--prop KEY=VALUE` | a system property, repeatable |
 | `--alias NAME=TARGET` | same as `symbol_alias`, repeatable |

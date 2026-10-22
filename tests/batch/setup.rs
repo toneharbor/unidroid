@@ -91,6 +91,75 @@ fn setups_without_libraries_rerun_on_every_attempt() {
 
 #[test]
 fn one_workers_failed_setup_prevents_every_job() {
+    use std::sync::{Mutex, mpsc};
+    use std::time::Duration;
+    let (finished, completion) = mpsc::channel();
+    std::thread::spawn(move || {
+        for (lib, getpid) in [("rootfs/lib64/libc.so", 172), ("rootfs/lib/libc.so", 20)] {
+            let temp = TempDir::new();
+            let snapshot = temp.0.join("job.snapshot");
+            let setup = temp.file(
+                "setup.jsonl",
+                &lines(&[
+                    json!({"cmd":"load", "path":lib}),
+                    json!({"cmd":"find_symbol", "module":{"$ref":0}, "name":"syscall"}),
+                ]),
+            );
+            let jobs = lines(&[json!({"commands":[
+                {"cmd":"snapshot", "path":snapshot},
+                {"cmd":"call_function", "address":{"$setup":1}, "args":[getpid.to_string()]}
+            ]})]);
+            let builds = AtomicUsize::new(0);
+            let (sent, received) = mpsc::channel();
+            let received = Mutex::new(received);
+            let error = serve::batch(
+                &options(),
+                &BatchOptions {
+                    setup: Some(setup),
+                    workers: 4,
+                    ..Default::default()
+                },
+                || {
+                    let second = builds.fetch_add(1, Ordering::SeqCst) == 1;
+                    if second {
+                        // Let healthy workers finish setup before this worker fails.
+                        // An early job signals us after writing its snapshot.
+                        let _ = received
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(1));
+                    }
+                    let sent = sent.clone();
+                    Emulator::builder().trace(unidroid::Trace {
+                    syscalls: true,
+                    code: if second { vec!["libc.so+bad".into()] } else { vec![] },
+                    ..Default::default()
+                }).on_event(move |event| {
+                    if matches!(event, unidroid::Event::Syscall { name, .. } if name == "getpid") {
+                        let _ = sent.send(());
+                    }
+                })
+                },
+                jobs.as_bytes(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("invalid code trace"), "{error}");
+            assert_eq!(builds.load(Ordering::SeqCst), 4);
+            assert!(
+                !snapshot.exists(),
+                "a job ran before every worker finished setup"
+            );
+        }
+        finished.send(()).unwrap();
+    });
+    // Removing the setup wait can strand healthy workers at the preflight wait.
+    completion
+        .recv_timeout(Duration::from_secs(10))
+        .expect("batch did not finish after a worker failed setup");
+}
+
+#[test]
+fn malformed_setup_commands_report_their_position() {
     let temp = TempDir::new();
     for (command, expected) in [
         (

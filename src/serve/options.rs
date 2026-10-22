@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Emulator settings shared by the CLI and recording header.
-#[derive(Args, Serialize, Deserialize)]
+#[derive(Clone, Args, Serialize, Deserialize)]
 pub struct Options {
     /// Answer matching Java calls from a JSON policy file.
     #[arg(long, value_name = "FILE")]
@@ -25,7 +25,7 @@ pub struct Options {
     /// Declare that CLASS extends SUPERCLASS.
     #[arg(long, value_name = "CLASS=SUPERCLASS", value_parser = pair)]
     pub superclass: Vec<(String, String)>,
-    /// Start guest clocks at these Unix seconds, advancing one microsecond per read.
+    /// Start guest realtime at these Unix seconds; guest clock syscalls and arm64 counter reads advance by one microsecond per read.
     #[arg(long, value_name = "SECONDS", allow_negative_numbers = true)]
     pub fixed_clock: Option<i64>,
     /// Seed the guest random byte stream with SplitMix64.

@@ -12,25 +12,21 @@ impl Clone for JniState {
         fn copy(
             object: &Rc<RefCell<Object>>,
             seen: &mut HashMap<*const RefCell<Object>, Rc<RefCell<Object>>>,
+            pending: &mut Vec<Rc<RefCell<Object>>>,
         ) -> Rc<RefCell<Object>> {
             let address = Rc::as_ptr(object);
             if let Some(copied) = seen.get(&address) {
                 return copied.clone();
             }
-            let mut value = object.borrow().clone();
-            // Register a placeholder before descending so cycles keep their identity.
+            // Register a placeholder before queuing children so cycles keep their identity.
             let copied = Rc::new(RefCell::new(Object::ObjectArray(Vec::new(), String::new())));
             seen.insert(address, copied.clone());
-            if let Object::ObjectArray(items, _) = &mut value {
-                for item in items.iter_mut().flatten() {
-                    *item = copy(item, seen);
-                }
-            }
-            *copied.borrow_mut() = value;
+            pending.push(object.clone());
             copied
         }
         let mut seen = HashMap::new();
-        Self {
+        let mut pending = Vec::new();
+        let copied = Self {
             objects: self
                 .objects
                 .iter()
@@ -38,7 +34,7 @@ impl Clone for JniState {
                     (
                         handle,
                         Reference {
-                            object: copy(&reference.object, &mut seen),
+                            object: copy(&reference.object, &mut seen, &mut pending),
                             scope: reference.scope,
                         },
                     )
@@ -47,7 +43,12 @@ impl Clone for JniState {
             classes: self
                 .classes
                 .iter()
-                .map(|(name, (handle, object))| (name.clone(), (*handle, copy(object, &mut seen))))
+                .map(|(name, (handle, object))| {
+                    (
+                        name.clone(),
+                        (*handle, copy(object, &mut seen, &mut pending)),
+                    )
+                })
                 .collect(),
             superclasses: self.superclasses.clone(),
             members: self.members.clone(),
@@ -60,7 +61,17 @@ impl Clone for JniState {
             weak: self.weak.clone(),
             pending: self.pending,
             history: Default::default(),
+        };
+        while let Some(object) = pending.pop() {
+            let mut value = object.borrow().clone();
+            if let Object::ObjectArray(items, _) = &mut value {
+                for item in items.iter_mut().flatten() {
+                    *item = copy(item, &mut seen, &mut pending);
+                }
+            }
+            *seen[&Rc::as_ptr(&object)].borrow_mut() = value;
         }
+        copied
     }
 }
 impl JniState {

@@ -143,14 +143,14 @@ impl RunControl {
 }
 
 impl Emulator {
-    fn debug_hook_end(&self, address: u64) -> u64 {
+    pub(super) fn debug_hook_end(&self, address: u64) -> u64 {
         // Thumb IT blocks can defer emu_stop through four 32-bit instructions.
-        address
-            + if self.arch == Some(crate::arch::Architecture::Arm32) {
-                16
-            } else {
-                0
-            }
+        // Leave room for the exclusive cache endpoint, even at the address limit.
+        address.saturating_add(if self.arch == Some(crate::arch::Architecture::Arm32) {
+            16
+        } else {
+            0
+        }) & !1
     }
 
     pub(crate) fn run_cpu(&mut self, pc: u64, stepping: bool) -> Result<()> {
@@ -175,11 +175,15 @@ impl Emulator {
         self.refresh_tracepoints()?;
         let cpu = self.cpu_mut()?;
         let result = cpu.emu_start(pc, crate::RETURN, 0, 0);
+        let source_error = cpu.get_data_mut().source_error.take();
         if let Some(hook) = hook {
             cpu.remove_hook(hook)?;
             cpu.ctl_flush_tb()?;
         }
-        self.settle_code(result.is_err())?;
+        self.settle_code(result.is_err() || source_error.is_some())?;
+        if let Some((pc, error)) = source_error {
+            return Err(format!("{error} from {}", self.location(pc)).into());
+        }
         result.map_err(|error| self.emulation_error(error))
     }
 

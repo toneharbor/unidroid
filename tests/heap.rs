@@ -4,6 +4,8 @@ use unidroid::{Emulator, Result, Trace};
 mod allocations;
 #[path = "heap/execution.rs"]
 mod execution;
+#[path = "heap/lifetime.rs"]
+mod lifetime;
 #[path = "heap/objects.rs"]
 mod objects;
 #[path = "heap/sample.rs"]

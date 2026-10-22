@@ -1,6 +1,99 @@
 use super::*;
 use unidroid::{JniHandler, Resume, Stop};
 
+#[test]
+fn replayed_allocator_entry_uses_edited_arguments_once() -> Result<()> {
+    struct EditArgument(bool);
+    impl JniHandler for EditArgument {
+        fn stopped(&mut self, emu: &mut Emulator, _: &Stop) -> Resume {
+            let reg = if self.0 { "x0" } else { "r0" };
+            emu.set_register(reg, 96).unwrap();
+            Resume::Continue
+        }
+    }
+    for arm64 in [true, false] {
+        let mut emu = emulator(arm64)?;
+        let malloc = emu.resolve("malloc")?;
+        emu.add_breakpoint(malloc)?;
+        let address = emu.call_function_with(&mut EditArgument(arm64), malloc, &[32])?;
+        let records = emu.heap();
+        assert_eq!(records.len(), 1);
+        assert_eq!((records[0].address, records[0].size), (address, 96));
+        assert_eq!(records[0].backtrace[0].address, 0x20000);
+    }
+    Ok(())
+}
+
+#[test]
+fn a_child_failure_discards_both_threads_abandoned_allocator_calls() -> Result<()> {
+    struct StartChild {
+        arm64: bool,
+        malloc: u64,
+        create: u64,
+        out: u64,
+    }
+    impl JniHandler for StartChild {
+        fn stopped(&mut self, emu: &mut Emulator, stop: &Stop) -> Resume {
+            if stop.thread != 1234 {
+                return Resume::Abort;
+            }
+            assert_eq!(
+                emu.call_function(self.create, &[self.out, 0, self.malloc, 73])
+                    .unwrap(),
+                0
+            );
+            emu.reset_heap();
+            emu.set_register(
+                if self.arm64 { "x8" } else { "r7" },
+                if self.arm64 { 124 } else { 158 },
+            )
+            .unwrap();
+            emu.set_register("pc", 0x20300).unwrap();
+            Resume::Continue
+        }
+    }
+    for arm64 in [true, false] {
+        let mut emu = emulator(arm64)?;
+        // Yield from the abandoned malloc frame so the child runs and fails.
+        code(
+            &mut emu,
+            0x20300,
+            if arm64 {
+                &[0xd4000001, 0xd65f03c0]
+            } else {
+                &[0xef000000, 0xe12fff1e]
+            },
+        )?;
+        let malloc = emu.resolve("malloc")?;
+        let create = emu.resolve("pthread_create")?;
+        let out = emu.malloc(8)?;
+        emu.add_breakpoint(malloc)?;
+        let error = emu
+            .call_function_with(
+                &mut StartChild {
+                    arm64,
+                    malloc,
+                    create,
+                    out,
+                },
+                malloc,
+                &[32],
+            )
+            .unwrap_err();
+        assert_ne!(
+            error.downcast_ref::<unidroid::Crash>().unwrap().thread,
+            1234
+        );
+        assert!(emu.heap().is_empty());
+        assert_eq!(emu.call_function(0x20304, &[0x1234])?, 0x1234);
+        assert!(
+            emu.heap().is_empty(),
+            "abandoned malloc completed on an unrelated return"
+        );
+    }
+    Ok(())
+}
+
 struct Vm(u64);
 impl JniHandler for Vm {
     fn stopped(&mut self, emu: &mut Emulator, _: &Stop) -> Resume {

@@ -108,6 +108,7 @@ enum HostFunction {
 #[derive(Default)]
 struct CpuData {
     interrupt: Option<u32>,
+    source_error: Option<(u64, Box<dyn std::error::Error>)>,
     memory_access: Option<MemoryFault>,
     slice_remaining: u64,
     thread: u32,
@@ -193,6 +194,7 @@ impl Emulator {
             });
             false
         })?;
+        self.source.configure_counter(&mut uc, arch)?;
         self.uc = Some(uc);
         self.arch = Some(arch);
         Ok(())

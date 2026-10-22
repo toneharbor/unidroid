@@ -1,6 +1,7 @@
-use crate::Result;
+use crate::{Architecture, CpuData, Result};
 use serde::{Deserialize, Serialize};
-use std::{fs::File, io::Read};
+use std::{cell::RefCell, fs::File, io::Read, rc::Rc};
+use unicorn_engine::{Arm64Insn, RegisterARM64, RegisterARM64CP, UcHookId, Unicorn};
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -67,12 +68,18 @@ impl SplitMix64 {
 #[derive(Clone, Default)]
 pub(crate) struct State {
     pub fixed_clock: Option<i64>,
+    pub random_seed: Option<u64>,
     elapsed_ns: u64,
     seeded_random: Option<SplitMix64>,
 }
 
-#[derive(Default)]
 pub(crate) struct Source {
+    pub shared: Rc<RefCell<Inputs>>,
+    counter_hook: Option<UcHookId>,
+}
+
+#[derive(Default)]
+pub(crate) struct Inputs {
     pub mode: Mode,
     random: Option<File>,
     pub state: State,
@@ -80,19 +87,81 @@ pub(crate) struct Source {
 impl Source {
     pub fn new(fixed_clock: Option<i64>, random_seed: Option<u64>) -> Self {
         Self {
-            state: State {
-                fixed_clock,
-                elapsed_ns: 0,
-                seeded_random: random_seed.map(|state| SplitMix64 {
-                    state,
-                    bytes: [0; 8],
-                    position: 8,
-                }),
-            },
-            ..Self::default()
+            shared: Rc::new(RefCell::new(Inputs {
+                state: State {
+                    fixed_clock,
+                    random_seed,
+                    elapsed_ns: 0,
+                    seeded_random: random_seed.map(|state| SplitMix64 {
+                        state,
+                        bytes: [0; 8],
+                        position: 8,
+                    }),
+                },
+                ..Inputs::default()
+            })),
+            counter_hook: None,
         }
     }
+
     pub fn time(&mut self, clock: Clock) -> Result<Time> {
+        self.shared.borrow_mut().time(clock)
+    }
+
+    pub fn random(&mut self, buffer: &mut [u8]) -> Result<usize> {
+        self.shared.borrow_mut().random(buffer)
+    }
+
+    pub fn configure_counter(
+        &mut self,
+        cpu: &mut Unicorn<'_, CpuData>,
+        arch: Architecture,
+    ) -> Result<()> {
+        let enabled =
+            arch == Architecture::Arm64 && self.shared.borrow().state.fixed_clock.is_some();
+        if !enabled {
+            if let Some(hook) = self.counter_hook.take() {
+                cpu.remove_hook(hook)?;
+                cpu.ctl_flush_tb()?;
+            }
+        } else if self.counter_hook.is_none() {
+            let shared = self.shared.clone();
+            let hook = cpu.add_insn_sys_hook_arm64(
+                Arm64Insn::UC_ARM64_INS_MRS,
+                1,
+                0,
+                move |cpu, register, system| {
+                    if !matches!(
+                        (system.op0, system.op1, system.crn, system.crm, system.op2),
+                        (3, 3, 14, 0, 1 | 2)
+                    ) {
+                        return false;
+                    }
+                    let result = (|| -> Result<()> {
+                        let mut frequency = RegisterARM64CP::new().op0(3).op1(3).crn(14);
+                        cpu.reg_read_arm64_coproc(&mut frequency)?;
+                        let time = shared.borrow_mut().time(Clock::Monotonic)?;
+                        let nanoseconds = time.sec as u128 * 1_000_000_000 + time.nsec as u128;
+                        let ticks = nanoseconds * frequency.val as u128 / 1_000_000_000;
+                        cpu.reg_write(register, ticks as u64)?;
+                        Ok(())
+                    })();
+                    if let Err(error) = result {
+                        let pc = cpu.reg_read(RegisterARM64::PC).expect("program counter");
+                        cpu.get_data_mut().source_error = Some((pc, error));
+                        let _ = cpu.emu_stop();
+                    }
+                    true
+                },
+            )?;
+            self.counter_hook = Some(hook);
+            cpu.ctl_flush_tb()?;
+        }
+        Ok(())
+    }
+}
+impl Inputs {
+    fn time(&mut self, clock: Clock) -> Result<Time> {
         if let Mode::Replaying(replay) = &mut self.mode {
             return replay.time(clock);
         }
@@ -132,7 +201,7 @@ impl Source {
         }
         Ok(time)
     }
-    pub fn random(&mut self, buffer: &mut [u8]) -> Result<usize> {
+    fn random(&mut self, buffer: &mut [u8]) -> Result<usize> {
         if let Mode::Replaying(replay) = &mut self.mode {
             let bytes = replay.random(buffer.len())?;
             buffer[..bytes.len()].copy_from_slice(&bytes);
@@ -189,7 +258,7 @@ mod tests {
             }
         }
         let mut source = Source::new(Some(-1), Some(0));
-        source.mode = Mode::Replaying(Box::new(Saved));
+        source.shared.borrow_mut().mode = Mode::Replaying(Box::new(Saved));
         for clock in [Clock::Realtime, Clock::Monotonic] {
             let time = source.time(clock)?;
             assert_eq!((time.sec, time.nsec), (999, 123));
@@ -197,7 +266,7 @@ mod tests {
         let mut bytes = [0xa5; 8];
         assert_eq!(source.random(&mut bytes)?, 3);
         assert_eq!(bytes, [1, 2, 3, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5]);
-        source.mode = Mode::Host;
+        source.shared.borrow_mut().mode = Mode::Host;
         let time = source.time(Clock::Realtime)?;
         assert_eq!((time.sec, time.nsec), (-1, 0));
         assert_eq!(source.random(&mut bytes)?, 8);

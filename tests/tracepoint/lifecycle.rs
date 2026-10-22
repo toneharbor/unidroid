@@ -2,6 +2,27 @@ use super::{vm::*, *};
 use unidroid::Trace;
 
 #[test]
+fn tracepoints_at_the_address_limit_do_not_poison_later_runs() -> Result<()> {
+    for arm64 in [true, false] {
+        let (mut emu, _) = emulator(arm64, if arm64 { &[0xd65f03c0] } else { &[0xe12fff1e] })?;
+        let point = Tracepoint {
+            values: vec!["0x7".into()],
+            log: false,
+        };
+        emu.add_tracepoint(CODE, &point)?;
+        emu.call_function(CODE, &[42])?;
+        for _ in 0..2 {
+            emu.add_tracepoint(u64::MAX, &point)?;
+            assert_eq!(emu.call_function(CODE, &[42])?, 42);
+        }
+        emu.remove_tracepoint(u64::MAX)?;
+        assert_eq!(emu.tracepoint_hits(CODE)?, [(7, 3)]);
+        assert_eq!(emu.call_function(CODE, &[42])?, 42);
+    }
+    Ok(())
+}
+
+#[test]
 fn tracepoints_and_conditions_work_in_guest_threads() -> Result<()> {
     for (arm64, thumb) in MODES {
         let words = if arm64 {

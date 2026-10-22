@@ -14,6 +14,44 @@ fn jni(emu: &mut Emulator, index: u64, args: &[u64]) -> Result<u64> {
 }
 
 #[test]
+fn checkpoints_copy_deep_object_array_chains_without_host_recursion() -> Result<()> {
+    const CHILD: &str = "UNIDROID_DEEP_CHECKPOINT_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", "checkpoint::tests::jni::checkpoints_copy_deep_object_array_chains_without_host_recursion", "--nocapture"])
+            .env(CHILD, "1")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(());
+    }
+    for arch in [Architecture::Arm32, Architecture::Arm64] {
+        let mut emu = Emulator::builder().build()?;
+        emu.setup_cpu(arch)?;
+        let mut root = emu.new_string("leaf");
+        for _ in 0..20_000 {
+            let parent = emu.new_object_array("java/lang/Object", &[root])?;
+            emu.release(root);
+            root = parent;
+        }
+        let saved = emu.checkpoint()?;
+        let mut copy = Emulator::builder().build()?;
+        copy.rewind(&saved)?;
+        for current in [&mut emu, &mut copy] {
+            let mut item = root;
+            for _ in 0..20_000 {
+                item = current.object_array(item)?[0];
+            }
+            assert_eq!(current.string(item)?, "leaf");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn rewind_deep_copies_jni_graphs_and_shares_only_user_payloads() -> Result<()> {
     for arch in [Architecture::Arm32, Architecture::Arm64] {
         let mut emu = Emulator::builder().build()?;

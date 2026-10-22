@@ -42,6 +42,43 @@ fn word(emu: &Emulator, address: u64, width: usize) -> Result<u64> {
 }
 
 #[test]
+fn arm64_counter_reads_share_fixed_time_and_survive_rewind() -> Result<()> {
+    fn counters(emu: &mut Emulator) -> Result<(u64, u64, u64)> {
+        // CNTFRQ_EL0, CNTVCT_EL0 and CNTPCT_EL0, each returned in x0.
+        let mut values = Vec::new();
+        for instruction in [0xd53be000u32, 0xd53be040, 0xd53be020] {
+            emu.write_bytes(
+                CODE + 16,
+                &[instruction.to_le_bytes(), 0xd65f03c0u32.to_le_bytes()].concat(),
+            )?;
+            values.push(emu.call_function(CODE + 16, &[])?);
+        }
+        Ok((values[0], values[1], values[2]))
+    }
+    let mut first = emulator(Emulator::builder().fixed_clock(123), true)?;
+    let mut second = emulator(Emulator::builder().fixed_clock(123), true)?;
+    let values = counters(&mut first)?;
+    assert_eq!(values, counters(&mut second)?);
+    assert_eq!(values.1, values.0, "monotonic time starts at one second");
+    assert_eq!(values.2 - values.1, values.0 / 1_000_000);
+    assert!(values.2 > values.1);
+    let out = first.malloc(16)?;
+    syscall(&mut first, true, (113, 263), &[1, out])?;
+    assert_eq!(word(&first, out + 8, 8)?, 2000);
+    let checkpoint = first.checkpoint()?;
+    let expected = counters(&mut first)?;
+    first.rewind(&checkpoint)?;
+    assert_eq!(counters(&mut first)?, expected);
+    let mut copy = Emulator::builder().build()?;
+    copy.rewind(&checkpoint)?;
+    assert_eq!(counters(&mut copy)?, expected);
+    let mut existing = emulator(Emulator::builder(), true)?;
+    existing.rewind(&checkpoint)?;
+    assert_eq!(counters(&mut existing)?, expected);
+    Ok(())
+}
+
+#[test]
 fn random_syscalls_and_devices_share_a_seeded_byte_stream() -> Result<()> {
     fn stream(arm64: bool, seed: u64, split: bool) -> Result<Vec<u8>> {
         let mut emu = emulator(Emulator::builder().random_seed(seed), arm64)?;

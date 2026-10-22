@@ -49,6 +49,7 @@ impl Emulator {
         result
     }
     fn run(&mut self, pc: u64, handler: &mut dyn JniHandler) -> Result<u64> {
+        let started_thread = self.threads.tid();
         self.threads.depth += 1;
         let mut control = crate::debug::control::RunControl::default();
         let result = self
@@ -58,7 +59,7 @@ impl Emulator {
         self.finish_calls();
         let cleanup = control.clear_finish(self);
         let result = result.and_then(|value| cleanup.map(|_| value));
-        let cleanup = self.finish_heap(result.is_err());
+        let cleanup = self.finish_heap(result.is_err(), started_thread);
         let result = result.and_then(|value| cleanup.map(|_| value));
         self.threads.depth -= 1;
         if self.threads.depth == 0 && result.is_err() {

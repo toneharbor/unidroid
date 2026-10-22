@@ -1,6 +1,22 @@
 use super::*;
 use unidroid::{HeapObject, Target};
 
+#[test]
+fn object_depth_is_limited_to_64() -> Result<()> {
+    for arm64 in [true, false] {
+        let mut emu = emulator(arm64)?;
+        let address = emu.malloc(8)?;
+        emu.object(address, 64)?;
+        for depth in [65, usize::MAX] {
+            assert_eq!(
+                emu.object(address, depth).unwrap_err().to_string(),
+                "depth must be at most 64"
+            );
+        }
+    }
+    Ok(())
+}
+
 fn expanded(object: &HeapObject, index: usize) -> Option<&HeapObject> {
     match object.fields[index].target.as_ref().unwrap() {
         Target::Block { object, .. } => object.as_deref(),
@@ -64,7 +80,7 @@ fn fields_strings_referrers_and_cycles_obey_depth_and_expand_once() -> Result<()
         let two = emu.object(a, 2)?;
         assert_eq!(expanded(expanded(&two, 0).unwrap(), 0).unwrap().address, c);
         write_pointer(&mut emu, b, a, arm64)?;
-        let cyclic = emu.object(a, usize::MAX)?;
+        let cyclic = emu.object(a, 64)?;
         assert!(expanded(expanded(&cyclic, 0).unwrap(), 0).is_none());
         guest(&mut emu, "free", &[b])?;
         assert!(

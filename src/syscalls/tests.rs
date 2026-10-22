@@ -3,6 +3,80 @@ use crate::Architecture;
 use std::os::unix::fs::MetadataExt;
 
 #[test]
+fn huge_random_counts_are_short_reads_with_a_linux_limit() -> Result<()> {
+    for arch in [Architecture::Arm64, Architecture::Arm32] {
+        let mut emu = Emulator::builder().random_seed(0).build()?;
+        emu.setup_cpu(arch)?;
+        let arm64 = arch == Architecture::Arm64;
+        let limit = 33_554_431;
+        let out = emu.malloc(limit + 1)?;
+        emu.write_bytes(out + limit as u64, &[0xa5])?;
+        assert_eq!(
+            emu.syscall(
+                if arm64 { 278 } else { 384 },
+                [out, u64::MAX, 0, 0, 0, 0],
+                0
+            )?,
+            limit as u64
+        );
+        assert_eq!(
+            emu.read_bytes(out, 8)?,
+            [0xaf, 0xcd, 0x1d, 0x7b, 0x39, 0xa8, 0x20, 0xe2]
+        );
+        for path in ["/dev/urandom", "/dev/random"] {
+            let path = emu.new_cstring(path)?;
+            let fd = emu.syscall(if arm64 { 56 } else { 322 }, [0, path, 0, 0, 0, 0], 0)?;
+            for nr in if arm64 { [63, 67] } else { [3, 180] } {
+                assert_eq!(
+                    emu.syscall(nr, [fd, out, u64::MAX, 0, 0, 0], 0)?,
+                    limit as u64
+                );
+            }
+        }
+        assert_eq!(emu.read_bytes(out + limit as u64, 1)?, [0xa5]);
+    }
+    Ok(())
+}
+
+#[test]
+fn huge_file_reads_allocate_only_the_remaining_bytes_and_pread_keeps_position() -> Result<()> {
+    let bytes = std::fs::read("rootfs/lib/libdl.so")?;
+    for arch in [Architecture::Arm64, Architecture::Arm32] {
+        let mut emu = Emulator::builder().build()?;
+        emu.setup_cpu(arch)?;
+        let arm64 = arch == Architecture::Arm64;
+        let path = emu.new_cstring("/lib/libdl.so")?;
+        let fd = emu.syscall(if arm64 { 56 } else { 322 }, [0, path, 0, 0, 0, 0], 0)?;
+        let out = emu.malloc(bytes.len() + 8)?;
+        for count in [u64::MAX, bytes.len() as u64 + 100] {
+            emu.syscall(if arm64 { 62 } else { 19 }, [fd, 3, 0, 0, 0, 0], 0)?;
+            emu.write_bytes(out, &vec![0xa5; bytes.len() + 8])?;
+            let args = if arm64 {
+                [fd, out, count, 7, 0, 0]
+            } else {
+                [fd, out, count, 0, 7, 0]
+            };
+            assert_eq!(
+                emu.syscall(if arm64 { 67 } else { 180 }, args, 0)?,
+                bytes.len() as u64 - 7
+            );
+            assert_eq!(emu.read_bytes(out, bytes.len() - 7)?, bytes[7..]);
+            assert_eq!(emu.read_bytes(out + bytes.len() as u64 - 7, 8)?, [0xa5; 8]);
+            assert_eq!(
+                emu.syscall(if arm64 { 63 } else { 3 }, [fd, out, count, 0, 0, 0], 0)?,
+                bytes.len() as u64 - 3
+            );
+            assert_eq!(emu.read_bytes(out, bytes.len() - 3)?, bytes[3..]);
+            assert_eq!(
+                emu.syscall(if arm64 { 63 } else { 3 }, [fd, out, count, 0, 0, 0], 0)?,
+                0
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn arm32_syscalls_preserve_argument_registers_and_resume_in_arm_or_thumb() -> Result<()> {
     let mut emu = Emulator::builder().build()?;
     emu.setup_cpu(Architecture::Arm32)?;

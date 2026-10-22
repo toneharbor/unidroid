@@ -4,6 +4,8 @@ use std::{
     io::{Read, Seek, SeekFrom},
 };
 
+pub(super) const RANDOM_READ_LIMIT: u64 = 33_554_431;
+
 pub(crate) enum GuestFile {
     Host { file: File, path: String },
     Random { path: String },
@@ -26,6 +28,16 @@ impl FileState {
 }
 
 impl GuestFile {
+    pub fn read_length(&mut self, requested: u64) -> std::io::Result<usize> {
+        let available = match self {
+            Self::Host { file, .. } => file
+                .metadata()?
+                .len()
+                .saturating_sub(file.stream_position()?),
+            Self::Random { .. } => RANDOM_READ_LIMIT,
+        };
+        Ok(requested.min(available) as usize)
+    }
     pub fn checkpoint(&mut self) -> Result<FileState> {
         Ok(match self {
             Self::Host { file, path } => FileState::Host {

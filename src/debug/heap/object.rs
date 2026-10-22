@@ -49,6 +49,9 @@ struct Browser<'a> {
 }
 
 pub(super) fn build(emu: &Emulator, address: u64, depth: usize) -> Result<HeapObject> {
+    if depth > 64 {
+        return Err("depth must be at most 64".into());
+    }
     let blocks = emu.known_allocations();
     let maps = emu.maps()?;
     let allocation = blocks

@@ -38,7 +38,7 @@ impl EmulatorBuilder {
         self.cache_size = bytes;
         self
     }
-    /// Start realtime at these Unix seconds; all clock reads advance by one microsecond.
+    /// Start realtime at these Unix seconds; guest clock syscalls and arm64 counter reads advance by one microsecond per read.
     pub fn fixed_clock(mut self, unix_seconds: i64) -> Self {
         self.fixed_clock = Some(unix_seconds);
         self

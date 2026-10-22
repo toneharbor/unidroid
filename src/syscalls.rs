@@ -73,7 +73,7 @@ impl Emulator {
                 if nr == 67 {
                     file.seek(SeekFrom::Start(a[3]))?;
                 }
-                let mut buffer = vec![0; a[2] as usize];
+                let mut buffer = vec![0; file.read_length(a[2])?];
                 let random = matches!(file, GuestFile::Random { .. });
                 let result = self.read_file(a[0], &mut buffer);
                 if let Some(position) = position {
@@ -93,8 +93,11 @@ impl Emulator {
             }
             79 | 80 => {
                 let stat = |file: &GuestFile| {
-                    file.stat(self.architecture(), self.source.state.fixed_clock)
-                        .ok()
+                    file.stat(
+                        self.architecture(),
+                        self.source.shared.borrow().state.fixed_clock,
+                    )
+                    .ok()
                 };
                 let metadata = if nr == 80 {
                     self.files.get(&a[0]).and_then(stat)
@@ -173,7 +176,7 @@ impl Emulator {
                 0
             }
             278 => {
-                let mut buffer = vec![0; a[1] as usize];
+                let mut buffer = vec![0; a[1].min(files::RANDOM_READ_LIMIT) as usize];
                 let mut count = 0;
                 loop {
                     count += self.source.random(&mut buffer[count..])?;

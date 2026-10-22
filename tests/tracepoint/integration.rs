@@ -157,16 +157,24 @@ fn tracepoints_follow_watch_logs_and_step_boundaries_in_execution_order() -> Res
             }
             emu.add_breakpoint(CODE)?;
             emu.add_breakpoint(CODE + 4)?;
-            let mut stops = 0;
-            let mut handler = Handler(|_: &mut Emulator, _: &Stop| {
-                stops += 1;
+            let mut stops = Vec::new();
+            let mut handler = Handler(|_: &mut Emulator, stop: &Stop| {
+                stops.push((stop.reason, stop.address));
                 Resume::Step
             });
             assert_eq!(
                 emu.call_function_with(&mut handler, CODE, &[target, 42])?,
                 7
             );
-            assert!(stops >= 2);
+            assert_eq!(
+                stops,
+                [
+                    (StopReason::Breakpoint, CODE),
+                    (StopReason::Breakpoint, CODE + 4),
+                    (StopReason::Step, CODE + 8),
+                    (StopReason::Step, 0x20000),
+                ]
+            );
             assert_eq!(
                 events
                     .borrow()

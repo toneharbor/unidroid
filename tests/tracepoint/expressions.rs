@@ -1,6 +1,48 @@
 use super::*;
 
 #[test]
+fn expressions_limit_each_operand_to_16_nested_brackets() -> Result<()> {
+    for arm64 in [true, false] {
+        let (mut emu, _) = emulator(arm64, &[])?;
+        let nested = |depth| format!("{}0x0{}", "[".repeat(depth), "]".repeat(depth));
+        emu.add_tracepoint(
+            CODE,
+            &Tracepoint {
+                values: vec![nested(16)],
+                log: false,
+            },
+        )?;
+        emu.add_conditional_breakpoint(CODE, &format!("{}=={}", nested(16), nested(16)))?;
+        for depth in [17, 10_000] {
+            let text = nested(depth);
+            let error = emu
+                .add_tracepoint(
+                    CODE,
+                    &Tracepoint {
+                        values: vec![text.clone()],
+                        log: false,
+                    },
+                )
+                .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!("bad expression {text:?}: nesting deeper than 16")
+            );
+            for condition in [format!("{text}==0x0"), format!("0x0=={text}")] {
+                let error = emu
+                    .add_conditional_breakpoint(CODE, &condition)
+                    .unwrap_err();
+                assert_eq!(
+                    error.to_string(),
+                    format!("bad condition {condition:?}: nesting deeper than 16")
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn expressions_share_named_registers_and_read_nested_little_endian_memory() -> Result<()> {
     for arm64 in [true, false] {
         let words = if arm64 {
@@ -95,6 +137,14 @@ fn malformed_expressions_and_conditions_name_the_bad_text_and_keep_existing_poin
                 log: false,
             },
         )?;
+        assert_eq!(emu.call_function(CODE, &[7])?, 8);
+        assert_eq!(emu.tracepoint_hits(CODE)?, [(7, 1)]);
+        let invalid = Tracepoint {
+            values: vec!["[]".into()],
+            log: true,
+        };
+        assert!(emu.add_tracepoint(CODE + 8, &invalid).is_err());
+        assert!(emu.tracepoint_hits(CODE + 8).is_err());
         for text in [
             "",
             "[]",
@@ -173,7 +223,7 @@ fn malformed_expressions_and_conditions_name_the_bad_text_and_keep_existing_poin
         });
         assert_eq!(emu.call_function_with(&mut handler, CODE, &[7])?, 8);
         assert_eq!(stops, 1);
-        assert_eq!(emu.tracepoint_hits(CODE)?, [(7, 1)]);
+        assert_eq!(emu.tracepoint_hits(CODE)?, [(7, 2)]);
     }
     Ok(())
 }

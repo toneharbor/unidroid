@@ -125,7 +125,7 @@ impl Emulator {
         tracking::configure(self, enabled)
     }
 
-    pub(crate) fn finish_heap(&mut self, failed: bool) -> Result<()> {
+    pub(crate) fn finish_heap(&mut self, failed: bool, started_thread: u32) -> Result<()> {
         if self.trace.heap
             && let Some(state) = self.heap_trace.state.clone()
         {
@@ -135,10 +135,12 @@ impl Emulator {
                 let thread = self.threads.tid();
                 let depth = self.threads.depth;
                 let mut state = state.borrow_mut();
-                if let Some(stack) = state.pending.get_mut(&thread) {
-                    stack.retain(|pending| pending.depth < depth);
-                    if stack.is_empty() {
-                        state.pending.remove(&thread);
+                for thread in [thread, started_thread] {
+                    if let Some(stack) = state.pending.get_mut(&thread) {
+                        stack.retain(|pending| pending.depth < depth);
+                        if stack.is_empty() {
+                            state.pending.remove(&thread);
+                        }
                     }
                 }
             } else if pc == crate::RETURN {

@@ -12,8 +12,14 @@ pub fn record(
 ) -> Result<()> {
     let policy = options.load_policy()?;
     let mut emu = options.build(builder)?;
-    let journal = Journal::recording(file, options, policy.as_ref())?;
-    emu.source.mode = crate::source::Mode::Recording(Box::new(journal.clone()));
+    let mut effective = options.clone();
+    {
+        let source = emu.source.shared.borrow();
+        effective.fixed_clock = source.state.fixed_clock;
+        effective.random_seed = source.state.random_seed;
+    }
+    let journal = Journal::recording(file, &effective, policy.as_ref())?;
+    emu.source.shared.borrow_mut().mode = crate::source::Mode::Recording(Box::new(journal.clone()));
     let mut session = Session {
         input,
         output,
@@ -32,7 +38,7 @@ pub fn record(
 pub fn replay(file: impl BufRead, builder: EmulatorBuilder) -> Result<usize> {
     let (options, policy, journal) = Journal::replaying(file)?;
     let mut emu = options.build(builder)?;
-    emu.source.mode = crate::source::Mode::Replaying(Box::new(journal.clone()));
+    emu.source.shared.borrow_mut().mode = crate::source::Mode::Replaying(Box::new(journal.clone()));
     let mut session = Session {
         input: std::io::empty(),
         output: std::io::sink(),

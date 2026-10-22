@@ -79,7 +79,7 @@ impl Emulator {
                 .map(|(&fd, file)| Ok((fd, file.checkpoint()?)))
                 .collect::<Result<_>>()?,
             next_fd: self.next_fd,
-            source: self.source.state.clone(),
+            source: self.source.shared.borrow().state.clone(),
             jni: self.jni.clone(),
             threads: self.threads.copy(self.uc.as_mut().unwrap())?,
             heap_records: self.saved_heap(),
@@ -91,17 +91,22 @@ impl Emulator {
     pub fn rewind(&mut self, checkpoint: &Checkpoint) -> Result<()> {
         self.between_calls()?;
         let created_cpu = self.uc.is_none();
-        if let Some(arch) = self.arch {
-            if arch != checkpoint.arch {
-                return Err(format!(
-                    "cannot rewind {} checkpoint into {} emulator",
-                    checkpoint.arch.name(),
-                    arch.name()
-                )
-                .into());
-            }
-        } else {
+        if let Some(arch) = self.arch
+            && arch != checkpoint.arch
+        {
+            return Err(format!(
+                "cannot rewind {} checkpoint into {} emulator",
+                checkpoint.arch.name(),
+                arch.name()
+            )
+            .into());
+        }
+        self.source.shared.borrow_mut().state = checkpoint.source.clone();
+        if created_cpu {
             self.create_cpu(checkpoint.arch)?;
+        } else {
+            self.source
+                .configure_counter(self.uc.as_mut().unwrap(), checkpoint.arch)?;
         }
         let modules_changed = self.modules.len() != checkpoint.modules.len()
             || self.modules.iter().zip(&checkpoint.modules).any(|(a, b)| {
@@ -136,7 +141,6 @@ impl Emulator {
             .map(|(&fd, file)| Ok((fd, file.reopen(self)?)))
             .collect::<Result<_>>()?;
         self.next_fd = checkpoint.next_fd;
-        self.source.state = checkpoint.source.clone();
         self.jni.rewind(&checkpoint.jni);
         let mut threads = checkpoint.threads.copy(self.cpu_mut()?)?;
         threads.slice_hook_installed = self.threads.slice_hook_installed;

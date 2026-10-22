@@ -17,6 +17,20 @@ fn commands(emu: &mut Emulator, commands: &[Value]) -> Result<Vec<Value>> {
 }
 
 #[test]
+fn serve_object_rejects_depth_above_64() -> Result<()> {
+    for arm64 in [true, false] {
+        let mut emu = emulator(arm64)?;
+        let address = emu.malloc(8)?;
+        let replies = commands(
+            &mut emu,
+            &[json!({"cmd":"object", "at":format!("0x{address:x}"), "depth":65})],
+        )?;
+        assert_eq!(replies, [json!({"error":"depth must be at most 64"})]);
+    }
+    Ok(())
+}
+
+#[test]
 fn serve_heap_reset_object_depth_and_trace_defaults_use_decimal_strings() -> Result<()> {
     for arm64 in [true, false] {
         let mut emu = emulator(arm64)?;

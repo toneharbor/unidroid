@@ -15,7 +15,7 @@ impl Expr {
     pub fn parse(emu: &Emulator, text: &str) -> Result<Self> {
         let mut parser = Parser { emu, rest: text };
         (|| {
-            let expr = parser.expr()?;
+            let expr = parser.expr(0)?;
             parser.end()?;
             Ok(expr)
         })()
@@ -51,7 +51,7 @@ impl Condition {
     pub fn parse(emu: &Emulator, text: &str) -> Result<Self> {
         let mut parser = Parser { emu, rest: text };
         (|| {
-            let left = parser.expr()?;
+            let left = parser.expr(0)?;
             let equal = if parser.take("==") {
                 true
             } else if parser.take("!=") {
@@ -59,7 +59,7 @@ impl Condition {
             } else {
                 return Err("expected == or !=".into());
             };
-            let right = parser.expr()?;
+            let right = parser.expr(0)?;
             parser.end()?;
             Ok(Self { left, right, equal })
         })()
@@ -101,10 +101,13 @@ impl Parser<'_> {
         Ok(value)
     }
 
-    fn expr(&mut self) -> Result<Expr> {
+    fn expr(&mut self, depth: usize) -> Result<Expr> {
         self.rest = self.rest.trim_start();
         if self.take("[") {
-            let base = Box::new(self.expr()?);
+            if depth == 16 {
+                return Err("nesting deeper than 16".into());
+            }
+            let base = Box::new(self.expr(depth + 1)?);
             let offset = if self.take("+") {
                 self.hex()?
             } else if self.take("-") {
