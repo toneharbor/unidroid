@@ -163,6 +163,7 @@ impl Emulator {
             cpu.remove_hook(hook)?;
             cpu.ctl_flush_tb()?;
         }
+        self.settle_code(result.is_err())?;
         result.map_err(|error| self.emulation_error(error))
     }
 

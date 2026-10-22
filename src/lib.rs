@@ -9,6 +9,7 @@ mod probe;
 pub use probe::{Probe, ProbedCall};
 mod run;
 pub mod serve;
+mod source;
 mod syscalls;
 mod threads;
 pub use debug::{
@@ -21,7 +22,7 @@ pub use jni::{Handle, JniCall, JniHandler, JniValue, PrimitiveType};
 
 use arch::Architecture;
 use elf::Image;
-use std::{collections::HashMap, fs::File, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use unicorn_engine::{
     Unicorn,
     unicorn_const::{ControlType, HookType, MemType, Prot, uc_ctl, uc_error},
@@ -160,11 +161,13 @@ pub struct Emulator {
     dlerror_buf: u64,
     dlerror_pending: bool,
     dlerror_capacity: usize,
-    files: HashMap<u64, File>,
+    files: HashMap<u64, syscalls::GuestFile>,
+    source: source::Source,
     next_fd: u64,
     jni: jni::JniState,
     threads: threads::Threads,
     imports: debug::imports::Imports,
+    code: debug::code::Code,
     breakpoints: HashMap<u64, unicorn_engine::UcHookId>,
 }
 impl Emulator {
@@ -179,6 +182,9 @@ impl Emulator {
         }
     }
     fn build(builder: EmulatorBuilder) -> Result<Self> {
+        for spec in &builder.trace.code {
+            debug::code::Spec::parse(spec)?;
+        }
         Ok(Self {
             uc: None,
             arch: None,
@@ -207,10 +213,12 @@ impl Emulator {
             dlerror_pending: false,
             dlerror_capacity: 256,
             files: HashMap::new(),
+            source: source::Source::default(),
             next_fd: 3,
             jni: jni::JniState::default(),
             threads: threads::Threads::default(),
             imports: debug::imports::Imports::default(),
+            code: debug::code::Code::default(),
             breakpoints: HashMap::new(),
         })
     }

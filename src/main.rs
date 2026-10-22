@@ -15,6 +15,15 @@ enum Command {
     Serve {
         #[command(flatten)]
         options: Options,
+        /// Record the session as flushed JSON Lines.
+        #[arg(long, value_name = "FILE")]
+        record: Option<PathBuf>,
+    },
+    /// Replay a recorded serve session and compare every response.
+    Replay {
+        file: PathBuf,
+        #[command(flatten)]
+        diagnostics: Diagnostics,
     },
     /// Inspect a library and run JNI_OnLoad.
     Inspect {
@@ -35,30 +44,16 @@ enum LogFormat {
 }
 
 #[derive(Args)]
+#[group(id = "RunOptions")]
 struct Options {
-    /// Android system library directory.
-    #[arg(long, default_value = "rootfs")]
-    rootfs: PathBuf,
-    /// Guest process name.
-    #[arg(long)]
-    process_name: Option<String>,
-    /// Translation cache size in MB (default 8). Large libraries run faster with a bigger cache.
-    #[arg(
-        long,
-        value_name = "MB",
-        value_parser = clap::value_parser!(u32).range(1..4096),
-        verbatim_doc_comment
-    )]
-    translation_cache_mb: Option<u32>,
-    /// Set a system property.
-    #[arg(long = "prop", value_name = "KEY=VALUE", value_parser = pair)]
-    properties: Vec<(String, String)>,
-    /// Resolve a symbol under another name.
-    #[arg(long, value_name = "NAME=TARGET", value_parser = pair)]
-    alias: Vec<(String, String)>,
-    /// Declare that CLASS extends SUPERCLASS.
-    #[arg(long, value_name = "CLASS=SUPERCLASS", value_parser = pair)]
-    superclass: Vec<(String, String)>,
+    #[command(flatten)]
+    emulator: unidroid::serve::Options,
+    #[command(flatten)]
+    diagnostics: Diagnostics,
+}
+
+#[derive(Args)]
+struct Diagnostics {
     /// Trace JNI calls to stderr.
     #[arg(long)]
     verbose: bool,
@@ -68,24 +63,21 @@ struct Options {
     /// Trace app calls into other libraries to stderr.
     #[arg(long)]
     trace_imports: bool,
+    /// Trace instructions in a module or module+0xSTART-0xEND.
+    #[arg(long, value_name = "SPEC")]
+    trace_code: Vec<String>,
     /// Format diagnostic events on stderr.
     #[arg(long, value_enum, default_value = "text")]
     log_format: LogFormat,
 }
 
-fn pair(value: &str) -> std::result::Result<(String, String), String> {
-    value
-        .split_once('=')
-        .map(|(key, value)| (key.into(), value.into()))
-        .ok_or_else(|| "expected KEY=VALUE".into())
-}
-
-impl Options {
-    fn build(self, inspect: bool) -> Result<Emulator> {
-        let mut builder = Emulator::builder().rootfs(self.rootfs).trace(Trace {
+impl Diagnostics {
+    fn builder(self, inspect: bool) -> unidroid::EmulatorBuilder {
+        let mut builder = Emulator::builder().trace(Trace {
             jni: inspect || self.verbose,
             syscalls: self.trace_syscalls,
             imports: self.trace_imports,
+            code: self.trace_code,
         });
         if matches!(self.log_format, LogFormat::Json) {
             builder = builder.on_event(|event| {
@@ -95,23 +87,7 @@ impl Options {
                 let _ = writeln!(stderr);
             });
         }
-        if let Some(name) = self.process_name {
-            builder = builder.process_name(name);
-        }
-        if let Some(mb) = self.translation_cache_mb {
-            builder = builder.translation_cache_size(mb * 1024 * 1024);
-        }
-        for (key, value) in self.properties {
-            builder = builder.system_property(key, value);
-        }
-        let mut emu = builder.build()?;
-        for (name, target) in self.alias {
-            emu.symbol_alias(name, target);
-        }
-        for (class, superclass) in self.superclass {
-            emu.superclass(class, superclass);
-        }
-        Ok(emu)
+        builder
     }
 }
 
@@ -152,7 +128,7 @@ fn inspect(options: Options, lib: PathBuf, probe: bool) -> Result<ExitCode> {
     }
     let onload = exports.contains(&"JNI_OnLoad");
     println!("JNI_OnLoad: {}", if onload { "yes" } else { "no" });
-    let mut emu = options.build(true)?;
+    let mut emu = options.emulator.build(options.diagnostics.builder(true))?;
     let module = emu.load_library(lib)?;
     let mut status = ExitCode::SUCCESS;
     let mut answers = Probe::default();
@@ -200,10 +176,45 @@ fn inspect(options: Options, lib: PathBuf, probe: bool) -> Result<ExitCode> {
 
 fn run() -> Result<ExitCode> {
     match Cli::parse().command {
-        Command::Serve { options } => {
-            let mut emu = options.build(false)?;
-            unidroid::serve::serve(&mut emu, std::io::stdin().lock(), std::io::stdout().lock())?;
+        Command::Serve { options, record } => {
+            let builder = options.diagnostics.builder(false);
+            if let Some(path) = record {
+                unidroid::serve::record(
+                    &options.emulator,
+                    builder,
+                    fs::File::create(path)?,
+                    std::io::stdin().lock(),
+                    std::io::stdout().lock(),
+                )?;
+            } else {
+                let mut emu = options.emulator.build(builder)?;
+                unidroid::serve::serve(
+                    &mut emu,
+                    std::io::stdin().lock(),
+                    std::io::stdout().lock(),
+                )?;
+            }
             Ok(ExitCode::SUCCESS)
+        }
+        Command::Replay { file, diagnostics } => {
+            let result = fs::File::open(file)
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+                .and_then(|file| {
+                    unidroid::serve::replay(
+                        std::io::BufReader::new(file),
+                        diagnostics.builder(false),
+                    )
+                });
+            match result {
+                Ok(count) => {
+                    println!("replayed {count} commands, all responses match");
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(error) => {
+                    println!("{error}");
+                    Ok(ExitCode::FAILURE)
+                }
+            }
         }
         Command::Inspect {
             options,

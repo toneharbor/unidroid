@@ -4,11 +4,24 @@ use unidroid::{Emulator, Event, Result, Trace};
 #[test]
 fn tracing_imports_preserves_thread_progress() -> Result<()> {
     for abi in ["arm64-v8a", "armeabi-v7a"] {
-        for (imports, before_spawn) in [(false, false), (true, false), (true, true)] {
+        for (imports, before_spawn, code) in [
+            (false, false, false),
+            (true, false, false),
+            (true, true, false),
+            (false, false, true),
+            (false, true, true),
+            (true, false, true),
+            (true, true, true),
+        ] {
+            let instructions = Rc::new(Cell::new(0));
+            let instruction_sink = instructions.clone();
             let calls = Rc::new(Cell::new(0));
             let sink = calls.clone();
             let mut emu = Emulator::builder()
                 .on_event(move |event| {
+                    if matches!(event, Event::Instruction { text, .. } if text.starts_with("blr ") || text.starts_with("blx ")) {
+                        instruction_sink.set(instruction_sink.get() + 1);
+                    }
                     if matches!(event, Event::Call { function, .. } if function == "strlen") {
                         sink.set(sink.get() + 1);
                     }
@@ -56,20 +69,27 @@ fn tracing_imports_preserves_thread_progress() -> Result<()> {
             )?;
             let flag = emu.malloc(4)?;
             let thread = emu.malloc(8)?;
+            let trace = Trace {
+                imports,
+                code: if code {
+                    let start = loop_address - emu.modules()[m.0].base;
+                    vec![format!(
+                        "libjnidispatch.so+0x{start:x}-0x{:x}",
+                        start + main.len() as u64 * 4
+                    )]
+                } else {
+                    Vec::new()
+                },
+                ..Trace::default()
+            };
             if before_spawn {
-                emu.set_trace(Trace {
-                    imports,
-                    ..Trace::default()
-                })?;
+                emu.set_trace(trace.clone())?;
             }
             let create = emu.find_symbol(m, "pthread_create")?;
             assert_eq!(emu.call_function(create, &[thread, 0, 0x20100, flag])?, 0);
             assert_eq!(emu.read_bytes(flag, 4)?, [0; 4]);
             if !before_spawn {
-                emu.set_trace(Trace {
-                    imports,
-                    ..Trace::default()
-                })?;
+                emu.set_trace(trace)?;
             }
             let strlen = emu.find_symbol(m, "strlen")?;
             let text = emu.new_cstring("abc")?;
@@ -79,6 +99,7 @@ fn tracing_imports_preserves_thread_progress() -> Result<()> {
                 "{abi}, imports={imports}, before_spawn={before_spawn}"
             );
             assert_eq!(calls.get(), if imports { 20_000 } else { 0 });
+            assert_eq!(instructions.get(), if code { 20_000 } else { 0 });
         }
     }
     Ok(())

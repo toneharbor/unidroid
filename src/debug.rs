@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::fmt::{self, Write};
 use unicorn_engine::{RegisterARM, RegisterARM64};
 
+pub(crate) mod code;
 pub(crate) mod control;
 pub(crate) mod events;
 pub(crate) mod imports;

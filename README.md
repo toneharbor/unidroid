@@ -126,11 +126,21 @@ For a plain C call, use `emu.call_function_with(&mut handler, function, args)?` 
 
 `emu.register(name)?` reads a register and `emu.set_register(name, value)?` writes it. Names are `x0`–`x28`, `fp`, `lr`, `sp`, `pc`, `nzcv` on arm64; `r0`–`r12`, `sp`, `lr`, `pc`, `cpsr` on arm32; and `d0`–`d31` on both. The `d` registers hold 64-bit floating-point bits and are available through named reads and writes, including serve's `set_register`. Dumps from `registers()`, crash reports, break questions and serve's `registers` list only the general registers, sp, lr, pc and flags, in the order above. An unknown name lists the valid names.
 
-`Trace` has three booleans: `jni`, `syscalls` and `imports`. All default to `false`. Set them with `.trace(Trace { .. })` on the builder, or `emu.set_trace(Trace { .. })?` at runtime. `emu.trace()` reads the settings. Each change replaces all settings. With traces off, no trace hook is installed.
+`Trace` has three booleans (`jni`, `syscalls` and `imports`, default `false`) and `code: Vec<String>` (default empty). Set them with `.trace(Trace { .. })` on the builder, or `emu.set_trace(Trace { .. })?` at runtime. `emu.trace()` reads the settings. Each change replaces all settings. With traces off, no trace hook is installed.
+
+Each `code` entry is a module file name, such as `libfoo.so`, or a module with a hex offset range, such as `libfoo.so+0x1000-0x2000` (end exclusive). It matches libraries already loaded and libraries loaded later, by file name. Bad specifications fail `build` or `set_trace`. For example, `Trace { code: vec!["libfoo.so+0x1000-0x2000".into()], ..Trace::default() }` traces that part of the library.
+
+Instruction events show the bytes in memory, Capstone disassembly, registers read before the instruction, and registers written after it. ARM32 follows the current ARM or Thumb mode, including Thumb conditional blocks. The text looks like this:
+
+```text
+[libfoo.so+0x1234 (fn+0x10)] [0010a0e1] mov r1, r0 ; r0=0x7 => r1=0x7
+```
+
+`Event::Instruction` has `at` (from `symbolize`), `address`, `bytes` (hex), `text`, `read` and `written`. The last two are name/value pairs (`Vec<(String, u128)>`, covering vector registers too). In JSON, `address` and register values are hex strings, such as `"address":"0x10001000"` and `[["r0","0x7"]]`, preserving full precision in JavaScript. Pairs stay in instruction order; the event tag is `instruction`. Events wait for the next instruction or a run stop so written values are available. A range exit also captures the result before untraced code changes it. Syscall results are captured after dispatch; a faulting instruction has an empty `written` array. Stops before execution do not duplicate an instruction on resume. Turning code tracing off removes all its hooks. If an instruction cannot be decoded or a register cannot be read, a `Warning` names its address and tracing continues. Capstone also names SVE/SME and legacy registers that Unicorn does not expose; those reads warn instead of inventing a value.
 
 Syscall events show the guest number, arguments, signed result, errno name, instruction location and caller. Import events show calls from app libraries into other modules, including dl, property and unresolved-symbol stubs. The previous executed block in the same guest thread must be in an app library; app PLT stubs count, but internal tail calls within a dependency do not. The caller location comes from lr. They show the first four argument registers, with known C strings quoted and capped at 256 bytes. Dependencies next to an app count as app libraries; dependencies found in rootfs do not.
 
-All diagnostics go through `Event`: `Jni`, `JniCall`, `Syscall`, `Call` or `Warning`. By default they print their text form on stderr. Capture them with the builder's `on_event`:
+All diagnostics go through `Event`: `Jni`, `JniCall`, `Syscall`, `Call`, `Instruction` or `Warning`. By default they print their text form on stderr. Capture them with the builder's `on_event`:
 
 ```rust
 let emu = Emulator::builder()
@@ -139,7 +149,7 @@ let emu = Emulator::builder()
     .build()?;
 ```
 
-Events serialize as objects tagged with `event`: `jni`, `jni_call`, `syscall`, `call` or `warning`. Arguments are arrays of text; JNI member arguments keep their typed debug form, such as `Object(Handle(7))`. Syscall numbers and returned results are JSON numbers. If dispatch fails, ends the thread or process, or switches away from the thread, `result` is `null` and `errno` is absent. Its text line ends with `= (no return)`. The event is emitted before any crash propagates. Otherwise `errno` is present only for a Linux error result. JNI locations keep the existing text; syscall and import locations include symbols.
+Events serialize as objects tagged with `event`: `jni`, `jni_call`, `syscall`, `call`, `instruction` or `warning`. Arguments are arrays of text; JNI member arguments keep their typed debug form, such as `Object(Handle(7))`. Syscall numbers and returned results are JSON numbers. If dispatch fails, ends the thread or process, or switches away from the thread, `result` is `null` and `errno` is absent. Its text line ends with `= (no return)`. The event is emitted before any crash propagates. Otherwise `errno` is present only for a Linux error result. JNI locations keep the existing text; syscall and import locations include symbols.
 
 `Probe::default()` is a `JniHandler` that answers calls with null, zero, false or void. `is_assignable` answers false. Pass it to `call_jni_onload` to explore calls without writing a handler. `probe.calls()` returns `&[ProbedCall]` in first-seen order. Each entry has `op`, `is_static`, `class`, `name`, `signature`, `count` and the first `from` location. For `is_assignable`, `class` is the source and `name` the target class. Defaults can make the library return early or crash.
 
@@ -177,7 +187,7 @@ For other languages (TypeScript, Python, Go, ...) there's a command-line program
 cargo build --release
 ```
 
-It lands at `target/release/unidroid`. It has two subcommands.
+It lands at `target/release/unidroid`. It has three subcommands.
 
 ### `inspect`: look at a library first
 
@@ -261,7 +271,7 @@ python3 examples/python/signutil.py
 
 The same program works for local testing and inside an HTTP service: the service starts `unidroid serve` and answers the Java calls the same way. One `serve` process runs one instance, one command at a time. For calls in parallel, start several.
 
-Options, the same for both subcommands:
+Options, the same for `inspect` and `serve`:
 
 | option | what it does |
 |---|---|
@@ -273,6 +283,7 @@ Options, the same for both subcommands:
 | `--verbose` | print every JNI call on stderr (`inspect` always does) |
 | `--trace-syscalls` | print each guest syscall, arguments, result and caller |
 | `--trace-imports` | print app calls into other libraries |
+| `--trace-code SPEC` | print instructions in a module or `module+0xSTART-0xEND`, repeatable |
 | `--log-format text\|json` | text logs (default) or one JSON event per stderr line |
 | `--translation-cache-mb MB` | translation cache size (default 8), same as `translation_cache_size` |
 
@@ -295,7 +306,7 @@ A guest failure adds `crash` to the error response. Other errors still have only
 
 The example abbreviates the registers. If a bad JNI answer replaces the command's error message, `crash` still holds the original guest failure.
 
-Change traces during a session with `{"cmd":"trace","jni":true,"syscalls":true,"imports":false}`. Omitted fields become `false`. `{"cmd":"trace"}` turns all traces off. Log format is chosen when starting the CLI; JSON logs go to stderr and protocol replies go to stdout.
+Change traces during a session with `{"cmd":"trace","jni":true,"syscalls":true,"imports":false,"code":["libfoo.so+0x1000-0x2000"]}`. Omitted booleans become `false`; omitted `code` becomes empty. `{"cmd":"trace"}` turns all traces off. Log format is chosen when starting the CLI; JSON logs go to stderr and protocol replies go to stdout.
 
 Debugger stops arrive as `{"break": ...}` questions. The fields are `reason` (`breakpoint`, `step` or `finish`), `address` (decimal string, Thumb bit cleared), `location` (from `symbolize`), `thread` (number), and `registers` (the same object, in register table order, as `registers` and a crash). While stopped, any command can run, including a nested `call_function`. Resume the innermost stop with `continue`, `step`, `finish`, `return` (with a decimal string `value`), or `abort`. These have the same behavior as Rust's `Resume`; they have no separate reply. The original command continues and ends with its own `ok` or `error`.
 
@@ -322,7 +333,7 @@ Commands:
 | command | fields | result |
 |---|---|---|
 | `load` | `path` | module number |
-| `trace` | `jni`, `syscalls`, `imports` (booleans, omitted means false) | `null` |
+| `trace` | `jni`, `syscalls`, `imports` (booleans, omitted means false), `code` (list of specifications, omitted means empty) | `null` |
 | `break` / `unbreak` | `at` (text for `resolve`) | address with Thumb bit cleared / `null` |
 | `resolve` | `at` (module + hex offset, absolute hex or exported symbol) | address (decimal string) |
 | `registers` | | register object, values as decimal strings, in table order |
@@ -360,6 +371,30 @@ A question looks like this:
 - `type` is what your answer must be, using the letters above. `V` means just `{"cmd":"answer"}`.
 - `args` are written the same way as values. For `set`, the value being written is in `args`.
 
+### Record a session and replay it
+
+Start the service with `serve --record FILE`. stdin, stdout and JNI questions stay the same. Each recording entry is one JSON line, flushed immediately so completed entries survive a crash. A recording contains every input, including keys. Keep recordings out of git.
+
+```bash
+target/release/unidroid serve --rootfs rootfs --record session.jsonl
+target/release/unidroid replay session.jsonl --trace-syscalls --trace-code libsignutil.so
+```
+
+The recording starts with `{"record":1,"version":"<crate version>","options":{...}}`. `options` holds `rootfs`, `process_name`, `prop`, `alias`, `superclass` and `translation_cache_mb`; the three repeatable settings are arrays of key/value pairs. Defaults are recorded too. Trace and log options are not in the header. Subsequent entries stay in consumption order:
+
+| entry | what it holds |
+|---|---|
+| `{"in":"<line>"}` | the input exactly as read, with its line ending removed |
+| `{"out":<JSON value>}` | a response or question |
+| `{"time":{"clock":"realtime","sec":123,"nsec":456}}` | a clock read; `clock` can also be `monotonic` |
+| `{"random":"<base64>"}` | bytes read from `/dev/urandom` or `/dev/random` |
+
+`replay FILE` rebuilds the recorded setup, feeds the inputs through the serve loop, and compares every response and question as JSON. Guest `clock_gettime`, `gettimeofday` and random-device reads use the recording instead of the host. Keep the same libraries and rootfs; relative rootfs and `load` paths resolve against the current directory, so run replay from the directory the service ran in.
+
+Replay accepts only `--verbose`, `--trace-syscalls`, `--trace-imports`, repeatable `--trace-code`, and `--log-format text|json`. It adds no breakpoints. Diagnostics go to stderr. Success prints `replayed <n> commands, all responses match` on stdout and exits 0; `n` counts input lines, including JNI answers. The first difference exits 1 with one stdout line naming the recording line: differing responses include expected and actual JSON; missing or extra responses, wrong time/random order, exhausted values and unused values also name the mismatch.
+
+The library exposes `serve::Options` (the shared options and `build`), `serve::record(options, builder, file, input, output)` and `serve::replay(file, builder)`. Replay returns the input count; the builder supplies diagnostic settings. The clock/random source and recording entries remain crate-internal.
+
 ## What it does and doesn't support
 
 Supported:
@@ -376,7 +411,7 @@ Not supported:
 
 - iOS
 - Signals and `fork`
-- File access outside `rootfs`. `/dev/urandom` is allowed. Every other path is "not found".
+- File access outside `rootfs`. `/dev/urandom` and `/dev/random` are allowed. Every other path is "not found".
 
 A library's dependencies are looked for first in the folders of the libraries you loaded, then in rootfs. That's how an app's own `lib/arm64-v8a` folder works on a phone, so copy an app's libraries together and load the one you need. `dlopen` from the library searches the same way.
 

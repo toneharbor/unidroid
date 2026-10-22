@@ -1,9 +1,7 @@
 use crate::{Emulator, MMAP_END, MMAP_START, Prot, Region, Result, page_up};
-use std::{
-    fs::File,
-    io::{Read, Seek, SeekFrom},
-    path::Component,
-};
+use std::{fs::File, io::SeekFrom, path::Component};
+mod files;
+pub(crate) use files::GuestFile;
 impl Emulator {
     pub(crate) fn syscall(&mut self, guest_nr: u64, mut a: [u64; 6], pc: u64) -> Result<u64> {
         let nr = self
@@ -76,15 +74,20 @@ impl Emulator {
                     file.seek(SeekFrom::Start(a[3]))?;
                 }
                 let mut buffer = vec![0; a[2] as usize];
-                let result = file.read(&mut buffer);
+                let random = matches!(file, GuestFile::Random);
+                let result = self.read_file(a[0], &mut buffer);
                 if let Some(position) = position {
-                    file.seek(SeekFrom::Start(position))?;
+                    self.files
+                        .get_mut(&a[0])
+                        .unwrap()
+                        .seek(SeekFrom::Start(position))?;
                 }
                 match result {
                     Ok(n) => {
                         self.write_bytes(a[1], &buffer[..n])?;
                         n as u64
                     }
+                    Err(error) if random => return Err(error),
                     Err(_) => errno(5),
                 }
             }
@@ -143,27 +146,21 @@ impl Emulator {
             178 => self.threads.tid() as u64,
             220 => self.clone_thread(a)?,
             113 | 169 => {
-                let mut time = libc::timespec {
-                    tv_sec: 0,
-                    tv_nsec: 0,
-                };
                 let clock = if nr == 169 || a[0] == 0 {
-                    libc::CLOCK_REALTIME
+                    crate::source::Clock::Realtime
                 } else {
-                    libc::CLOCK_MONOTONIC
+                    crate::source::Clock::Monotonic
                 };
-                unsafe {
-                    libc::clock_gettime(clock, &mut time);
-                }
+                let time = self.source.time(clock)?;
                 let out = if nr == 169 { a[0] } else { a[1] };
                 if out != 0 {
-                    self.write_pointer(out, time.tv_sec as u64)?;
+                    self.write_pointer(out, time.sec as u64)?;
                     self.write_pointer(
                         out + self.pointer_size(),
                         (if nr == 169 {
-                            time.tv_nsec / 1000
+                            time.nsec / 1000
                         } else {
-                            time.tv_nsec
+                            time.nsec
                         }) as u64,
                     )?;
                 }
@@ -242,8 +239,11 @@ impl Emulator {
                     let old = file.stream_position()?;
                     file.seek(SeekFrom::Start(a[5]))?;
                     let mut bytes = vec![0; length as usize];
-                    let n = file.read(&mut bytes)?;
-                    file.seek(SeekFrom::Start(old))?;
+                    let n = self.read_file(a[4], &mut bytes)?;
+                    self.files
+                        .get_mut(&a[4])
+                        .unwrap()
+                        .seek(SeekFrom::Start(old))?;
                     if self.write_bytes(address, &bytes[..n]).is_err() {
                         let _ = self.cpu_mut()?.mem_unmap(address, length);
                         return Ok(errno(14));
@@ -292,9 +292,9 @@ impl Emulator {
         (cursor + length <= MMAP_END).then_some(cursor)
     }
 
-    fn open_guest(&self, path: &str) -> std::io::Result<File> {
+    fn open_guest(&self, path: &str) -> std::io::Result<GuestFile> {
         if path == "/dev/urandom" || path == "/dev/random" {
-            return File::open("/dev/urandom");
+            return Ok(GuestFile::Random);
         }
         let relative = std::path::Path::new(path.trim_start_matches('/'));
         if relative
@@ -308,7 +308,7 @@ impl Emulator {
         if !path.starts_with(root) {
             return Err(std::io::ErrorKind::NotFound.into());
         }
-        File::open(path)
+        File::open(path).map(GuestFile::Host)
     }
     fn unmap(&mut self, start: u64, size: u64) -> Result<()> {
         let end = start + size;

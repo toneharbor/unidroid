@@ -3,6 +3,11 @@ use base64::{Engine, prelude::BASE64_STANDARD};
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
 
+mod options;
+pub use options::Options;
+mod journal;
+mod recording;
+pub use recording::{record, replay};
 mod response;
 use response::{Response, crash_value};
 mod wire;
@@ -20,11 +25,9 @@ pub fn serve(emu: &mut Emulator, input: impl BufRead, output: impl Write) -> Res
         output,
         error: None,
         fatal: false,
+        journal: None,
     };
-    while let Some(command) = session.read()? {
-        session.respond(emu, command)?;
-    }
-    Ok(())
+    session.run(emu)
 }
 
 struct Session<R, W> {
@@ -33,16 +36,43 @@ struct Session<R, W> {
     // JniHandler returns Option, so errors must cross the handler boundary here.
     error: Option<Box<dyn std::error::Error>>,
     fatal: bool,
+    journal: Option<journal::Shared>,
 }
 impl<R: BufRead, W: Write> Session<R, W> {
+    fn run(&mut self, emu: &mut Emulator) -> Result<()> {
+        while let Some(command) = self.read()? {
+            self.respond(emu, command)?;
+        }
+        Ok(())
+    }
     fn read(&mut self) -> Result<Option<std::result::Result<Command, serde_json::Error>>> {
+        if let Some(journal) = &self.journal
+            && journal.borrow().is_replay()
+        {
+            return Ok(journal
+                .borrow_mut()
+                .replay_input()?
+                .map(|line| serde_json::from_str(&line)));
+        }
         let mut line = String::new();
         if self.input.read_line(&mut line)? == 0 {
             return Ok(None);
         }
+        if let Some(journal) = &self.journal {
+            let line = line
+                .strip_suffix("\r\n")
+                .or_else(|| line.strip_suffix('\n'))
+                .unwrap_or(&line);
+            journal.borrow_mut().input(line)?;
+        }
         Ok(Some(serde_json::from_str(&line)))
     }
     fn write(&mut self, response: Response) -> Result<()> {
+        if let Some(journal) = &self.journal {
+            journal
+                .borrow_mut()
+                .output(serde_json::to_value(&response)?)?;
+        }
         serde_json::to_writer(&mut self.output, &response)?;
         self.output.write_all(b"\n")?;
         self.output.flush()?;
@@ -104,11 +134,13 @@ impl<R: BufRead, W: Write> Session<R, W> {
                 jni,
                 syscalls,
                 imports,
+                code,
             } => {
                 emu.set_trace(crate::Trace {
                     jni,
                     syscalls,
                     imports,
+                    code,
                 })?;
                 Value::Null
             }

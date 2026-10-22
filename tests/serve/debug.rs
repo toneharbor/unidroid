@@ -14,7 +14,7 @@ fn trace_command_replaces_the_whole_state_while_serving() -> Result<()> {
         let getpid = emu.find_symbol(m, "getpid")?.to_string();
         let mut output = Vec::new();
         let input = [
-            json!({"cmd":"trace", "jni":true, "syscalls":true, "imports":true}),
+            json!({"cmd":"trace", "jni":true, "syscalls":true, "imports":true, "code":["libc.so"]}),
             json!({"cmd":"call_function", "address":getpid, "args":[]}),
             json!({"cmd":"trace"}),
             json!({"cmd":"call_function", "address":getpid, "args":[]}),
@@ -44,6 +44,19 @@ fn trace_command_replaces_the_whole_state_while_serving() -> Result<()> {
             1
         );
         assert!(!emu.trace().jni && !emu.trace().syscalls && !emu.trace().imports);
+        assert!(emu.trace().code.is_empty());
+        let captured = events.borrow();
+        let svc = captured
+            .iter()
+            .filter(|e| e["event"] == "instruction" && e["text"] == "svc #0")
+            .collect::<Vec<_>>();
+        assert_eq!(svc.len(), 1);
+        assert!(
+            svc[0]["written"]
+                .as_array()
+                .unwrap()
+                .contains(&json!([if dir == "lib64" { "x0" } else { "r0" }, "0x4d2"]))
+        );
     }
     Ok(())
 }

@@ -110,7 +110,9 @@ impl Emulator {
         }
     }
 
-    pub(crate) fn suspend_import(&mut self, pc: u64) -> Result<()> {
+    pub(crate) fn suspend_traces(&mut self, pc: u64) -> Result<()> {
+        // Instruction events are still pending; imports have already been emitted.
+        self.discard_unexecuted_code(pc);
         let data = self.cpu()?.get_data();
         let mut targets = self.imports.targets.borrow_mut();
         if let Some(blocks) = targets.blocks.get_mut(&data.thread)

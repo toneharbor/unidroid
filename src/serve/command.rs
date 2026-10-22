@@ -35,6 +35,8 @@ pub(super) enum Command {
         syscalls: bool,
         #[serde(default)]
         imports: bool,
+        #[serde(default)]
+        code: Vec<String>,
     },
     Load {
         path: String,

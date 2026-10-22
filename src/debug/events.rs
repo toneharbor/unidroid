@@ -1,5 +1,5 @@
 use crate::{Emulator, Result};
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use std::{fmt, io::Write};
 
 #[derive(Clone, Default)]
@@ -7,6 +7,7 @@ pub struct Trace {
     pub jni: bool,
     pub syscalls: bool,
     pub imports: bool,
+    pub code: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -41,9 +42,35 @@ pub enum Event {
         args: Vec<String>,
         from: String,
     },
+    Instruction {
+        at: String,
+        #[serde(serialize_with = "hex_address")]
+        address: u64,
+        bytes: String,
+        text: String,
+        #[serde(serialize_with = "hex_registers")]
+        read: Vec<(String, u128)>,
+        #[serde(serialize_with = "hex_registers")]
+        written: Vec<(String, u128)>,
+    },
     Warning {
         message: String,
     },
+}
+
+fn hex_address<S: Serializer>(value: &u64, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    serializer.collect_str(&format_args!("0x{value:x}"))
+}
+
+fn hex_registers<S: Serializer>(
+    registers: &[(String, u128)],
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    serializer.collect_seq(
+        registers
+            .iter()
+            .map(|(name, value)| (name, format!("0x{value:x}"))),
+    )
 }
 
 impl fmt::Display for Event {
@@ -96,6 +123,28 @@ impl fmt::Display for Event {
                 "call {function}({}) in {module} from {from}",
                 args.join(", ")
             ),
+            Self::Instruction {
+                at,
+                bytes,
+                text,
+                read,
+                written,
+                ..
+            } => {
+                write!(f, "[{at}] [{bytes}] {text}")?;
+                for (separator, registers) in [(" ; ", read), (" => ", written)] {
+                    if !registers.is_empty() {
+                        f.write_str(separator)?;
+                        for (i, (name, value)) in registers.iter().enumerate() {
+                            if i > 0 {
+                                f.write_str(", ")?;
+                            }
+                            write!(f, "{name}=0x{value:x}")?;
+                        }
+                    }
+                }
+                Ok(())
+            }
             Self::Warning { message } => write!(f, "warning: {message}"),
         }
     }
@@ -119,6 +168,7 @@ impl Emulator {
         &self.trace
     }
     pub fn set_trace(&mut self, trace: Trace) -> Result<()> {
+        self.trace_code(&trace.code)?;
         self.trace_imports(trace.imports)?;
         self.trace = trace;
         Ok(())

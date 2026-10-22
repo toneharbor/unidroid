@@ -19,8 +19,12 @@ struct Client {
 }
 impl Client {
     fn start() -> Self {
+        Self::start_with(&[])
+    }
+    fn start_with(options: &[&str]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_unidroid"))
             .args(["serve", "--rootfs", "rootfs"])
+            .args(options)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -68,6 +72,8 @@ impl Client {
 mod debug;
 #[path = "serve/errors.rs"]
 mod errors;
+#[path = "serve/record.rs"]
+mod record;
 #[path = "serve/sign_debug.rs"]
 mod sign_debug;
 #[path = "serve/stop_errors.rs"]
@@ -329,7 +335,10 @@ fn member_id(
 
 #[test]
 fn signutil_over_the_pipe() {
-    let mut client = Client::start();
+    signutil_session(Client::start());
+}
+
+fn signutil_session(mut client: Client) {
     let module =
         client.request(json!({"cmd":"load", "path":"tests/fixtures/armeabi-v7a/libsignutil.so"}));
     let a = client.request(json!({"cmd":"new_string", "value":"a"}));

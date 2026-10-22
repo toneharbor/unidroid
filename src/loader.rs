@@ -37,6 +37,9 @@ impl Emulator {
         if self.trace.imports {
             self.refresh_imports();
         }
+        if !self.trace.code.is_empty() {
+            self.trace_code(&self.trace.code.clone())?;
+        }
         self.initialize(module)?;
         Ok(module)
     }

@@ -25,7 +25,7 @@ fn arm32_syscalls_preserve_argument_registers_and_resume_in_arm_or_thumb() -> Re
 
 #[test]
 fn arm32_mmap2_uses_pages_and_pread64_uses_r4_r5_without_seeking() -> Result<()> {
-    use std::io::Write;
+    use std::io::{Seek, Write};
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join(format!("target/offset32-{}", std::process::id()));
     std::fs::create_dir_all(&root)?;

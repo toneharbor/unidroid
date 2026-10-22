@@ -54,6 +54,7 @@ impl Emulator {
         let result = self
             .run_loop(pc, handler, &mut control)
             .map_err(|error| self.crash(error));
+        self.finish_code(result.is_err())?;
         let cleanup = control.clear_finish(self);
         let result = result.and_then(|value| cleanup.map(|_| value));
         self.threads.depth -= 1;
@@ -104,8 +105,8 @@ impl Emulator {
             let finished = control.finished(self, pc)?;
             let pending = self.cpu()?.get_data().stop;
             if pending.is_some() || finished {
-                if self.trace.imports {
-                    self.suspend_import(pc & !1)?;
+                if self.trace.imports || !self.trace.code.is_empty() {
+                    self.suspend_traces(pc & !1)?;
                 }
                 let reason = if finished || pending == Some(crate::StopReason::Finish) {
                     crate::StopReason::Finish
@@ -126,8 +127,8 @@ impl Emulator {
             result?;
             let Some(interrupt) = interrupt else {
                 if stepping {
-                    if self.trace.imports {
-                        self.suspend_import(pc & !1)?;
+                    if self.trace.imports || !self.trace.code.is_empty() {
+                        self.suspend_traces(pc & !1)?;
                     }
                     if !(TRAMPOLINE..RETURN).contains(&(pc & !1)) {
                         pc = control.stopped(self, handler, crate::StopReason::Step)?;
@@ -145,8 +146,8 @@ impl Emulator {
                     )
                     .into());
                 }
-                if self.trace.imports {
-                    self.suspend_import(pc & !1)?;
+                if self.trace.imports || !self.trace.code.is_empty() {
+                    self.suspend_traces(pc & !1)?;
                 }
                 pc = self.switch_thread(pc)?;
                 continue;
@@ -185,6 +186,7 @@ impl Emulator {
                 )?;
                 self.write_reg(0, result)?;
             }
+            self.finish_code(false)?;
             if stepping {
                 pc = control.stopped(self, handler, crate::StopReason::Step)?;
             }
