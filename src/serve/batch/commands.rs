@@ -34,6 +34,8 @@ pub(super) fn run(
                 | "unbreak"
                 | "watch"
                 | "unwatch"
+                | "tracepoint"
+                | "untracepoint"
                 | "continue"
                 | "step"
                 | "finish"

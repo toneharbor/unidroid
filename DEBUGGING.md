@@ -54,7 +54,7 @@ Rewind restores:
 - The fixed clock and its elapsed counter, and the seeded random generator including partly consumed output. Host clock/random values still come from the host when those settings were omitted.
 - JNI handles, objects, classes, members, registered natives, references and exceptions. Object graphs are copied deeply, preserving aliases and cycles, including inside object arrays. `new_object`'s `Object::User` payload (`Rc<dyn Any>`) is shared: changes inside that Rust payload remain visible across rewinds and copies.
 
-Breakpoints, watchpoints, trace settings, coverage counts, the event handler and translation-cache size stay with the target emulator. Rewind clears the JNI crash-history ring because its calls belong to the discarded state. Reset coverage explicitly with `reset_coverage()` when comparing runs. Trace selections are reapplied when the module list changes. Changed mappings and pages lose their translated code; unchanged pages in matching mappings keep it warm. Checkpoints do not use Unicorn's built-in memory snapshot mode, so guest `mprotect`, `munmap` and thread switching keep working.
+Breakpoints (including conditions), watchpoints, tracepoints and their hit counts, trace settings, coverage counts, the event handler and translation-cache size stay with the target emulator. Rewind clears the JNI crash-history ring because its calls belong to the discarded state. Reset coverage explicitly with `reset_coverage()` when comparing runs. Trace selections are reapplied when the module list changes. Changed mappings and pages lose their translated code; unchanged pages in matching mappings keep it warm. Checkpoints do not use Unicorn's built-in memory snapshot mode, so guest `mprotect`, `munmap` and thread switching keep working.
 
 Create an independent instance from the same checkpoint:
 
@@ -96,7 +96,7 @@ JNIEnv->GetStaticObjectField java/lang/Void->TYPELjava/lang/Class; from libjnidi
 
 ### Breakpoints, watchpoints and stops
 
-`emu.add_breakpoint(address)?` stops before the instruction at that address. `emu.remove_breakpoint(address)?` removes it and errors if none is there. Both clear the Thumb bit; adding the same address twice keeps one breakpoint. Breakpoints also work on code that already ran and in any guest thread. With no breakpoints, watchpoints, step or finish active, no debugger hook is installed.
+`emu.add_breakpoint(address)?` stops before the instruction at that address. `emu.remove_breakpoint(address)?` removes it and errors if none is there. Both clear the Thumb bit; adding the same address twice keeps one breakpoint. Breakpoints also work on code that already ran and in any guest thread. With no breakpoints, watchpoints, tracepoints, step or finish active, no debugger hook is installed.
 
 A Thumb `IT` instruction and the instructions it makes conditional run as one step. A breakpoint hit inside an `IT` block is reported at the first instruction after the block, or at the next Unicorn stop if the block branches away; a conditional instruction that is skipped does not hit a breakpoint. Watchpoint hits follow the same rule: `Stop.address` is where execution really stopped, while `WatchHit.pc` stays the instruction that accessed memory.
 
@@ -127,6 +127,57 @@ Stops go to the running call's `JniHandler::stopped(&mut self, emu: &mut Emulato
 `Finish` relies on lr, so use it at a function's first instruction, before the function changes lr. Its stack check prevents stopping at a deeper recursive return. `Return(bits)` is also meant for the first instruction: it replaces the function's result without running the body. This is a function hook.
 
 For a plain C call, use `emu.call_function_with(&mut handler, function, args)?` to receive stops and JNI questions in that handler. It takes the same arguments and returns the same result as `call_function`.
+
+### Expressions, conditional breakpoints and tracepoints
+
+Both features parse expressions once when added. Errors include the bad text; a rejected replacement leaves the existing point unchanged. Load a library first so register names and pointer size are known.
+
+| expression | value |
+|---|---|
+| `REG` | any name accepted by `emu.register`, including `x20`, `r4`, `sp`, `pc` and `d0` on the appropriate architecture |
+| `0xHEX` | a 64-bit constant |
+| `[EXPR]` | memory at that address, read as a pointer-size word (4 bytes on ARM32, 8 on arm64) |
+| `[EXPR+0xHEX]` / `[EXPR-0xHEX]` | memory at that address plus/minus a constant; address arithmetic wraps at 64 bits |
+| `[EXPR]:1`, `:2`, `:4` or `:8` | memory with an explicit byte width, little-endian and zero-extended to 64 bits |
+
+Memory expressions can nest: `[x20+0x18]` reads a pointer field and `[[x20+0x18]]:1` reads the byte it points to. Spaces around `+`, `-`, `==` and `!=` are accepted. Arithmetic outside memory brackets and comparisons other than equality/inequality are not supported.
+
+`emu.add_conditional_breakpoint(address, "x20 == 0x40001000")?` stops with `StopReason::Breakpoint` only when the condition holds. A condition is `EXPR==EXPR` or `EXPR!=EXPR`; either unreadable operand makes it false, even for `!=`. Evaluation happens before the instruction. The Thumb IT stop rule above still applies. Plain and conditional breakpoints at the same address replace each other; `remove_breakpoint` removes either. `Continue` skips that hit once, not later loop iterations.
+
+```rust
+emu.add_tracepoint(dispatch, &unidroid::Tracepoint {
+    values: vec!["[x20+0x18]".into(), "[[x20+0x18]]:1".into()],
+    log: true,
+})?;
+let counts: Vec<(u64, u64)> = emu.tracepoint_hits(dispatch)?;
+emu.reset_tracepoint_hits();
+emu.remove_tracepoint(dispatch)?;
+```
+
+Tracepoints are independent of `Trace` settings; `set_trace` does not remove them. A tracepoint reads values before the instruction runs, in any guest thread or nested call. It never stops or calls `stopped`. Skipped Thumb IT instructions do not hit; taken ones capture their pre-instruction values even when a debugger stop is deferred. It works alongside code/call traces, coverage and watchpoints, keeping event order.
+
+`Tracepoint` has `values: Vec<String>` and `log: bool`. At least one expression is required, otherwise the error is `tracepoint needs at least one value`. Every hit counts the first expression’s value, whether logged or not; an unreadable first value is not counted. `tracepoint_hits(address)` returns `(value, count)` pairs sorted by value. `reset_tracepoint_hits()` clears all tracepoints’ counts. Adding the same address replaces its expressions and log setting and clears its counts. Add, remove and query clear the Thumb bit. Removing or querying a missing point errors with `no tracepoint at <symbolize(address)>`. Removing the last point removes its hooks. Rewind leaves points and counts alone.
+
+With `log: true`, each hit emits `Event::Tracepoint { at, address, thread, values }`: `at` is from `symbolize`, `address: u64` has the Thumb bit cleared, `thread: u32`, and `values: Vec<(String, Option<u64>)>` preserves the supplied expression text and order. Unreadable values are `None`. Text uses `=?` for them:
+
+```text
+tracepoint libfoo.so+0x1234 (f+0x10) thread 1234 [x20+0x18]=0x40001000 [[x20+0x18]]:1=0x2a
+```
+
+JSON uses hex strings for the address and values, and `null` for unreadable values:
+
+```json
+{"event":"tracepoint","at":"libfoo.so+0x1234 (f+0x10)","address":"0x10001234","thread":1234,"values":[["[x20+0x18]","0x40001000"],["[[x20+0x18]]:1","0x2a"]]}
+```
+
+### Bytecode interpreters
+
+1. Find the native dispatch address using a code/call trace or a coverage hot spot. Identify the virtual PC register or memory field.
+2. Add a tracepoint there with the virtual PC and opcode as values. For example, serve `{"cmd":"tracepoint","at":"libfoo.so+0x1234","values":["x20","[x20]:1"]}` gives a bytecode trace. `tracepoint_hits` gives per-virtual-PC coverage; use `"log":false` for counts only.
+3. Break on one bytecode address with `{"cmd":"break","at":"libfoo.so+0x1234","if":"x20==0x40001000"}`.
+4. To step one bytecode at a time, use a plain breakpoint on the dispatch address and `continue` at each stop. Each return to dispatch is the next bytecode, including loop iterations; CPU `step` instead executes one native instruction (or one Thumb IT block).
+
+Bytecode-level step-over, virtual register files and source mapping are not provided.
 
 ### Memory and registers
 
@@ -209,7 +260,7 @@ function libfoo.so+0x1800 (mix)(0x7, 0x8, 0x40001000, 0xa) from libfoo.so+0x1234
 
 Syscall events show the guest number, arguments, signed result, errno name, instruction location and caller. Import events show calls from app libraries into other modules, including dl, property and unresolved-symbol stubs. The previous executed block in the same guest thread must be in an app library; app PLT stubs count, but internal tail calls within a dependency do not. The caller location comes from lr. They show the first four argument registers, with known C strings quoted and capped at 256 bytes. Dependencies next to an app count as app libraries; dependencies found in rootfs do not.
 
-All diagnostics go through `Event`: `Jni`, `JniCall`, `Syscall`, `Call`, `FunctionCall`, `Instruction`, `Watch` or `Warning`. By default they print their text form on stderr. Capture them with the builder's `on_event`:
+All diagnostics go through `Event`: `Jni`, `JniCall`, `Syscall`, `Call`, `FunctionCall`, `Instruction`, `Watch`, `Tracepoint` or `Warning`. By default they print their text form on stderr. Capture them with the builder's `on_event`:
 
 ```rust
 let emu = Emulator::builder()
@@ -218,7 +269,7 @@ let emu = Emulator::builder()
     .build()?;
 ```
 
-Events serialize as objects tagged with `event`: `jni`, `jni_call`, `syscall`, `call`, `function_call`, `instruction`, `watch` or `warning`. Arguments are arrays of text; JNI member arguments keep their typed debug form, such as `Object(Handle(7))`. Syscall numbers and returned results are JSON numbers. If dispatch fails, ends the thread or process, or switches away from the thread, `result` is `null` and `errno` is absent. Its text line ends with `= (no return)`. The event is emitted before any crash propagates. Otherwise `errno` is present only for a Linux error result. JNI locations keep the existing text; syscall and import locations include symbols.
+Events serialize as objects tagged with `event`: `jni`, `jni_call`, `syscall`, `call`, `function_call`, `instruction`, `watch`, `tracepoint` or `warning`. Arguments are arrays of text; JNI member arguments keep their typed debug form, such as `Object(Handle(7))`. Syscall numbers and returned results are JSON numbers. If dispatch fails, ends the thread or process, or switches away from the thread, `result` is `null` and `errno` is absent. Its text line ends with `= (no return)`. The event is emitted before any crash propagates. Otherwise `errno` is present only for a Linux error result. JNI locations keep the existing text; syscall and import locations include symbols.
 
 `Probe::default()` is a `JniHandler` that answers calls with null, zero, false or void. `is_assignable` answers false. Pass it to `call_jni_onload` to explore calls without writing a handler. `probe.calls()` returns `&[ProbedCall]` in first-seen order. Each entry has `op`, `is_static`, `class`, `name`, `signature`, `count` and the first `from` location. For `is_assignable`, `class` is the source and `name` the target class. Defaults can make the library return early or crash.
 
@@ -226,7 +277,7 @@ Events serialize as objects tagged with `event`: `jni`, `jni_call`, `syscall`, `
 
 For the basic protocol, calling and object commands, see [README.md](README.md#serve-drive-it-from-your-program).
 
-`unidroid batch` uses this protocol without a driver. Its jobs and setup refuse `break`, `unbreak`, `watch`, `unwatch`, `continue`, `step`, `finish`, `return`, `abort`, `answer`, `unhandled`, `checkpoint`, `rewind` and `drop_checkpoint`. Unanswered JNI calls fail immediately; traces, coverage, snapshots and crash responses remain available. See [README.md](README.md) for batch jobs and reports.
+`unidroid batch` uses this protocol without a driver. Its jobs and setup refuse `break`, `unbreak`, `watch`, `unwatch`, `tracepoint`, `untracepoint`, `continue`, `step`, `finish`, `return`, `abort`, `answer`, `unhandled`, `checkpoint`, `rewind` and `drop_checkpoint`. Unanswered JNI calls fail immediately; traces, coverage, snapshots and crash responses remain available. See [README.md](README.md) for batch jobs and reports.
 
 ### Crash responses
 
@@ -247,6 +298,8 @@ Heap and object replies use decimal strings for addresses, sizes, offsets and wo
 ### Stops and questions
 
 Use `{"cmd":"watch","at":"0x40001000","size":4,"kind":"write","log":true}` to record hits throughout a call. Log hits go to stderr as text or JSON according to `--log-format`, just like traces, and never ask a `break` question. Omitting `log` or setting it to `false` selects stop mode.
+
+Serve `break` accepts optional `"if":"EXPR==EXPR"` or `"if":"EXPR!=EXPR"`. Omitting `if` installs a plain breakpoint. Tracepoint commands and expressions are described above; their JSON events go to stderr with `--log-format json`, never to protocol stdout.
 
 Debugger stops arrive as `{"break": ...}` questions. The fields are `reason` (`breakpoint`, `watchpoint`, `step` or `finish`), `address` (decimal string, Thumb bit cleared), `location` (from `symbolize`), `thread` (number), and `registers` (the same object, in register table order, as `registers` and a crash). Watchpoint stops also have `watch: {pc, location, address, size, write, value}`: `pc`, `address` and `value` are decimal strings, `size` is a number, `write` is a boolean, and `location` is the `symbolize` text of `pc`. Other stops omit `watch`. While stopped, any command can run, including a nested `call_function`, except `checkpoint` and `rewind`, which need the call to have ended (see [Checkpoints and rewind](DEBUGGING.md#checkpoints-and-rewind)). Resume the innermost stop with `continue`, `step`, `finish`, `return` (with a decimal string `value`), or `abort`. These have the same behavior as Rust's `Resume`; they have no separate reply. The original command continues and ends with its own `ok` or `error`.
 
@@ -292,6 +345,10 @@ A resume command with no stop open errors with `no breakpoint stop is waiting`. 
 | `heap` | `reset` (boolean, omitted means false) | libc allocation records in allocation-entry order; `reset: true` returns the collected records and then clears them |
 | `object` | `at` (text for `resolve`), `depth` (number, default 1) | containing live known block, fields and referrers; depth 0 includes only the root, depth 1 also expands direct targets and referrer blocks, each further level follows one more link |
 | `break` / `unbreak` | `at` (text for `resolve`) | address with Thumb bit cleared / `null` |
+| `break` (conditional) | `at` (text for `resolve`), optional `if` (condition text; omitted means plain breakpoint) | address with Thumb bit cleared (decimal string) |
+| `tracepoint` | `at` (text for `resolve`), `values` (nonempty list of expression strings), `log` (boolean, default true) | address with Thumb bit cleared (decimal string); replaces the point and clears its counts |
+| `untracepoint` | `at` (text for `resolve`) | `null` |
+| `tracepoint_hits` | `at` (text for `resolve`), `reset` (boolean, default false) | list of `{value, count}` sorted by value; value is a decimal string, count a number; reset clears only this point’s counts after reading; allowed in batch |
 | `watch` | `at` (text for `resolve`), `size` (number), `kind` (`read`, `write` or `access`), `log` (boolean, omitted or false means stop) | watched address (decimal string) |
 | `unwatch` | `at` (text for `resolve`) | `null` |
 | `search` | `base64` (nonempty byte pattern) | up to 1000 `{address, location}` matches in address order; address is a decimal string |

@@ -130,9 +130,13 @@ impl<R: BufRead, W: Write> Session<R, W> {
     }
     fn execute(&mut self, emu: &mut Emulator, command: Command) -> Result<Response> {
         Ok(Response::Ok(match command {
-            Command::Break { at } => {
+            Command::Break { at, r#if } => {
                 let address = emu.resolve(&at)? & !1;
-                emu.add_breakpoint(address)?;
+                if let Some(condition) = r#if {
+                    emu.add_conditional_breakpoint(address, &condition)?;
+                } else {
+                    emu.add_breakpoint(address)?;
+                }
                 json!(address.to_string())
             }
             Command::Unbreak { at } => {
@@ -148,6 +152,23 @@ impl<R: BufRead, W: Write> Session<R, W> {
             Command::Unwatch { at } => {
                 emu.remove_watchpoint(emu.resolve(&at)?)?;
                 Value::Null
+            }
+            Command::Tracepoint { at, values, log } => {
+                let address = emu.resolve(&at)? & !1;
+                emu.add_tracepoint(address, &crate::Tracepoint { values, log })?;
+                json!(address.to_string())
+            }
+            Command::Untracepoint { at } => {
+                emu.remove_tracepoint(emu.resolve(&at)?)?;
+                Value::Null
+            }
+            Command::TracepointHits { at, reset } => {
+                let address = emu.resolve(&at)?;
+                let hits = emu.tracepoint_hits(address)?;
+                if reset { emu.reset_tracepoint(address)?; }
+                json!(hits.into_iter().map(|(value, count)| json!({
+                    "value": value.to_string(), "count": count,
+                })).collect::<Vec<_>>())
             }
             Command::Resolve { at } => json!(emu.resolve(&at)?.to_string()),
             Command::Registers => return Ok(Response::Registers(response::registers_value(&emu.registers()?))),

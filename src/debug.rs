@@ -9,6 +9,7 @@ pub(crate) mod control;
 pub(crate) mod coverage;
 pub(crate) mod crypto;
 pub(crate) mod events;
+mod expr;
 pub(crate) mod heap;
 pub(crate) mod imports;
 pub(crate) mod maps;
@@ -17,6 +18,7 @@ mod registers;
 pub(crate) mod search;
 pub(crate) mod snapshot;
 mod syscalls;
+pub(crate) mod tracepoint;
 pub(crate) mod watch;
 
 const STACK_WORDS: usize = 32;

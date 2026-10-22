@@ -6,11 +6,16 @@ fn default_object_depth() -> usize {
     1
 }
 
+fn default_tracepoint_log() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub(super) enum Command {
     Break {
         at: String,
+        r#if: Option<String>,
     },
     Unbreak {
         at: String,
@@ -24,6 +29,20 @@ pub(super) enum Command {
     },
     Unwatch {
         at: String,
+    },
+    Tracepoint {
+        at: String,
+        values: Vec<String>,
+        #[serde(default = "default_tracepoint_log")]
+        log: bool,
+    },
+    Untracepoint {
+        at: String,
+    },
+    TracepointHits {
+        at: String,
+        #[serde(default)]
+        reset: bool,
     },
     Resolve {
         at: String,

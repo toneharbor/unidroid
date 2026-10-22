@@ -21,7 +21,7 @@ impl Emulator {
         Ok(self.cpu_mut()?.reg_write(reg, value)?)
     }
 
-    fn named_register(&self, name: &str) -> Result<i32> {
+    pub(super) fn named_register(&self, name: &str) -> Result<i32> {
         self.cpu()?;
         let table = self.register_table();
         table

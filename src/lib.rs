@@ -29,6 +29,7 @@ pub use debug::{
     modules::ModuleInfo,
     search::SEARCH_LIMIT,
     snapshot::{Change, Diff, Snapshot},
+    tracepoint::Tracepoint,
     watch::{Watch, WatchAction, WatchHit},
 };
 pub use jni::{Handle, JniCall, JniHandler, JniValue, PrimitiveType};
@@ -162,6 +163,7 @@ pub struct Emulator {
     heap_trace: debug::heap::Heap,
     breakpoints: HashMap<u64, unicorn_engine::UcHookId>,
     watchpoints: debug::watch::Watchpoints,
+    tracepoints: debug::tracepoint::Tracepoints,
 }
 impl Emulator {
     fn create_cpu(&mut self, arch: Architecture) -> Result<()> {

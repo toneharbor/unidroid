@@ -92,6 +92,14 @@ pub enum Event {
         thread: u32,
         callers: Vec<String>,
     },
+    Tracepoint {
+        at: String,
+        #[serde(serialize_with = "hex_address")]
+        address: u64,
+        thread: u32,
+        #[serde(serialize_with = "hex_values")]
+        values: Vec<(String, Option<u64>)>,
+    },
     Warning {
         message: String,
     },
@@ -109,6 +117,17 @@ fn hex_registers<S: Serializer>(
         registers
             .iter()
             .map(|(name, value)| (name, format!("0x{value:x}"))),
+    )
+}
+
+fn hex_values<S: Serializer>(
+    values: &[(String, Option<u64>)],
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    serializer.collect_seq(
+        values
+            .iter()
+            .map(|(name, value)| (name, value.map(|value| format!("0x{value:x}")))),
     )
 }
 
@@ -216,6 +235,19 @@ impl fmt::Display for Event {
                 )?;
                 if !callers.is_empty() {
                     write!(f, " from {}", callers.join(" <- "))?;
+                }
+                Ok(())
+            }
+            Self::Tracepoint {
+                at, thread, values, ..
+            } => {
+                write!(f, "tracepoint {at} thread {thread}")?;
+                for (name, value) in values {
+                    write!(f, " {name}=")?;
+                    match value {
+                        Some(value) => write!(f, "0x{value:x}")?,
+                        None => f.write_str("?")?,
+                    }
                 }
                 Ok(())
             }

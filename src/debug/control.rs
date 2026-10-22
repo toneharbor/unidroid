@@ -1,3 +1,4 @@
+use super::expr::Condition;
 use crate::{Emulator, Result};
 use unicorn_engine::UcHookId;
 
@@ -168,6 +169,11 @@ impl Emulator {
         } else {
             None
         };
+        // Run tracepoints after stop hooks and after the preceding instruction's
+        // trace is emitted. Stops then cannot log a hit twice on Continue; Thumb
+        // IT instructions whose stop is deferred still reach their tracepoint.
+        self.refresh_tracepoints()?;
+        let cpu = self.cpu_mut()?;
         let result = cpu.emu_start(pc, crate::RETURN, 0, 0);
         if let Some(hook) = hook {
             cpu.remove_hook(hook)?;
@@ -178,22 +184,34 @@ impl Emulator {
     }
 
     pub fn add_breakpoint(&mut self, address: u64) -> Result<()> {
+        self.breakpoint(address, None)
+    }
+
+    pub fn add_conditional_breakpoint(&mut self, address: u64, condition: &str) -> Result<()> {
+        self.cpu()?;
+        self.breakpoint(address, Some(Condition::parse(self, condition)?))
+    }
+
+    fn breakpoint(&mut self, address: u64, condition: Option<Condition>) -> Result<()> {
         let address = address & !1;
         if self.breakpoints.contains_key(&address) {
-            return Ok(());
+            self.remove_breakpoint(address)?;
         }
         let end = self.debug_hook_end(address);
         let cpu = self.cpu_mut()?;
         let hook = cpu.add_code_hook(address, end, move |cpu, pc, _| {
-            let data = cpu.get_data_mut();
+            let data = cpu.get_data();
             if pc == address {
                 if data.skip_breakpoint == Some((data.thread, address)) {
-                    data.skip_breakpoint = None;
-                } else {
-                    data.stop = Some(StopReason::Breakpoint);
+                    cpu.get_data_mut().skip_breakpoint = None;
+                } else if condition
+                    .as_ref()
+                    .is_none_or(|condition| condition.holds(cpu))
+                {
+                    cpu.get_data_mut().stop = Some(StopReason::Breakpoint);
                 }
             }
-            if data.stop.is_some() {
+            if cpu.get_data().stop.is_some() {
                 let _ = cpu.emu_stop();
             }
         })?;

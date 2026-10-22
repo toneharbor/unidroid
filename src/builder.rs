@@ -115,6 +115,7 @@ impl Emulator {
             heap_trace: debug::heap::Heap::default(),
             breakpoints: HashMap::new(),
             watchpoints: debug::watch::Watchpoints::default(),
+            tracepoints: debug::tracepoint::Tracepoints::default(),
         })
     }
 }

@@ -376,7 +376,7 @@ Batch accepts `--rootfs`, `--process-name`, repeatable `--prop`, `--alias` and `
 
 Each checkpoint restores guest state and the batch policy's positions after setup. Policy files are loaded once per path per worker; jobs with their own policy use a fresh clone. Coverage counts and JNI crash history start fresh on each attempt. A job's `trace` settings apply only to that attempt; the worker restores its setup trace settings afterward. Diagnostics are not tagged with a job; `--workers 1` keeps them in job order.
 
-Batch refuses `break`, `unbreak`, `watch`, `unwatch`, `continue`, `step`, `finish`, `return`, `abort`, `answer`, `unhandled`, `checkpoint`, `rewind` and `drop_checkpoint` in both jobs and setup, with `<cmd> is not available in batch`. Other commands use the same parser, execution and response encoding as serve.
+Batch refuses `break`, `unbreak`, `watch`, `unwatch`, `tracepoint`, `untracepoint`, `continue`, `step`, `finish`, `return`, `abort`, `answer`, `unhandled`, `checkpoint`, `rewind` and `drop_checkpoint` in both jobs and setup, with `<cmd> is not available in batch`. Other commands use the same parser, execution and response encoding as serve.
 
 Stdout contains one JSON document: `{"summary":{"jobs":N,"ok":N,"failed":N,"ms":N},"jobs":[...]}`. Jobs stay in input order. Each has `id`, `ok` (boolean), `results` (the `ok` values of completed commands), integer `ms` for its last attempt, and `attempts`. Failed jobs also have `error`, and `crash` when serve would supply one. Malformed JSON or command syntax fails only that job with `bad job: ...`. `summary.ms` measures the whole batch. Exit code is 0 if every job succeeds, otherwise 1.
 
