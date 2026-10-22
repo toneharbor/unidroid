@@ -256,11 +256,11 @@ impl Emulator {
             24 => Ok(if a == 0 || b == 0 {
                 a == b
             } else {
-                Rc::ptr_eq(&self.object(Handle(a))?, &self.object(Handle(b))?)
+                Rc::ptr_eq(&self.jni_object(Handle(a))?, &self.jni_object(Handle(b))?)
             } as u64),
             25 => Ok(self.alias(Handle(a), self.jni.scope)?.0),
             31 => {
-                let name = self.object(Handle(a))?.borrow().java_type();
+                let name = self.jni_object(Handle(a))?.borrow().java_type();
                 Ok(self.find_class(&name, self.jni.scope).0)
             }
             28..=30 | 33..=162 => self.jni_members_function(index, function, a, b, c, handler),

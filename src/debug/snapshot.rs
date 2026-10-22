@@ -14,6 +14,7 @@ pub struct Snapshot {
     pub registers: Vec<(String, u64)>,
     pub modules: Vec<ModuleInfo>,
     pub memory: Vec<(Mapping, Vec<u8>)>,
+    pub heap: Vec<crate::Allocation>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -24,6 +25,8 @@ struct Header {
     registers: Vec<(String, u64)>,
     modules: Vec<ModuleInfo>,
     maps: Vec<Mapping>,
+    #[serde(default)]
+    heap: Vec<crate::Allocation>,
 }
 
 impl Emulator {
@@ -45,6 +48,11 @@ impl Emulator {
                     Ok((mapping, bytes))
                 })
                 .collect::<Result<_>>()?,
+            heap: if self.trace.heap {
+                self.known_allocations()
+            } else {
+                Vec::new()
+            },
         })
     }
 }
@@ -65,6 +73,7 @@ impl Snapshot {
                     .iter()
                     .map(|(mapping, _)| mapping.clone())
                     .collect(),
+                heap: self.heap.clone(),
             },
         )?;
         file.write_all(b"\n")?;
@@ -94,6 +103,7 @@ impl Snapshot {
             registers: header.registers,
             modules: header.modules,
             memory,
+            heap: header.heap,
         })
     }
 }

@@ -10,6 +10,7 @@ pub(super) fn snapshot(emu: &Emulator) -> Result<Snapshot> {
             registers: Vec::new(),
             modules: Vec::new(),
             memory: Vec::new(),
+            heap: Vec::new(),
         });
     }
     emu.snapshot()

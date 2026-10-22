@@ -93,6 +93,7 @@ impl Diagnostics {
             jni: inspect || self.verbose,
             syscalls: self.trace_syscalls,
             imports: self.trace_imports,
+            heap: false,
             code: self.trace_code,
             calls: self.trace_calls,
             coverage: Vec::new(),

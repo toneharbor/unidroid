@@ -94,6 +94,8 @@ Add the matching method to `JniHandler` and run again. It's the same idea as set
 
 For crash reports, debugger controls, memory inspection and traces, see [the library debugging reference](DEBUGGING.md#library). [Checkpoints and rewind](DEBUGGING.md#checkpoints-and-rewind) let you try inputs from one prepared state or copy it into independent emulators. `emu.crypto_constants()` scans mapped memory when called and names known algorithm tables and constants. It sees values stored as data, including tables made during `JNI_OnLoad`; values built by instructions and custom Base64 alphabets are not found.
 
+Enable `Trace { heap: true, ..Trace::default() }` to track libc allocations and their callers. `emu.heap()` returns allocation history; `emu.object(address, depth)` expands a live block into pointer fields, strings and referrers. Serve exposes `trace` with `heap`, `heap` and `object`. Tracked snapshots and `unidroid diff` include allocated and freed blocks. See Heap and objects in [DEBUGGING.md](DEBUGGING.md) for depth rules, host allocations and allocator limits.
+
 32-bit or 64-bit is picked by the first library you load; rewinding a checkpoint into a fresh emulator picks the checkpoint's architecture. There's no setting for it. Load that library before `malloc`, `read_bytes`, `write_bytes` or `call_function`; before it, they return an error. One emulator runs one kind: loading a 64-bit library after a 32-bit one is an error.
 
 On 32-bit, `call_function` passes each argument as one 32-bit word and returns only `r0`. To pass a 64-bit value, give it as two words, low word first. If it would start at an odd word position (counting from 0), put a `0` word in front of it. `call_static_jni_method` and `call_jni_method` handle this for you.

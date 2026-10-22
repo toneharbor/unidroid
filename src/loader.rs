@@ -49,6 +49,7 @@ impl Emulator {
         if !self.trace.coverage.is_empty() {
             self.trace_coverage(&self.trace.coverage.clone())?;
         }
+        self.trace_heap(self.trace.heap)?;
         self.initialize(module)?;
         Ok(module)
     }

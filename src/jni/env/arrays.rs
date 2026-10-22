@@ -17,7 +17,7 @@ impl Emulator {
                     self.pending_exception("java/lang/NegativeArraySizeException", None);
                     Ok(0)
                 } else {
-                    let initial = (c != 0).then(|| self.object(Handle(c))).transpose()?;
+                    let initial = (c != 0).then(|| self.jni_object(Handle(c))).transpose()?;
                     let class = self.class_name(Handle(b))?;
                     Ok(self
                         .insert_object(Object::ObjectArray(vec![initial; length as usize], class))
@@ -40,7 +40,7 @@ impl Emulator {
                 Ok(value.map_or(0, |object| self.insert_ref(object, self.jni.scope).0))
             }
             174 => {
-                let value = (c != 0).then(|| self.object(Handle(c))).transpose()?;
+                let value = (c != 0).then(|| self.jni_object(Handle(c))).transpose()?;
                 let object = self.require_object(&function, a)?;
                 let Object::ObjectArray(values, _) = &mut *object.borrow_mut() else {
                     return Err(self.reference_error(&function, a));
@@ -82,7 +82,7 @@ impl Emulator {
             }
             191..=198 | 223 => {
                 if c == 0 || c == 1 {
-                    let object = self.object(Handle(a))?;
+                    let object = self.jni_object(Handle(a))?;
                     let mut object = object.borrow_mut();
                     let Object::Array(_, bytes) = &mut *object else {
                         unreachable!()

@@ -19,6 +19,7 @@ fn snapshot(regions: &[(u64, &[u8])]) -> Snapshot {
                 )
             })
             .collect(),
+        heap: Vec::new(),
     }
 }
 

@@ -7,6 +7,7 @@ pub struct Trace {
     pub jni: bool,
     pub syscalls: bool,
     pub imports: bool,
+    pub heap: bool,
     pub code: Vec<String>,
     pub calls: Vec<String>,
     pub coverage: Vec<String>,
@@ -247,6 +248,7 @@ impl Emulator {
         self.trace_code(&trace.code)?;
         self.trace_calls(&trace.calls)?;
         self.trace_coverage(&trace.coverage)?;
+        self.trace_heap(trace.heap)?;
         self.trace_imports(trace.imports)?;
         self.trace = trace;
         Ok(())

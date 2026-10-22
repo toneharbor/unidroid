@@ -79,6 +79,7 @@ Pick the row that answers the current question:
 | What is a value at this point? | Breakpoint, then `registers` and `read` | Argument registers and the bytes at their pointers. Decode `read`'s base64 before interpreting memory. |
 | Which memory does a call write? | Serve `snapshot` before and after the call, then `unidroid diff before.snap after.snap` | Changed bytes with locations, newly mapped ranges, and changed registers. |
 | Where is this value in memory? | Serve `search` | Matching addresses and locations. A full list of 1000 may hide more matches; narrow the pattern. |
+| What object is this address in, who made it, and what points to it? | Enable serve `trace` with `heap` before the call, then `object` with `at` and `depth` (default 1); see [DEBUGGING.md](../../DEBUGGING.md) | The live block, allocation backtrace, pointer fields, printable strings and referrers. Depth 0 shows the root; depth 1 also expands direct targets and referrer blocks. |
 | Which instruction writes (or reads) this memory? | Serve `watch`, then `backtrace` and `registers` at the stop | `watch.pc` identifies the accessing instruction; `watch.address`, `size`, `write` and `value` describe its access. |
 | Who writes this buffer during the whole call? | Serve `watch` with `"kind":"write","log":true` and `--log-format json` | Stderr `watch` events: accessing `pc`, address, size, value, thread and callers, without stopping the call. |
 | Which range is this address in? | Serve `maps` | Start and exclusive end, permissions, and the library or memory area's name. |

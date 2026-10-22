@@ -42,6 +42,7 @@ pub struct Checkpoint {
     source: crate::source::State,
     jni: crate::jni::JniState,
     threads: crate::threads::Threads,
+    heap_records: crate::debug::heap::SavedHeap,
 }
 
 impl Emulator {
@@ -81,6 +82,7 @@ impl Emulator {
             source: self.source.state.clone(),
             jni: self.jni.clone(),
             threads: self.threads.copy(self.uc.as_mut().unwrap())?,
+            heap_records: self.saved_heap(),
         })
     }
 
@@ -139,6 +141,7 @@ impl Emulator {
         let mut threads = checkpoint.threads.copy(self.cpu_mut()?)?;
         threads.slice_hook_installed = self.threads.slice_hook_installed;
         self.threads = threads;
+        self.restore_heap_records(&checkpoint.heap_records);
         if self.threads.has_saved() {
             self.install_thread_slice_hook()?;
         }

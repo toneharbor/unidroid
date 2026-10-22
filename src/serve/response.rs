@@ -1,4 +1,4 @@
-use crate::{Crash, Frame, Stop, StopReason};
+use crate::{Allocation, Crash, Frame, HeapObject, Referrer, Stop, StopReason, Target};
 use serde::{Serialize, Serializer, ser::SerializeMap};
 use serde_json::{Value, json};
 
@@ -62,6 +62,58 @@ pub(super) fn crash_value(crash: &Crash) -> CrashResponse {
             .collect(),
         jni: crash.jni.clone(),
     }
+}
+
+pub(super) fn allocation_value(allocation: &Allocation) -> Value {
+    json!({
+        "address": allocation.address.to_string(),
+        "size": allocation.size.to_string(),
+        "live": allocation.live,
+        "function": allocation.function,
+        "thread": allocation.thread,
+        "backtrace": frames_value(&allocation.backtrace),
+        "freed": allocation.freed.as_ref().map(|frames| frames_value(frames)),
+    })
+}
+
+pub(super) fn object_value(object: &HeapObject) -> Value {
+    json!({
+        "address": object.address.to_string(),
+        "size": object.size.to_string(),
+        "allocation": allocation_value(&object.allocation),
+        "fields": object.fields.iter().map(|field| json!({
+            "offset": field.offset.to_string(),
+            "value": field.value.to_string(),
+            "target": field.target.as_ref().map(target_value),
+            "string": field.string,
+        })).collect::<Vec<_>>(),
+        "referrers": object.referrers.iter().map(referrer_value).collect::<Vec<_>>(),
+    })
+}
+
+fn target_value(target: &Target) -> Value {
+    match target {
+        Target::Block {
+            address,
+            offset,
+            object,
+        } => json!({
+            "kind": "block",
+            "address": address.to_string(),
+            "offset": offset.to_string(),
+            "object": object.as_deref().map(object_value),
+        }),
+        Target::Location { location } => json!({ "kind": "location", "location": location }),
+    }
+}
+
+fn referrer_value(referrer: &Referrer) -> Value {
+    json!({
+        "address": referrer.address.to_string(),
+        "location": referrer.location,
+        "block": referrer.block.map(|address| address.to_string()),
+        "object": referrer.object.as_deref().map(object_value),
+    })
 }
 
 #[derive(Serialize)]

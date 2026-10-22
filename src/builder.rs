@@ -112,6 +112,7 @@ impl Emulator {
             code: debug::code::Code::default(),
             calls: None,
             coverage: debug::coverage::Coverage::default(),
+            heap_trace: debug::heap::Heap::default(),
             breakpoints: HashMap::new(),
             watchpoints: debug::watch::Watchpoints::default(),
         })

@@ -120,6 +120,7 @@ fn trace_changes_and_disabling_preserve_counts_until_reset() -> Result<()> {
             jni: true,
             syscalls: true,
             imports: true,
+            heap: false,
             code: vec!["libc.so+0x1000-0x1040".into()],
             calls: vec!["libc.so+0x1000-0x1040".into()],
             coverage: vec![spec.clone()],

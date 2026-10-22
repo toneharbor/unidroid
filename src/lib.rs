@@ -24,6 +24,7 @@ pub use debug::{
     coverage::BlockCount,
     crypto::CryptoConstant,
     events::{Event, MemoryAccess, Trace},
+    heap::{Allocation, Field, HeapObject, Referrer, Target},
     maps::Mapping,
     modules::ModuleInfo,
     search::SEARCH_LIMIT,
@@ -158,6 +159,7 @@ pub struct Emulator {
     code: debug::code::Code,
     calls: Option<debug::calls::Calls>,
     coverage: debug::coverage::Coverage,
+    heap_trace: debug::heap::Heap,
     breakpoints: HashMap<u64, unicorn_engine::UcHookId>,
     watchpoints: debug::watch::Watchpoints,
 }

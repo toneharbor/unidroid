@@ -191,6 +191,22 @@ impl<R: BufRead, W: Write> Session<R, W> {
                     "count": block.count,
                 })).collect::<Vec<_>>())
             }
+            Command::Heap { reset } => {
+                let allocations = emu.heap();
+                if reset {
+                    emu.reset_heap();
+                }
+                Value::Array(
+                    allocations
+                        .iter()
+                        .map(response::allocation_value)
+                        .collect(),
+                )
+            }
+            Command::Object { at, depth } => {
+                let address = emu.resolve(&at)?;
+                response::object_value(&emu.object(address, depth)?)
+            }
             Command::Checkpoint => {
                 let checkpoint = emu.checkpoint()?;
                 self.next_checkpoint += 1;
@@ -219,6 +235,7 @@ impl<R: BufRead, W: Write> Session<R, W> {
                 jni,
                 syscalls,
                 imports,
+                heap,
                 code,
                 calls,
                 coverage,
@@ -227,6 +244,7 @@ impl<R: BufRead, W: Write> Session<R, W> {
                     jni,
                     syscalls,
                     imports,
+                    heap,
                     code,
                     calls,
                     coverage,

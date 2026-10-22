@@ -2,6 +2,10 @@ use super::wire::{Address, Method};
 use serde::Deserialize;
 use serde_json::Value;
 
+fn default_object_depth() -> usize {
+    1
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub(super) enum Command {
@@ -40,6 +44,15 @@ pub(super) enum Command {
         #[serde(default)]
         reset: bool,
     },
+    Heap {
+        #[serde(default)]
+        reset: bool,
+    },
+    Object {
+        at: String,
+        #[serde(default = "default_object_depth")]
+        depth: usize,
+    },
     Checkpoint,
     Rewind {
         id: u64,
@@ -64,6 +77,8 @@ pub(super) enum Command {
         syscalls: bool,
         #[serde(default)]
         imports: bool,
+        #[serde(default)]
+        heap: bool,
         #[serde(default)]
         code: Vec<String>,
         #[serde(default)]

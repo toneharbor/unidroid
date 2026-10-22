@@ -113,7 +113,7 @@ impl Emulator {
     fn insert_api_object(&mut self, object: Object) -> Handle {
         self.insert_ref(Rc::new(RefCell::new(object)), 0)
     }
-    pub(super) fn object(&self, handle: Handle) -> Result<Rc<RefCell<Object>>> {
+    pub(super) fn jni_object(&self, handle: Handle) -> Result<Rc<RefCell<Object>>> {
         self.jni
             .objects
             .get(&handle)
@@ -169,7 +169,7 @@ impl Emulator {
         self.insert_api_object(Object::String(value.encode_utf16().collect()))
     }
     pub fn string(&self, handle: Handle) -> Result<String> {
-        match &*self.object(handle)?.borrow() {
+        match &*self.jni_object(handle)?.borrow() {
             Object::String(s) => Ok(String::from_utf16_lossy(s)),
             object => Err(format!(
                 "invalid handle {}: {}, not a string",
@@ -190,7 +190,7 @@ impl Emulator {
         self.primitive_array(handle)
     }
     pub fn primitive_array(&self, handle: Handle) -> Result<Vec<u8>> {
-        match &*self.object(handle)?.borrow() {
+        match &*self.jni_object(handle)?.borrow() {
             Object::Array(_, bytes) => Ok(bytes.clone()),
             object => Err(format!(
                 "invalid handle {}: {}, not a primitive array",
@@ -206,12 +206,16 @@ impl Emulator {
     pub fn new_object_array(&mut self, class: &str, values: &[Handle]) -> Result<Handle> {
         let values = values
             .iter()
-            .map(|handle| (handle.0 != 0).then(|| self.object(*handle)).transpose())
+            .map(|handle| {
+                (handle.0 != 0)
+                    .then(|| self.jni_object(*handle))
+                    .transpose()
+            })
             .collect::<Result<_>>()?;
         Ok(self.insert_api_object(Object::ObjectArray(values, class.into())))
     }
     pub fn object_array(&mut self, handle: Handle) -> Result<Vec<Handle>> {
-        let values = match &*self.object(handle)?.borrow() {
+        let values = match &*self.jni_object(handle)?.borrow() {
             Object::ObjectArray(values, _) => values.clone(),
             object => {
                 return Err(format!(
@@ -239,7 +243,7 @@ impl Emulator {
         let Some(handle) = self.jni.pending.take() else {
             return Ok(());
         };
-        let object = self.object(handle)?;
+        let object = self.jni_object(handle)?;
         let (class, message) = match &*object.borrow() {
             Object::Exception(class, message) => (class.clone(), message.clone()),
             _ => ("java/lang/Throwable".into(), None),
@@ -253,13 +257,13 @@ impl Emulator {
     }
 
     pub fn user_value<T: Any>(&self, handle: Handle) -> Option<Rc<T>> {
-        match &*self.object(handle).ok()?.borrow() {
+        match &*self.jni_object(handle).ok()?.borrow() {
             Object::User(_, v) => v.clone().downcast().ok(),
             _ => None,
         }
     }
     pub(super) fn class_name(&self, handle: Handle) -> Result<String> {
-        Ok(match &*self.object(handle)?.borrow() {
+        Ok(match &*self.jni_object(handle)?.borrow() {
             Object::Class(name) => name.clone(),
             object => object.java_type(),
         })
@@ -268,7 +272,7 @@ impl Emulator {
         if handle.0 == 0 {
             return Ok(handle);
         }
-        let object = self.object(handle)?;
+        let object = self.jni_object(handle)?;
         Ok(self.insert_ref(object, scope))
     }
 }

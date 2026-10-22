@@ -58,6 +58,8 @@ impl Emulator {
         self.finish_calls();
         let cleanup = control.clear_finish(self);
         let result = result.and_then(|value| cleanup.map(|_| value));
+        let cleanup = self.finish_heap(result.is_err());
+        let result = result.and_then(|value| cleanup.map(|_| value));
         self.threads.depth -= 1;
         if self.threads.depth == 0 && result.is_err() {
             self.restore_main_thread()?;

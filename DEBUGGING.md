@@ -49,6 +49,7 @@ Rewind restores:
 - All CPU registers, the current thread identity, saved guest threads and their registers, PCs and waits, thread IDs and virtual scheduling time.
 - Memory mappings, permissions and bytes, including allocations, stacks, TLS and library data. Later mappings and libraries disappear; later host allocations and JNI handles are no longer live, and their addresses and handle numbers can be reused.
 - Loaded modules and loader state, host function stubs, symbol aliases, library directories, rootfs, properties, process name, host malloc/free state and `dlerror` state.
+- Heap tracking records, including live blocks, freed blocks and release order. They follow the restored memory; `Trace.heap` and its hooks stay with the target emulator.
 - Open files and their offsets. Files reopen and seek on each rewind, so reads in one run or copy never move the checkpoint's offset. Keep the rootfs files available and unchanged.
 - The fixed clock and its elapsed counter, and the seeded random generator including partly consumed output. Host clock/random values still come from the host when those settings were omitted.
 - JNI handles, objects, classes, members, registered natives, references and exceptions. Object graphs are copied deeply, preserving aliases and cycles, including inside object arrays. `new_object`'s `Object::User` payload (`Rc<dyn Any>`) is shared: changes inside that Rust payload remain visible across rewinds and copies.
@@ -137,7 +138,7 @@ For a plain C call, use `emu.call_function_with(&mut handler, function, args)?` 
 
 `emu.crypto_constants()?` returns `CryptoConstant` entries for known hash, cipher, checksum and encoding constants found in mapped memory. Each entry has the name, address and a location such as `libfoo.so+0x1234` or `0x40001000 [host malloc]`; results are in address order. It reads memory only for the call and keeps no scan state. It finds tables stored as data, including tables built during initialization, but not values assembled by instructions such as `movz`/`movk` or `movw`/`movt`. A custom Base64 alphabet is not recognized.
 
-`emu.snapshot()?` captures the current thread ID, general registers, modules and every mapped byte, including code and memory without read permission. `Snapshot::save(path)` writes a JSON header followed by raw memory; `Snapshot::load(path)` reads it back. `before.diff(&after)` returns changed registers, newly mapped and unmapped ranges, and changed bytes with locations. It compares by address even when mappings split, ignores permission changes, and merges byte changes separated by fewer than eight unchanged bytes. `diff.report()` formats all four sections as text:
+`emu.snapshot()?` captures the current thread ID, general registers, modules and every mapped byte, including code and memory without read permission. With `Trace.heap` enabled it also captures the live known allocations described under Heap and objects below. `Snapshot::save(path)` writes a JSON header followed by raw memory; `Snapshot::load(path)` reads it back. `before.diff(&after)` returns changed registers, newly mapped and unmapped ranges, and changed bytes with locations. It compares by address even when mappings split, ignores permission changes, and merges byte changes separated by fewer than eight unchanged bytes. `diff.report()` formats these sections as text, with allocation sections when heap data is present:
 
 ```rust
 let before = emu.snapshot()?;
@@ -152,9 +153,31 @@ Maps and snapshots install no hooks and store no copies until called. A snapshot
 
 `emu.register(name)?` reads a register and `emu.set_register(name, value)?` writes it. Names are `x0`–`x28`, `fp`, `lr`, `sp`, `pc`, `nzcv` on arm64; `r0`–`r12`, `sp`, `lr`, `pc`, `cpsr` on arm32; and `d0`–`d31` on both. The `d` registers hold 64-bit floating-point bits and are available through named reads and writes, including serve's `set_register`. Dumps from `registers()`, crash reports, break questions and serve's `registers` list only the general registers, sp, lr, pc and flags, in the order above. An unknown name lists the valid names.
 
+### Heap and objects
+
+Enable tracking with the builder's `.trace(Trace { heap: true, ..Trace::default() })` or `emu.set_trace(Trace { heap: true, ..Trace::default() })?`. The switch defaults to false. Tracking hooks the exported `malloc`, `calloc`, `realloc`, `free`, `memalign` and `posix_memalign` entry points of the module named `libc.so`, before its constructors run, including when libc loads later. Static and custom allocators are not seen.
+
+Each entry captures the function, arguments, thread and the same frame-pointer backtrace used by `backtrace()`, starting at the caller's return address (Thumb bit cleared). A call completes when that thread reaches its saved return address with sp at least its entry sp. Per-thread stacks pair nested calls; each distinct return address has one hook retained while tracking is on. Host-started guest allocations, including JNI string and array buffers, complete at the host return boundary. Their first frame is `0x20000` with symbol `host return`. Backtraces can be short when code omits frame pointers.
+
+`emu.heap() -> Vec<Allocation>` returns completed libc allocation records in allocation-entry order, live and freed. Each `Allocation` has `address: u64`, `size: u64`, `live: bool`, `function: String`, `thread: u32`, `backtrace: Vec<Frame>` and `freed: Option<Vec<Frame>>`. Sizes are the requested byte counts; calloc uses count × size. `freed` holds the entry backtrace of the free or realloc that released the block. `free(NULL)` and failed allocations add no records. A successful realloc that moves frees the old record and creates one named `realloc`; an in-place realloc updates the existing size. Successful posix_memalign reads its pointer from the out-parameter after return.
+
+Turning tracking off removes all its hooks and keeps its records. They stop updating while it is off. `emu.reset_heap()` clears the records. With tracking never enabled, there is no tracker state or hook. `emu.allocation(address) -> Option<Allocation>` finds the live tracked block containing the address, otherwise the most recently freed containing block, otherwise a current host allocation.
+
+Host allocations from `emu.malloc` and `new_cstring` are known even with tracking off. Queries read them from the host allocator's existing map: `function` is `host`, `live` is true, `thread` is the main thread ID (1234), the backtrace is empty and `freed` is None. Their size is the host allocator's rounded block size. They carry no allocation history and are not in `heap()`; freeing one removes it from these queries.
+
+`emu.object(address, depth) -> Result<HeapObject>` accepts any address inside a live tracked block or current host allocation. Otherwise it errors with `0x<address> is not inside a known allocation`, adding module or mapping context when available. The result describes the whole containing block: `address`, `size`, `allocation`, `fields` and `referrers`.
+
+- Each `Field { offset, value, target, string }` represents a pointer-size aligned word; a trailing partial word is omitted. `Target::Block { address, offset, object }` names a known live block and the offset into it. `Target::Location { location }` names a module symbol or mapping. Other values have no target. `string` is set only for a pointer to printable ASCII (space through tilde), at least four characters, with a NUL terminator within the first 64 bytes. There is no structure or string-table detection.
+- Each `Referrer { address, location, block, object }` is an aligned word whose value points anywhere into the block. All mapped memory is scanned, including the stack, excluding words in the block itself. Results are in address order, capped at `SEARCH_LIMIT` (1000) per object. `block: Option<u64>` names the known live block containing the referring word, when one exists.
+- Depth 0 includes the root's fields, strings and referrer list. Depth 1 also expands directly pointed-to blocks and referrer blocks through their `object: Option<Box<HeapObject>>` fields. Each additional level follows one more link. A block expands at most once per call, including the root; later mentions retain its address and offset, with no nested object, so cycles terminate. Field targets are visited before referrers. Memory is read once per call, mapping by mapping, and the temporary copies are shared by all expansion and string reads.
+
+With heap tracking on, `snapshot().heap` holds live tracked blocks and current host allocations. With it off, that list is empty even if retained tracker records exist. Saved snapshot headers preserve the list; headers without `heap` load with an empty list. Diff's `allocated` and `freed` lists compare live blocks by address and size: resizing in place appears in both lists, while freeing and reusing the same address and size between snapshots is indistinguishable. `Change.allocation: Option<(u64, u64)>` identifies the start and size of the block containing the change's first byte, checking the after snapshot first, then before. The text report adds `allocated:` and `freed:` after `unmapped:` when either snapshot has heap data, and appends ` in block 0x<start>+0x<offset>` to those change lines. The `unidroid diff` command uses this report automatically.
+
+Checkpoint heap records follow guest memory: rewind restores live and freed records and their release order, including into a fresh emulator. `Trace.heap` and its hooks stay with the target emulator. Only completed records are checkpointed between calls; pending call stacks are not checkpoint data.
+
 ### Traces and events
 
-`Trace` has three booleans (`jni`, `syscalls` and `imports`, default `false`) and three specification lists (`code: Vec<String>`, `calls: Vec<String>` and `coverage: Vec<String>`, default empty). Set them with `.trace(Trace { .. })` on the builder, or `emu.set_trace(Trace { .. })?` at runtime. `emu.trace()` reads the settings. Each change replaces all settings. With traces off, no trace hook is installed.
+`Trace` has four booleans (`jni`, `syscalls`, `imports` and `heap`, default `false`) and three specification lists (`code: Vec<String>`, `calls: Vec<String>` and `coverage: Vec<String>`, default empty). Set them with `.trace(Trace { .. })` on the builder, or `emu.set_trace(Trace { .. })?` at runtime. `emu.trace()` reads the settings. Each change replaces all settings. With traces off, no trace hook is installed.
 
 Each `code`, `calls` or `coverage` entry is a module file name, such as `libfoo.so`, or a module with a hex offset range, such as `libfoo.so+0x1000-0x2000` (end exclusive). It matches libraries already loaded and libraries loaded later, by file name. Bad specifications fail `build` or `set_trace`. For example, `Trace { code: vec!["libfoo.so+0x1000-0x2000".into()], ..Trace::default() }` traces that part of the library.
 
@@ -217,7 +240,9 @@ The example abbreviates the registers, stack and JNI history. If a bad JNI answe
 
 ### Traces
 
-Change traces during a session with `{"cmd":"trace","jni":true,"syscalls":true,"imports":false,"code":["libfoo.so+0x1000-0x2000"],"calls":["libfoo.so"],"coverage":["libfoo.so"]}`. Omitted booleans become `false`; omitted `code`, `calls` and `coverage` become empty. `{"cmd":"trace"}` turns all traces off. Log format is chosen when starting the CLI; JSON logs go to stderr and protocol replies go to stdout.
+Change traces during a session with `{"cmd":"trace","jni":true,"syscalls":true,"imports":false,"heap":true,"code":["libfoo.so+0x1000-0x2000"],"calls":["libfoo.so"],"coverage":["libfoo.so"]}`. Omitted booleans become `false`; omitted `code`, `calls` and `coverage` become empty. `{"cmd":"trace"}` turns all traces off. Log format is chosen when starting the CLI; JSON logs go to stderr and protocol replies go to stdout.
+
+Heap and object replies use decimal strings for addresses, sizes, offsets and word values. Thread IDs are numbers and `live` is a boolean. Allocation `backtrace` and `freed` frames use the same JSON as a crash’s `backtrace`; `freed` is null until release. A field’s `target` is null, `{kind:"block", address, offset, object}`, or `{kind:"location", location}`. Referrers have `{address, location, block, object}`; `block` is a decimal string or null, and `object` is the nested object or null. Fields without a printable string have `string: null`. For example, enable `{"cmd":"trace","heap":true}`, run the call, then inspect `{"cmd":"heap"}` or `{"cmd":"object","at":"0x50001010","depth":1}`.
 
 ### Stops and questions
 
@@ -262,8 +287,10 @@ A resume command with no stop open errors with `no breakpoint stop is waiting`. 
 
 | command | fields | result |
 |---|---|---|
-| `trace` | `jni`, `syscalls`, `imports` (booleans, omitted means false), `code`, `calls`, `coverage` (lists of specifications, omitted means empty) | `null` |
+| `trace` | `jni`, `syscalls`, `imports`, `heap` (booleans, omitted means false), `code`, `calls`, `coverage` (lists of specifications, omitted means empty) | `null` |
 | `coverage` | `reset` (boolean, omitted means false) | list of `{address, location, count}` in address order; address is a decimal string, count is a number; `reset: true` returns the collected counts and then clears them |
+| `heap` | `reset` (boolean, omitted means false) | libc allocation records in allocation-entry order; `reset: true` returns the collected records and then clears them |
+| `object` | `at` (text for `resolve`), `depth` (number, default 1) | containing live known block, fields and referrers; depth 0 includes only the root, depth 1 also expands direct targets and referrer blocks, each further level follows one more link |
 | `break` / `unbreak` | `at` (text for `resolve`) | address with Thumb bit cleared / `null` |
 | `watch` | `at` (text for `resolve`), `size` (number), `kind` (`read`, `write` or `access`), `log` (boolean, omitted or false means stop) | watched address (decimal string) |
 | `unwatch` | `at` (text for `resolve`) | `null` |
@@ -322,7 +349,7 @@ Take snapshots before and after a call with serve's `snapshot` command or the li
 target/release/unidroid diff before.snap after.snap
 ```
 
-It prints the differences and exits 0, even when memory changed. For example:
+It prints the differences and exits 0, even when memory changed. For example, without heap data:
 
 ```text
 registers:
@@ -333,6 +360,25 @@ unmapped:
   (none)
 changes:
   0x40000000 [host malloc], 4 bytes
+    0000 - 00 00 00 00
+    0000 + 01 02 03 04
+```
+
+With heap data, the report also shows allocation history and the block containing each change's first byte:
+
+```text
+registers:
+  (none)
+mapped:
+  (none)
+unmapped:
+  (none)
+allocated:
+  0x50001000, 32 bytes, malloc from libfoo.so+0x1234 (make+0x10)
+freed:
+  0x50000000, 64 bytes, calloc from libfoo.so+0x1200 (prepare+0x8)
+changes:
+  0x50001008 [mmap], 4 bytes in block 0x50001000+0x8
     0000 - 00 00 00 00
     0000 + 01 02 03 04
 ```

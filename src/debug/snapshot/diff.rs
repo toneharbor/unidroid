@@ -1,5 +1,5 @@
 use super::Snapshot;
-use crate::{Mapping, debug::memory_location};
+use crate::{Allocation, Mapping, debug::memory_location};
 use serde::Serialize;
 use std::fmt::Write;
 
@@ -11,6 +11,10 @@ pub struct Diff {
     pub mapped: Vec<Mapping>,
     pub unmapped: Vec<Mapping>,
     pub changes: Vec<Change>,
+    pub allocated: Vec<Allocation>,
+    pub freed: Vec<Allocation>,
+    #[serde(skip)]
+    pub(crate) heap_data: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -19,6 +23,7 @@ pub struct Change {
     pub location: String,
     pub before: Vec<u8>,
     pub after: Vec<u8>,
+    pub allocation: Option<(u64, u64)>,
 }
 
 impl Diff {
@@ -47,12 +52,46 @@ impl Diff {
                 text.push('\n');
             }
         }
+        if self.heap_data {
+            for (name, allocations) in [("allocated", &self.allocated), ("freed", &self.freed)] {
+                let _ = writeln!(text, "{name}:");
+                if allocations.is_empty() {
+                    text.push_str("  (none)\n");
+                }
+                for allocation in allocations {
+                    let first = allocation.backtrace.first().map_or_else(
+                        || "(none)".into(),
+                        |frame| match &frame.symbol {
+                            Some(symbol) => format!("{} ({symbol})", frame.location),
+                            None => frame.location.clone(),
+                        },
+                    );
+                    let _ = writeln!(
+                        text,
+                        "  0x{:x}, {} bytes, {} from {}",
+                        allocation.address, allocation.size, allocation.function, first
+                    );
+                }
+            }
+        }
         text.push_str("changes:\n");
         if self.changes.is_empty() {
             text.push_str("  (none)\n");
         }
         for change in &self.changes {
-            let _ = writeln!(text, "  {}, {} bytes", change.location, change.before.len());
+            let block = change
+                .allocation
+                .map(|(address, _)| {
+                    format!(" in block 0x{address:x}+0x{:x}", change.address - address)
+                })
+                .unwrap_or_default();
+            let _ = writeln!(
+                text,
+                "  {}, {} bytes{}",
+                change.location,
+                change.before.len(),
+                block
+            );
             for (row, (before, after)) in change
                 .before
                 .chunks(16)
@@ -87,6 +126,33 @@ impl Snapshot {
             mapped: Vec::new(),
             unmapped: Vec::new(),
             changes: Vec::new(),
+            allocated: after
+                .heap
+                .iter()
+                .filter(|allocation| {
+                    allocation.live
+                        && !self.heap.iter().any(|before| {
+                            before.live
+                                && before.address == allocation.address
+                                && before.size == allocation.size
+                        })
+                })
+                .cloned()
+                .collect(),
+            freed: self
+                .heap
+                .iter()
+                .filter(|allocation| {
+                    allocation.live
+                        && !after.heap.iter().any(|after| {
+                            after.live
+                                && after.address == allocation.address
+                                && after.size == allocation.size
+                        })
+                })
+                .cloned()
+                .collect(),
+            heap_data: !self.heap.is_empty() || !after.heap.is_empty(),
         };
         let mut boundaries: Vec<_> = self
             .memory
@@ -142,6 +208,7 @@ impl Snapshot {
                                 location: memory_location(address, &after.modules, Some(mapping_b)),
                                 before: vec![a],
                                 after: vec![b],
+                                allocation: None,
                             });
                         }
                         gap.clear();
@@ -159,6 +226,18 @@ impl Snapshot {
                 }),
                 (None, None) => {}
             }
+        }
+        for change in &mut diff.changes {
+            change.allocation = after
+                .heap
+                .iter()
+                .find(|allocation| allocation.live && allocation.contains(change.address))
+                .or_else(|| {
+                    self.heap
+                        .iter()
+                        .find(|allocation| allocation.live && allocation.contains(change.address))
+                })
+                .map(|allocation| (allocation.address, allocation.size));
         }
         diff
     }

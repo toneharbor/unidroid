@@ -30,14 +30,14 @@ impl Emulator {
                     .0)
             }
             164 => {
-                let object = self.object(Handle(a))?;
+                let object = self.jni_object(Handle(a))?;
                 let Object::String(value) = &*object.borrow() else {
                     unreachable!()
                 };
                 Ok(value.len() as u64)
             }
             165 | 169 | 224 => {
-                let object = self.object(Handle(a))?;
+                let object = self.jni_object(Handle(a))?;
                 let Object::String(value) = &*object.borrow() else {
                     unreachable!()
                 };
@@ -74,7 +74,7 @@ impl Emulator {
                     .0)
             }
             168 => {
-                let object = self.object(Handle(a))?;
+                let object = self.jni_object(Handle(a))?;
                 let Object::String(value) = &*object.borrow() else {
                     unreachable!()
                 };

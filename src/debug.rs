@@ -1,5 +1,5 @@
 use crate::{Emulator, RETURN, Result, TRAMPOLINE, arch::Architecture};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt::{self, Write};
 use unicorn_engine::{RegisterARM, RegisterARM64};
 
@@ -9,6 +9,7 @@ pub(crate) mod control;
 pub(crate) mod coverage;
 pub(crate) mod crypto;
 pub(crate) mod events;
+pub(crate) mod heap;
 pub(crate) mod imports;
 pub(crate) mod maps;
 pub(crate) mod modules;
@@ -52,7 +53,7 @@ pub(crate) fn memory_location(
     })
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Frame {
     pub address: u64,
     pub location: String,
@@ -138,65 +139,19 @@ impl Emulator {
     }
 
     pub fn backtrace(&self) -> Result<Vec<Frame>> {
-        let pc = self.pc()?;
-        let lr = self.lr()?;
-        let host = (TRAMPOLINE..RETURN).contains(&pc);
-        let mut addresses = Vec::new();
-        let mut push = |address: u64, is_return: bool| {
-            let address = address & !1;
-            if address == RETURN || (is_return && address == 0) || addresses.len() == 32 {
-                return false;
-            }
-            if addresses.last() != Some(&address) {
-                addresses.push(address);
-            }
-            true
-        };
-        if push(if host { lr } else { pc }, host) && push(lr, true) {
-            let reg = match self.architecture() {
-                Architecture::Arm64 => RegisterARM64::FP as i32,
-                Architecture::Arm32 => {
-                    let thumb = if host {
-                        lr & 1 != 0
-                    } else {
-                        self.cpu()?.reg_read(RegisterARM::CPSR)? & 32 != 0
-                    };
-                    if thumb {
-                        RegisterARM::R7 as i32
-                    } else {
-                        RegisterARM::R11 as i32
-                    }
-                }
-            };
-            let mut fp = self.cpu()?.reg_read(reg)?;
-            while fp != 0 {
-                let (Ok(previous), Ok(address)) = (
-                    self.read_pointer(fp),
-                    self.read_pointer(fp.saturating_add(self.pointer_size())),
-                ) else {
-                    break;
-                };
-                if !push(address, true) || previous <= fp {
-                    break;
-                }
-                fp = previous;
-            }
-        }
-        Ok(addresses
-            .into_iter()
-            .map(|address| Frame {
-                address,
-                location: self.location(address),
-                symbol: self.symbol(address),
-            })
-            .collect())
-    }
-
-    fn symbol(&self, address: u64) -> Option<String> {
-        self.modules
-            .iter()
-            .find(|m| address >= m.base && address < m.base + m.image.size)
-            .and_then(|m| m.image.function(address - m.base))
+        Ok(
+            backtrace_addresses(self.cpu()?, self.architecture(), false)?
+                .into_iter()
+                .map(|address| {
+                    frame(
+                        address,
+                        self.modules.iter().map(|module| {
+                            (module.base, module.name.as_str(), module.image.as_ref())
+                        }),
+                    )
+                })
+                .collect(),
+        )
     }
 
     pub fn symbolize(&self, address: u64) -> String {
@@ -207,4 +162,87 @@ impl Emulator {
                 .map(|m| (m.base, m.name.as_str(), m.image.as_ref())),
         )
     }
+}
+
+pub(crate) fn frame<'a>(
+    address: u64,
+    mut modules: impl Iterator<Item = (u64, &'a str, &'a crate::Image)>,
+) -> Frame {
+    if let Some((base, name, image)) =
+        modules.find(|(base, _, image)| (*base..*base + image.size).contains(&address))
+    {
+        let offset = address - base;
+        Frame {
+            address,
+            location: format!("{name}+0x{offset:x}"),
+            symbol: image.function(offset),
+        }
+    } else {
+        Frame {
+            address,
+            location: format!("0x{address:x}"),
+            symbol: (address == RETURN).then(|| "host return".into()),
+        }
+    }
+}
+
+// Allocator entry starts at its caller, including host-started calls at RETURN.
+pub(crate) fn backtrace_addresses(
+    cpu: &unicorn_engine::Unicorn<'_, crate::CpuData>,
+    arch: Architecture,
+    allocator: bool,
+) -> Result<Vec<u64>> {
+    let pc = cpu.reg_read(arch.pc())?;
+    let lr = cpu.reg_read(arch.lr())?;
+    let host = (TRAMPOLINE..RETURN).contains(&pc);
+    let mut addresses = Vec::new();
+    let mut push = |address: u64, is_return: bool| {
+        let address = address & !1;
+        if (address == RETURN && !(allocator && addresses.is_empty()))
+            || (is_return && address == 0)
+            || addresses.len() == 32
+        {
+            return false;
+        }
+        if addresses.last() != Some(&address) {
+            addresses.push(address);
+        }
+        true
+    };
+    let caller = allocator || host;
+    if push(if caller { lr } else { pc }, caller) && push(lr, true) {
+        let register = match arch {
+            Architecture::Arm64 => RegisterARM64::FP as i32,
+            Architecture::Arm32 => {
+                let thumb = if caller {
+                    lr & 1 != 0
+                } else {
+                    cpu.reg_read(RegisterARM::CPSR)? & 32 != 0
+                };
+                if thumb {
+                    RegisterARM::R7 as i32
+                } else {
+                    RegisterARM::R11 as i32
+                }
+            }
+        };
+        let read = |address| -> Result<u64> {
+            let mut bytes = [0; 8];
+            cpu.mem_read(address, &mut bytes[..arch.pointer_size() as usize])?;
+            Ok(u64::from_le_bytes(bytes))
+        };
+        let mut fp = cpu.reg_read(register)?;
+        while fp != 0 {
+            let (Ok(previous), Ok(address)) =
+                (read(fp), read(fp.saturating_add(arch.pointer_size())))
+            else {
+                break;
+            };
+            if !push(address, true) || previous <= fp {
+                break;
+            }
+            fp = previous;
+        }
+    }
+    Ok(addresses)
 }
