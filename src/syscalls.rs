@@ -74,7 +74,7 @@ impl Emulator {
                     file.seek(SeekFrom::Start(a[3]))?;
                 }
                 let mut buffer = vec![0; a[2] as usize];
-                let random = matches!(file, GuestFile::Random);
+                let random = matches!(file, GuestFile::Random { .. });
                 let result = self.read_file(a[0], &mut buffer);
                 if let Some(position) = position {
                     self.files
@@ -92,16 +92,17 @@ impl Emulator {
                 }
             }
             79 | 80 => {
+                let stat =
+                    |file: &GuestFile| file.stat(self.architecture(), self.source.fixed_clock).ok();
                 let metadata = if nr == 80 {
-                    self.files.get(&a[0]).and_then(|f| f.metadata().ok())
+                    self.files.get(&a[0]).and_then(stat)
                 } else {
                     let path = self.cstring(a[1])?;
-                    self.open_guest(&path).ok().and_then(|f| f.metadata().ok())
+                    self.open_guest(&path).ok().as_ref().and_then(stat)
                 };
-                let Some(m) = metadata else {
+                let Some((bytes, size)) = metadata else {
                     return Ok(errno(if nr == 80 { 9 } else { 2 }));
                 };
-                let (bytes, size) = self.architecture().stat(&m);
                 self.write_bytes(if nr == 80 { a[1] } else { a[2] }, &bytes[..size])?;
                 0
             }
@@ -168,6 +169,18 @@ impl Emulator {
                     self.write_u64(a[1], 0)?;
                 }
                 0
+            }
+            278 => {
+                let mut buffer = vec![0; a[1] as usize];
+                let mut count = 0;
+                loop {
+                    count += self.source.random(&mut buffer[count..])?;
+                    if count == buffer.len() {
+                        break;
+                    }
+                }
+                self.write_bytes(a[0], &buffer)?;
+                count as u64
             }
             174..=177 => 10000,
             214 => {
@@ -294,7 +307,7 @@ impl Emulator {
 
     fn open_guest(&self, path: &str) -> std::io::Result<GuestFile> {
         if path == "/dev/urandom" || path == "/dev/random" {
-            return Ok(GuestFile::Random);
+            return Ok(GuestFile::Random { path: path.into() });
         }
         let relative = std::path::Path::new(path.trim_start_matches('/'));
         if relative
@@ -304,11 +317,14 @@ impl Emulator {
             return Err(std::io::ErrorKind::NotFound.into());
         }
         let root = self.rootfs.canonicalize()?;
-        let path = root.join(relative).canonicalize()?;
-        if !path.starts_with(root) {
+        let host_path = root.join(relative).canonicalize()?;
+        if !host_path.starts_with(root) {
             return Err(std::io::ErrorKind::NotFound.into());
         }
-        File::open(path).map(GuestFile::Host)
+        File::open(host_path).map(|file| GuestFile::Host {
+            file,
+            path: path.into(),
+        })
     }
     fn unmap(&mut self, start: u64, size: u64) -> Result<()> {
         let end = start + size;

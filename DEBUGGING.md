@@ -4,6 +4,31 @@ Debugging reference for the [unidroid library and command](README.md).
 
 ## Library
 
+### Deterministic runs
+
+Build fresh emulators with the same inputs and these settings to compare guest memory with `snapshot().diff(...)` and block addresses and counts with `coverage()`:
+
+```rust
+let emu = Emulator::builder()
+    .fixed_clock(1_700_000_000)
+    .random_seed(42)
+    .trace(Trace { coverage: vec!["libfoo.so".into()], ..Trace::default() })
+    .build()?;
+```
+
+The address layout, mmap/brk/host-malloc allocation, thread switching by executed code bytes and futex virtual time are already deterministic. `fixed_clock(unix_seconds: i64)` gives all guest clock reads one shared elapsed counter, initially zero. `clock_gettime` realtime and `gettimeofday` return the supplied Unix time plus elapsed time; monotonic starts at one second plus elapsed time. Each read then adds one microsecond. Futex virtual time stays separate.
+
+With `fixed_clock`, `stat` and `fstat` report all three timestamps as the supplied Unix seconds with zero nanoseconds, device/uid/gid as zero, and blocks as size rounded up to 512-byte units. The inode is the 64-bit FNV-1a hash of the original guest path, including its spelling; ARM32's additional 32-bit inode field gets the low 32 bits. An open file retains that path for `fstat`. Size, mode, nlink, rdev and blksize keep their usual values.
+
+`random_seed(seed: u64)` supplies a SplitMix64 byte stream to `getrandom`, `/dev/urandom` and `/dev/random`. Successive outputs are consumed as little-endian bytes across all reads, so splitting a read does not change the stream on any platform. The options are independent; omitted options keep their host behavior. The CLI equivalents are `--fixed-clock SECONDS` and `--random-seed N`. Replay always serves recorded clock/random values before consulting either setting.
+
+Other inputs can still make two runs differ:
+
+- Answers and memory changes from your `JniHandler`, policy or serve driver, including debugger responses. Policy `values` positions carry across calls and new handler wrappers; parse or load a fresh policy for a fresh run.
+- Rootfs and library file contents, paths and metadata that remains unchanged: permissions (`mode`), hard-link counts (`nlink`) and device identifiers (`rdev`) can differ between hosts.
+- Thread interleaving and coverage counts depend on translation-block boundaries. Breakpoints, stepping, watchpoints, code traces and coverage itself can split blocks. Compare with the same debugger and trace settings, emulator/Unicorn version and translation-cache size.
+- Prior calls and setup choices, such as process name, properties, aliases and load order. Clock ticks, random bytes, allocations and guest state carry across calls; use fresh emulators with the same setup and call sequence.
+
 ### Crash reports and locations
 
 Guest failures carry a `Crash`. Its `Display` is the same error message; `report()` adds the thread, backtrace, registers, stack and recent JNI calls:
@@ -224,7 +249,7 @@ target/release/unidroid serve --rootfs rootfs --record session.jsonl
 target/release/unidroid replay session.jsonl --trace-syscalls --trace-code libsignutil.so
 ```
 
-The recording starts with `{"record":1,"version":"<crate version>","options":{...}}`. `options` holds `rootfs`, `process_name`, `prop`, `alias`, `superclass` and `translation_cache_mb`; the three repeatable settings are arrays of key/value pairs. Defaults are recorded too. Trace and log options are not in the header. Subsequent entries stay in consumption order:
+The recording starts with `{"record":1,"version":"<crate version>","options":{...}}`. `options` holds `rootfs`, `process_name`, `prop`, `alias`, `superclass`, `fixed_clock`, `random_seed` and `translation_cache_mb`; the three repeatable settings are arrays of key/value pairs. Defaults are recorded too. Trace and log options are not in the header. Subsequent entries stay in consumption order:
 
 With `--policy`, the header also holds `"policy":{"rules":[...]}`: the parsed rules, with their original `values` lists. The policy path is not stored. Replay uses these embedded rules from the first sequence value, even if the original file changed or was deleted. A recording made without a policy has no `policy` entry. See [README.md](README.md) for the policy format and API.
 
@@ -234,6 +259,8 @@ With `--policy`, the header also holds `"policy":{"rules":[...]}`: the parsed ru
 | `{"out":<JSON value>}` | a response or question |
 | `{"time":{"clock":"realtime","sec":123,"nsec":456}}` | a clock read; `clock` can also be `monotonic` |
 | `{"random":"<base64>"}` | bytes read from `/dev/urandom` or `/dev/random` |
+
+`getrandom` also uses `random` entries and serves them from the recording during replay. Fixed clock and seeded random values are recorded in the same consumption order as host values. Replay rebuilds `fixed_clock` from the header, so fixed file metadata matches too.
 
 `replay FILE` rebuilds the recorded setup, feeds the inputs through the serve loop, and compares every response and question as JSON. Guest `clock_gettime`, `gettimeofday` and random-device reads use the recording instead of the host. Keep the same libraries and rootfs; relative rootfs and `load` paths resolve against the current directory, so run replay from the directory the service ran in.
 

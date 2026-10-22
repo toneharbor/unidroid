@@ -82,6 +82,8 @@ let f = emu.find_symbol(m, "some_c_function")?;
 let ret = emu.call_function(f, &[1, 2])?;
 ```
 
+For repeatable guest memory and block coverage, the builder supports `.fixed_clock(1_700_000_000)` and `.random_seed(42)`. See [deterministic runs](DEBUGGING.md#deterministic-runs) for their behavior and the inputs to keep the same.
+
 When the `.so` calls Java you haven't answered, it stops with a message like this:
 
 ```
@@ -220,6 +222,8 @@ Options, the same for `inspect` and `serve`:
 |---|---|
 | `--rootfs DIR` | Android system libraries (default `rootfs`) |
 | `--process-name NAME` | process name the library sees |
+| `--fixed-clock SECONDS` | start guest realtime at these Unix seconds; each clock read advances time by one microsecond; also fix file metadata |
+| `--random-seed N` | seed the shared guest random byte stream with SplitMix64 |
 | `--prop KEY=VALUE` | a system property, repeatable |
 | `--alias NAME=TARGET` | same as `symbol_alias`, repeatable |
 | `--superclass CLASS=SUPERCLASS` | same as `superclass`, repeatable |

@@ -101,29 +101,32 @@ fn arm32_stat64_writes_both_inode_fields_and_32_bit_times() -> Result<()> {
 }
 
 #[test]
-fn arm32_clock_and_timeval_are_two_32_bit_words() -> Result<()> {
-    let mut emu = Emulator::builder().build()?;
-    emu.setup_cpu(Architecture::Arm32)?;
-    let out = emu.malloc(24)?;
-    let before = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
-    for (nr, args, fraction_limit) in [
-        (263, [0, out, 0, 0, 0, 0], 1_000_000_000),
-        (78, [out, out + 16, 0, 0, 0, 0], 1_000_000),
+fn clock_and_timeval_use_two_pointer_sized_words() -> Result<()> {
+    for (arch, width, clock, timeval) in [
+        (Architecture::Arm64, 8, 113, 169),
+        (Architecture::Arm32, 4, 263, 78),
     ] {
-        emu.write_bytes(out, &[0xa5; 24])?;
-        assert_eq!(emu.syscall(nr, args, 0)?, 0);
-        let seconds = u32::from_le_bytes(emu.read_bytes(out, 4)?.try_into().unwrap()) as u64;
-        let fraction = u32::from_le_bytes(emu.read_bytes(out + 4, 4)?.try_into().unwrap());
-        let after = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs();
-        assert!((before..=after).contains(&seconds));
-        assert!(fraction < fraction_limit);
-        assert_eq!(emu.read_bytes(out + 8, 8)?, [0xa5; 8]);
-        if nr == 78 {
-            assert_eq!(emu.read_bytes(out + 16, 8)?, [0; 8]);
+        let mut emu = Emulator::builder().fixed_clock(1_700_000_000).build()?;
+        emu.setup_cpu(arch)?;
+        let out = emu.malloc(32)?;
+        for (nr, args, fraction) in [
+            (clock, [0, out, 0, 0, 0, 0], 0u64),
+            (timeval, [out, out + 24, 0, 0, 0, 0], 1),
+        ] {
+            emu.write_bytes(out, &[0xa5; 32])?;
+            assert_eq!(emu.syscall(nr, args, 0)?, 0);
+            assert_eq!(
+                emu.read_bytes(out, width)?,
+                1_700_000_000u64.to_le_bytes()[..width]
+            );
+            assert_eq!(
+                emu.read_bytes(out + width as u64, width)?,
+                fraction.to_le_bytes()[..width]
+            );
+            assert_eq!(emu.read_bytes(out + 2 * width as u64, 8)?, [0xa5; 8]);
+            if nr == timeval {
+                assert_eq!(emu.read_bytes(out + 24, 8)?, [0; 8]);
+            }
         }
     }
     Ok(())

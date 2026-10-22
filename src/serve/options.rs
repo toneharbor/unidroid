@@ -25,6 +25,12 @@ pub struct Options {
     /// Declare that CLASS extends SUPERCLASS.
     #[arg(long, value_name = "CLASS=SUPERCLASS", value_parser = pair)]
     pub superclass: Vec<(String, String)>,
+    /// Start guest clocks at these Unix seconds, advancing one microsecond per read.
+    #[arg(long, value_name = "SECONDS", allow_negative_numbers = true)]
+    pub fixed_clock: Option<i64>,
+    /// Seed the guest random byte stream with SplitMix64.
+    #[arg(long, value_name = "N")]
+    pub random_seed: Option<u64>,
     /// Translation cache size in MB. Large libraries run faster with a bigger cache.
     #[arg(long, value_name = "MB", default_value = "8", value_parser = clap::value_parser!(u32).range(1..4096))]
     pub translation_cache_mb: u32,
@@ -47,6 +53,12 @@ impl Options {
             .rootfs(&self.rootfs)
             .process_name(&self.process_name)
             .translation_cache_size(self.translation_cache_mb * 1024 * 1024);
+        if let Some(seconds) = self.fixed_clock {
+            builder = builder.fixed_clock(seconds);
+        }
+        if let Some(seed) = self.random_seed {
+            builder = builder.random_seed(seed);
+        }
         for (key, value) in &self.prop {
             builder = builder.system_property(key, value);
         }

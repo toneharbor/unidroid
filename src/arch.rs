@@ -127,41 +127,68 @@ impl Architecture {
             _ => None,
         }
     }
-    pub fn stat(self, m: &std::fs::Metadata) -> ([u8; 128], usize) {
+    pub fn stat(
+        self,
+        m: &std::fs::Metadata,
+        path: &str,
+        fixed_clock: Option<i64>,
+    ) -> ([u8; 128], usize) {
         use std::os::unix::fs::MetadataExt;
+        let (dev, ino, uid, gid, blocks, times) = if let Some(seconds) = fixed_clock {
+            let ino = path
+                .as_bytes()
+                .iter()
+                .fold(0xcbf29ce484222325u64, |hash, byte| {
+                    (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+                });
+            (
+                0,
+                ino,
+                0,
+                0,
+                m.size().div_ceil(512),
+                [seconds, 0, seconds, 0, seconds, 0],
+            )
+        } else {
+            (
+                m.dev(),
+                m.ino(),
+                m.uid(),
+                m.gid(),
+                m.blocks(),
+                [
+                    m.atime(),
+                    m.atime_nsec(),
+                    m.mtime(),
+                    m.mtime_nsec(),
+                    m.ctime(),
+                    m.ctime_nsec(),
+                ],
+            )
+        };
         let mut bytes = [0; 128];
         let (size, inode, time_width) = match self {
             Self::Arm32 => (104, 96, 4),
             Self::Arm64 => (128, 8, 8),
         };
         for (offset, width, value) in [
-            (0, 8, m.dev()),
-            (inode, 8, m.ino()),
+            (0, 8, dev),
+            (inode, 8, ino),
             (32, 8, m.rdev()),
             (48, 8, m.size()),
-            (64, 8, m.blocks()),
+            (64, 8, blocks),
             (16, 4, m.mode() as u64),
             (20, 4, m.nlink()),
-            (24, 4, m.uid() as u64),
-            (28, 4, m.gid() as u64),
+            (24, 4, uid as u64),
+            (28, 4, gid as u64),
             (56, 4, 4096),
         ] {
             bytes[offset..offset + width].copy_from_slice(&value.to_le_bytes()[..width]);
         }
         if self == Self::Arm32 {
-            bytes[12..16].copy_from_slice(&(m.ino() as u32).to_le_bytes());
+            bytes[12..16].copy_from_slice(&(ino as u32).to_le_bytes());
         }
-        for (i, value) in [
-            m.atime(),
-            m.atime_nsec(),
-            m.mtime(),
-            m.mtime_nsec(),
-            m.ctime(),
-            m.ctime_nsec(),
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        for (i, value) in times.into_iter().enumerate() {
             let offset = 72 + i * time_width;
             bytes[offset..offset + time_width].copy_from_slice(&value.to_le_bytes()[..time_width]);
         }
@@ -213,6 +240,7 @@ impl Architecture {
             }
             125 => 226,
             220 => 233,
+            384 => 278,
             _ => return None,
         })
     }
