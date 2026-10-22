@@ -181,6 +181,8 @@ Now `GetSuperclass` answers, and `call_static_jni_method(.., "com/example/Sign",
 
 ## The `unidroid` command
 
+Agents running or debugging a `.so`: read [skills/unidroid/SKILL.md](skills/unidroid/SKILL.md) for the work order and debugging tools. Read it in place, or copy `skills/unidroid/` into your agent's skills directory to install it.
+
 For other languages (TypeScript, Python, Go, ...) there's a command-line program. Download it from [Releases](https://github.com/zhoupb01/unidroid/releases): there are builds for Linux (x86_64, arm64) and macOS (Apple Silicon). Each download has `rootfs` inside. Or build it yourself:
 
 ```bash
