@@ -158,6 +158,17 @@ impl<R: BufRead, W: Write> Session<R, W> {
                     "location": constant.location,
                 }))
                 .collect::<Vec<_>>()),
+            Command::Coverage { reset } => {
+                let blocks = emu.coverage();
+                if reset {
+                    emu.reset_coverage();
+                }
+                json!(blocks.into_iter().map(|block| json!({
+                    "address": block.address.to_string(),
+                    "location": block.location,
+                    "count": block.count,
+                })).collect::<Vec<_>>())
+            }
             Command::Snapshot { path } => {
                 emu.snapshot()?.save(path)?;
                 Value::Null
@@ -171,6 +182,7 @@ impl<R: BufRead, W: Write> Session<R, W> {
                 imports,
                 code,
                 calls,
+                coverage,
             } => {
                 emu.set_trace(crate::Trace {
                     jni,
@@ -178,6 +190,7 @@ impl<R: BufRead, W: Write> Session<R, W> {
                     imports,
                     code,
                     calls,
+                    coverage,
                 })?;
                 Value::Null
             }

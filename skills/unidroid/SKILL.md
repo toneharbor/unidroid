@@ -71,6 +71,7 @@ Pick the row that answers the current question:
 | Which Java behavior is missing or wrong? | JNI trace: `--verbose` or serve `trace` with `jni` enabled | Method, signature, arguments and caller. Match these against the driver's answer. |
 | What does a routine compute? | `--trace-code` over that routine's range | Instruction bytes, disassembly, registers read before and written after, and memory reads and writes with addresses, sizes and values. Find the first value that diverges. |
 | Which functions does this routine call, in what order? | `--trace-calls` over the module or range | Call targets, arguments and call sites. Then narrow `--trace-code` to the function that matters. |
+| Which code paths does this input take? | Serve `trace` with `coverage` over the module or range, run the call, then `coverage` with `reset: true`; repeat with another input | Compare the address sets and hit counts, keeping the same debugger and trace settings. |
 | What is a value at this point? | Breakpoint, then `registers` and `read` | Argument registers and the bytes at their pointers. Decode `read`'s base64 before interpreting memory. |
 | Which memory does a call write? | Serve `snapshot` before and after the call, then `unidroid diff before.snap after.snap` | Changed bytes with locations, newly mapped ranges, and changed registers. |
 | Where is this value in memory? | Serve `search` | Matching addresses and locations. A full list of 1000 may hide more matches; narrow the pattern. |

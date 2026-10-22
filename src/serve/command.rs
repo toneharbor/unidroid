@@ -36,6 +36,10 @@ pub(super) enum Command {
         base64: String,
     },
     Crypto,
+    Coverage {
+        #[serde(default)]
+        reset: bool,
+    },
     Snapshot {
         path: String,
     },
@@ -57,6 +61,8 @@ pub(super) enum Command {
         code: Vec<String>,
         #[serde(default)]
         calls: Vec<String>,
+        #[serde(default)]
+        coverage: Vec<String>,
     },
     Load {
         path: String,

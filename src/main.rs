@@ -84,6 +84,7 @@ impl Diagnostics {
             imports: self.trace_imports,
             code: self.trace_code,
             calls: self.trace_calls,
+            coverage: Vec::new(),
         });
         if matches!(self.log_format, LogFormat::Json) {
             builder = builder.on_event(|event| {

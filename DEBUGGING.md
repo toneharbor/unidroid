@@ -90,9 +90,11 @@ Maps and snapshots install no hooks and store no copies until called. A snapshot
 
 ### Traces and events
 
-`Trace` has three booleans (`jni`, `syscalls` and `imports`, default `false`) and two specification lists (`code: Vec<String>` and `calls: Vec<String>`, default empty). Set them with `.trace(Trace { .. })` on the builder, or `emu.set_trace(Trace { .. })?` at runtime. `emu.trace()` reads the settings. Each change replaces all settings. With traces off, no trace hook is installed.
+`Trace` has three booleans (`jni`, `syscalls` and `imports`, default `false`) and three specification lists (`code: Vec<String>`, `calls: Vec<String>` and `coverage: Vec<String>`, default empty). Set them with `.trace(Trace { .. })` on the builder, or `emu.set_trace(Trace { .. })?` at runtime. `emu.trace()` reads the settings. Each change replaces all settings. With traces off, no trace hook is installed.
 
-Each `code` or `calls` entry is a module file name, such as `libfoo.so`, or a module with a hex offset range, such as `libfoo.so+0x1000-0x2000` (end exclusive). It matches libraries already loaded and libraries loaded later, by file name. Bad specifications fail `build` or `set_trace`. For example, `Trace { code: vec!["libfoo.so+0x1000-0x2000".into()], ..Trace::default() }` traces that part of the library.
+Each `code`, `calls` or `coverage` entry is a module file name, such as `libfoo.so`, or a module with a hex offset range, such as `libfoo.so+0x1000-0x2000` (end exclusive). It matches libraries already loaded and libraries loaded later, by file name. Bad specifications fail `build` or `set_trace`. For example, `Trace { code: vec!["libfoo.so+0x1000-0x2000".into()], ..Trace::default() }` traces that part of the library.
+
+Block coverage uses `Trace { coverage: vec!["libfoo.so".into()], ..Trace::default() }` to count executed Unicorn translation blocks whose start lies in the selected ranges, across guest threads and nested calls. `emu.coverage() -> Vec<BlockCount>` returns entries sorted by `address: u64` (Thumb bit cleared), with `count: u64` and `location: String` computed by `symbolize` when read. Counts survive trace changes and turning coverage off; only `emu.reset_coverage()` clears them. Coverage allocates no state or hooks until a range is selected; turning it off removes its hooks and flushes translated code. A translation block is close to a basic block, but breakpoints, stepping and code traces can split it. Compare two inputs' address sets and hit counts with the same debugger and trace settings, resetting between runs.
 
 Instruction events show the bytes in memory, Capstone disassembly, registers read before the instruction, registers written after it, and memory reads and writes in access order. Each memory access gives its address, byte count and value at access time. ARM32 follows the current ARM or Thumb mode, including Thumb conditional blocks. The text looks like this:
 
@@ -149,7 +151,7 @@ The example abbreviates the registers, stack and JNI history. If a bad JNI answe
 
 ### Traces
 
-Change traces during a session with `{"cmd":"trace","jni":true,"syscalls":true,"imports":false,"code":["libfoo.so+0x1000-0x2000"],"calls":["libfoo.so"]}`. Omitted booleans become `false`; omitted `code` and `calls` become empty. `{"cmd":"trace"}` turns all traces off. Log format is chosen when starting the CLI; JSON logs go to stderr and protocol replies go to stdout.
+Change traces during a session with `{"cmd":"trace","jni":true,"syscalls":true,"imports":false,"code":["libfoo.so+0x1000-0x2000"],"calls":["libfoo.so"],"coverage":["libfoo.so"]}`. Omitted booleans become `false`; omitted `code`, `calls` and `coverage` become empty. `{"cmd":"trace"}` turns all traces off. Log format is chosen when starting the CLI; JSON logs go to stderr and protocol replies go to stdout.
 
 ### Stops and questions
 
@@ -194,7 +196,8 @@ A resume command with no stop open errors with `no breakpoint stop is waiting`. 
 
 | command | fields | result |
 |---|---|---|
-| `trace` | `jni`, `syscalls`, `imports` (booleans, omitted means false), `code`, `calls` (lists of specifications, omitted means empty) | `null` |
+| `trace` | `jni`, `syscalls`, `imports` (booleans, omitted means false), `code`, `calls`, `coverage` (lists of specifications, omitted means empty) | `null` |
+| `coverage` | `reset` (boolean, omitted means false) | list of `{address, location, count}` in address order; address is a decimal string, count is a number; `reset: true` returns the collected counts and then clears them |
 | `break` / `unbreak` | `at` (text for `resolve`) | address with Thumb bit cleared / `null` |
 | `watch` | `at` (text for `resolve`), `size` (number), `kind` (`read`, `write` or `access`), `log` (boolean, omitted or false means stop) | watched address (decimal string) |
 | `unwatch` | `at` (text for `resolve`) | `null` |

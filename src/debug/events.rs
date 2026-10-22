@@ -9,6 +9,7 @@ pub struct Trace {
     pub imports: bool,
     pub code: Vec<String>,
     pub calls: Vec<String>,
+    pub coverage: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -240,11 +241,12 @@ impl Emulator {
         &self.trace
     }
     pub fn set_trace(&mut self, trace: Trace) -> Result<()> {
-        for entry in &trace.calls {
+        for entry in trace.calls.iter().chain(&trace.coverage) {
             super::code::Spec::parse(entry)?;
         }
         self.trace_code(&trace.code)?;
         self.trace_calls(&trace.calls)?;
+        self.trace_coverage(&trace.coverage)?;
         self.trace_imports(trace.imports)?;
         self.trace = trace;
         Ok(())

@@ -43,6 +43,9 @@ impl Emulator {
         if !self.trace.calls.is_empty() {
             self.trace_calls(&self.trace.calls.clone())?;
         }
+        if !self.trace.coverage.is_empty() {
+            self.trace_coverage(&self.trace.coverage.clone())?;
+        }
         self.initialize(module)?;
         Ok(module)
     }

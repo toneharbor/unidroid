@@ -15,6 +15,7 @@ mod threads;
 pub use debug::{
     Crash, Frame,
     control::{Resume, Stop, StopReason},
+    coverage::BlockCount,
     crypto::CryptoConstant,
     events::{Event, MemoryAccess, Trace},
     maps::Mapping,
@@ -176,6 +177,7 @@ pub struct Emulator {
     imports: debug::imports::Imports,
     code: debug::code::Code,
     calls: Option<debug::calls::Calls>,
+    coverage: debug::coverage::Coverage,
     breakpoints: HashMap<u64, unicorn_engine::UcHookId>,
     watchpoints: debug::watch::Watchpoints,
 }
@@ -191,7 +193,13 @@ impl Emulator {
         }
     }
     fn build(builder: EmulatorBuilder) -> Result<Self> {
-        for spec in builder.trace.code.iter().chain(&builder.trace.calls) {
+        for spec in builder
+            .trace
+            .code
+            .iter()
+            .chain(&builder.trace.calls)
+            .chain(&builder.trace.coverage)
+        {
             debug::code::Spec::parse(spec)?;
         }
         Ok(Self {
@@ -229,6 +237,7 @@ impl Emulator {
             imports: debug::imports::Imports::default(),
             code: debug::code::Code::default(),
             calls: None,
+            coverage: debug::coverage::Coverage::default(),
             breakpoints: HashMap::new(),
             watchpoints: debug::watch::Watchpoints::default(),
         })
