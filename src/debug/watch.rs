@@ -19,6 +19,12 @@ pub enum Watch {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WatchAction {
+    Stop,
+    Log,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WatchHit {
     pub pc: u64,
     pub address: u64,
@@ -34,7 +40,13 @@ pub(crate) struct Watchpoints {
 }
 
 impl Emulator {
-    pub fn add_watchpoint(&mut self, address: u64, size: u64, watch: Watch) -> Result<()> {
+    pub fn add_watchpoint(
+        &mut self,
+        address: u64,
+        size: u64,
+        watch: Watch,
+        action: WatchAction,
+    ) -> Result<()> {
         if size == 0 {
             return Err("empty watchpoint".into());
         }
@@ -57,13 +69,16 @@ impl Emulator {
                 {
                     let pc = cpu.reg_read(pc).expect("program counter") & !1;
                     let data = cpu.get_data_mut();
-                    data.watch = Some(WatchHit {
-                        pc,
-                        address: at,
-                        size,
-                        write: kind == MemType::WRITE,
-                        value: value as u64,
-                    });
+                    data.watch = Some((
+                        WatchHit {
+                            pc,
+                            address: at,
+                            size,
+                            write: kind == MemType::WRITE,
+                            value: value as u64,
+                        },
+                        action,
+                    ));
                 }
                 true
             },
@@ -83,6 +98,25 @@ impl Emulator {
         }
         // The affected instructions can be anywhere, not just in the data range.
         self.cpu_mut()?.ctl_flush_tb()?;
+        Ok(())
+    }
+
+    pub(crate) fn log_watch(&self, hit: WatchHit) -> Result<()> {
+        self.events.borrow_mut().emit(crate::Event::Watch {
+            at: self.symbolize(hit.pc),
+            pc: hit.pc,
+            address: hit.address,
+            size: hit.size,
+            write: hit.write,
+            value: hit.value,
+            thread: self.threads.tid(),
+            callers: self
+                .backtrace()?
+                .into_iter()
+                .skip(1)
+                .map(|frame| self.symbolize(frame.address))
+                .collect(),
+        });
         Ok(())
     }
 

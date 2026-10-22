@@ -76,15 +76,21 @@ impl RunControl {
         self.clear_finish(emu)?;
         self.skip = (reason != StopReason::Watchpoint).then_some((thread, address));
         let watch = emu.cpu_mut()?.get_data_mut().watch.take();
-        match handler.stopped(
-            emu,
-            &Stop {
-                reason,
-                address,
-                thread,
-                watch,
-            },
-        ) {
+        let resume = if let Some((hit, crate::WatchAction::Log)) = watch {
+            emu.log_watch(hit)?;
+            Resume::Continue
+        } else {
+            handler.stopped(
+                emu,
+                &Stop {
+                    reason,
+                    address,
+                    thread,
+                    watch: watch.map(|(hit, _)| hit),
+                },
+            )
+        };
+        match resume {
             Resume::Continue => {}
             Resume::Step => self.step = Some(thread),
             Resume::Finish => {

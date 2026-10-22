@@ -3,6 +3,14 @@ use crate::jni::value::decode;
 use crate::jni::{Handle, JniCall, JniHandler, JniValue, MEMBER_ID_BASE, Member, Object};
 use crate::{Emulator, Result};
 
+pub(super) fn member_id(index: usize, b: u64, c: u64) -> Option<u64> {
+    match index {
+        64..=93 => Some(c),
+        9 | 12 | 28..=30 | 34..=63 | 95..=112 | 114..=143 | 145..=162 => Some(b),
+        _ => None,
+    }
+}
+
 impl Emulator {
     pub(super) fn jni_members_function(
         &mut self,
@@ -40,8 +48,7 @@ impl Emulator {
             28..=30 | 34..=93 | 95..=112 | 114..=143 | 145..=162 => {
                 let constructor = (28..=30).contains(&index);
                 let nonvirtual = (64..=93).contains(&index);
-                let member_id = if nonvirtual { c } else { b };
-                let member = self.require_member(&function, member_id)?;
+                let member = self.require_member(&function, member_id(index, b, c).unwrap())?;
                 let (operation, kind, variant) = match index {
                     28..=30 => (6, 0, index - 28),
                     34..=63 => (0, (index - 34) / 3, (index - 34) % 3),

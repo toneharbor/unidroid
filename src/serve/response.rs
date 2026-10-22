@@ -46,6 +46,7 @@ pub(super) struct CrashResponse {
     registers: Registers,
     backtrace: Value,
     stack: Vec<[String; 2]>,
+    jni: Vec<String>,
 }
 
 pub(super) fn crash_value(crash: &Crash) -> CrashResponse {
@@ -59,6 +60,7 @@ pub(super) fn crash_value(crash: &Crash) -> CrashResponse {
             .iter()
             .map(|(address, value)| [address.to_string(), value.to_string()])
             .collect(),
+        jni: crash.jni.clone(),
     }
 }
 

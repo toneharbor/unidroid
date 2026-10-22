@@ -77,6 +77,19 @@ pub enum Event {
         written: Vec<(String, u128)>,
         memory: Vec<MemoryAccess>,
     },
+    Watch {
+        at: String,
+        #[serde(serialize_with = "hex_address")]
+        pc: u64,
+        #[serde(serialize_with = "hex_address")]
+        address: u64,
+        size: usize,
+        write: bool,
+        #[serde(serialize_with = "hex_address")]
+        value: u64,
+        thread: u32,
+        callers: Vec<String>,
+    },
     Warning {
         message: String,
     },
@@ -181,6 +194,26 @@ impl fmt::Display for Event {
                         access.size,
                         access.value
                     )?;
+                }
+                Ok(())
+            }
+            Self::Watch {
+                at,
+                address,
+                size,
+                write,
+                value,
+                thread,
+                callers,
+                ..
+            } => {
+                write!(
+                    f,
+                    "watch {} 0x{address:x}:{size}=0x{value:x} at {at} thread {thread}",
+                    if *write { "write" } else { "read" }
+                )?;
+                if !callers.is_empty() {
+                    write!(f, " from {}", callers.join(" <- "))?;
                 }
                 Ok(())
             }

@@ -117,9 +117,10 @@ impl<R: BufRead, W: Write> Session<R, W> {
                 emu.remove_breakpoint(emu.resolve(&at)?)?;
                 Value::Null
             }
-            Command::Watch { at, size, kind } => {
+            Command::Watch { at, size, kind, log } => {
                 let address = emu.resolve(&at)?;
-                emu.add_watchpoint(address, size, kind)?;
+                let action = if log { crate::WatchAction::Log } else { crate::WatchAction::Stop };
+                emu.add_watchpoint(address, size, kind, action)?;
                 json!(address.to_string())
             }
             Command::Unwatch { at } => {

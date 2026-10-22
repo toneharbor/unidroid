@@ -11,7 +11,7 @@ fn a_thumb_it_branch_reports_the_watch_hit_at_the_next_stop() -> Result<()> {
         };
         let mut emu = emulator(arm64, &words)?;
         let target = emu.malloc(4)?;
-        emu.add_watchpoint(target, 4, Watch::Write)?;
+        emu.add_watchpoint(target, 4, Watch::Write, unidroid::WatchAction::Stop)?;
         for destination in [0x20000, 0x30000000] {
             let mut stops = Vec::new();
             let mut handler = Handler(|emu: &mut Emulator, stop: &Stop| {
@@ -77,7 +77,7 @@ fn nested_watch_stops_keep_their_own_hits_and_restore_outer_registers() -> Resul
         };
         let mut emu = emulator(arm64, &words)?;
         let target = emu.malloc(4)?;
-        emu.add_watchpoint(target, 4, Watch::Write)?;
+        emu.add_watchpoint(target, 4, Watch::Write, unidroid::WatchAction::Stop)?;
         let mut handler = Nested {
             target,
             inner: false,
@@ -105,7 +105,7 @@ fn watchpoints_in_guest_threads_can_finish_in_the_same_thread() -> Result<()> {
         let join = emu.resolve("pthread_join")?;
         let out = emu.malloc(16)?;
         let target = emu.malloc(4)?;
-        emu.add_watchpoint(target, 4, Watch::Write)?;
+        emu.add_watchpoint(target, 4, Watch::Write, unidroid::WatchAction::Stop)?;
         let mut stops = Vec::new();
         let mut handler = Handler(|emu: &mut Emulator, stop: &Stop| {
             stops.push(*stop);
@@ -155,7 +155,7 @@ fn step_finish_return_and_abort_work_from_a_watch_stop() -> Result<()> {
             };
             let mut emu = emulator(arm64, &words)?;
             let target = emu.malloc(4)?;
-            emu.add_watchpoint(target, 4, Watch::Write)?;
+            emu.add_watchpoint(target, 4, Watch::Write, unidroid::WatchAction::Stop)?;
             let mut stops = Vec::new();
             let mut handler = Handler(|_: &mut Emulator, stop: &Stop| {
                 stops.push(*stop);
@@ -204,7 +204,7 @@ fn host_function_writes_do_not_trigger_watchpoints() -> Result<()> {
         let property = emu.resolve("__system_property_get")?;
         let key = emu.new_cstring("ro.build.version.sdk")?;
         let out = emu.malloc(64)?;
-        emu.add_watchpoint(out, 64, Watch::Access)?;
+        emu.add_watchpoint(out, 64, Watch::Access, unidroid::WatchAction::Stop)?;
         let mut handler =
             Handler(|_: &mut Emulator, _: &Stop| panic!("host memory access stopped"));
         emu.write_bytes(out, &[0; 64])?;

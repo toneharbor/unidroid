@@ -3,6 +3,8 @@ use unidroid::{Watch, WatchHit};
 
 #[path = "watch/lifecycle.rs"]
 mod lifecycle;
+#[path = "watch/log.rs"]
+mod log;
 
 #[test]
 fn faulting_watched_stores_report_a_crash_without_a_completed_access_stop() -> Result<()> {
@@ -17,7 +19,7 @@ fn faulting_watched_stores_report_a_crash_without_a_completed_access_stop() -> R
             (0x30000000, "UC_ERR_WRITE_UNMAPPED"),
             (0x20800, "UC_ERR_WRITE_PROT"),
         ] {
-            emu.add_watchpoint(target, 4, Watch::Write)?;
+            emu.add_watchpoint(target, 4, Watch::Write, unidroid::WatchAction::Stop)?;
             let mut handler = Handler(|_: &mut Emulator, _: &Stop| {
                 panic!("faulting instruction has not completed")
             });
@@ -48,7 +50,7 @@ fn vector_accesses_use_the_full_eight_byte_overlap_extension() -> Result<()> {
             let value = 0xfedcba9876543210u64;
             emu.set_register("d0", if load { 0 } else { value })?;
             emu.write_bytes(target, &value.to_le_bytes())?;
-            emu.add_watchpoint(target + 7, 1, Watch::Access)?;
+            emu.add_watchpoint(target + 7, 1, Watch::Access, unidroid::WatchAction::Stop)?;
             let mut hits = 0;
             let mut handler = Handler(|emu: &mut Emulator, stop: &Stop| {
                 hits += 1;
@@ -94,7 +96,7 @@ fn watch_kinds_filter_loads_and_stores_and_capture_values_at_access() -> Result<
             let mut emu = emulator(arm64, &words)?;
             let target = emu.malloc(8)?;
             for watch in [Watch::Read, Watch::Write, Watch::Access] {
-                emu.add_watchpoint(target, 4, watch)?;
+                emu.add_watchpoint(target, 4, watch, unidroid::WatchAction::Stop)?;
                 let value = 0xfedcba98u64;
                 emu.write_bytes(target, &(value as u32).to_le_bytes())?;
                 let mut stops = Vec::new();
@@ -151,12 +153,12 @@ fn overlapping_accesses_stop_but_neighbors_and_removed_ranges_do_not() -> Result
         let allocation = emu.malloc(64)?;
         let start = allocation + 16;
         assert_eq!(
-            emu.add_watchpoint(start, 0, Watch::Write)
+            emu.add_watchpoint(start, 0, Watch::Write, unidroid::WatchAction::Stop)
                 .unwrap_err()
                 .to_string(),
             "empty watchpoint"
         );
-        emu.add_watchpoint(start, 3, Watch::Write)?;
+        emu.add_watchpoint(start, 3, Watch::Write, unidroid::WatchAction::Stop)?;
         for (at, hits) in [(start - 4, 0), (start - 1, 1), (start + 3, 0)] {
             let mut count = 0;
             let mut handler = Handler(|_: &mut Emulator, stop: &Stop| {
@@ -168,11 +170,11 @@ fn overlapping_accesses_stop_but_neighbors_and_removed_ranges_do_not() -> Result
             assert_eq!(count, hits);
         }
         // Replacing the same start changes both kind and extent, and leaves one range.
-        emu.add_watchpoint(start, 8, Watch::Read)?;
+        emu.add_watchpoint(start, 8, Watch::Read, unidroid::WatchAction::Stop)?;
         let mut handler =
             Handler(|_: &mut Emulator, _: &Stop| panic!("read watch must ignore stores"));
         emu.call_function_with(&mut handler, CODE, &[start + 4, 42])?;
-        emu.add_watchpoint(start, 8, Watch::Write)?;
+        emu.add_watchpoint(start, 8, Watch::Write, unidroid::WatchAction::Stop)?;
         let mut hits = 0;
         let mut handler = Handler(|_: &mut Emulator, stop: &Stop| {
             hits += 1;
@@ -203,7 +205,7 @@ fn thumb_it_watch_keeps_the_store_pc_and_stops_after_the_block() -> Result<()> {
         };
         let mut emu = emulator(arm64, &words)?;
         let target = emu.malloc(4)?;
-        emu.add_watchpoint(target, 4, Watch::Write)?;
+        emu.add_watchpoint(target, 4, Watch::Write, unidroid::WatchAction::Stop)?;
         for condition in [0, 1] {
             let mut stops = Vec::new();
             let mut handler = Handler(|emu: &mut Emulator, stop: &Stop| {
@@ -240,8 +242,8 @@ fn paired_stores_report_only_the_first_access_after_both_writes_land() -> Result
         };
         let mut emu = emulator(arm64, &words)?;
         let target = emu.malloc(16)?;
-        emu.add_watchpoint(target, 16, Watch::Access)?;
-        emu.add_watchpoint(target + 1, 15, Watch::Write)?;
+        emu.add_watchpoint(target, 16, Watch::Access, unidroid::WatchAction::Stop)?;
+        emu.add_watchpoint(target + 1, 15, Watch::Write, unidroid::WatchAction::Stop)?;
         let width = if arm64 { 8 } else { 4 };
         let mut hits = 0;
         let mut handler = Handler(|emu: &mut Emulator, stop: &Stop| {
@@ -287,7 +289,7 @@ fn watched_store_finishes_before_the_stop_and_continue_keeps_the_next_breakpoint
         assert_eq!(emu.call_function(CODE, &[target, 1])?, 7);
         // Install the breakpoint first so hook order cannot hide the watch hit.
         emu.add_breakpoint(CODE + 4)?;
-        emu.add_watchpoint(target, 4, Watch::Write)?;
+        emu.add_watchpoint(target, 4, Watch::Write, unidroid::WatchAction::Stop)?;
         emu.write_bytes(target, &[0; 8])?;
         let mut stops = Vec::new();
         let mut handler = Handler(|emu: &mut Emulator, stop: &Stop| {

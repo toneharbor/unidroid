@@ -65,6 +65,7 @@ pub struct Crash {
     pub registers: Vec<(&'static str, u64)>,
     pub backtrace: Vec<Frame>,
     pub stack: Vec<(u64, u64)>,
+    pub jni: Vec<String>,
 }
 
 impl fmt::Display for Crash {
@@ -99,6 +100,9 @@ impl Crash {
             }
             text.push('\n');
         }
+        for call in &self.jni {
+            let _ = writeln!(text, "{call}");
+        }
         text.pop();
         text
     }
@@ -115,6 +119,7 @@ impl Emulator {
             registers: self.registers().unwrap_or_default(),
             backtrace: self.backtrace().unwrap_or_default(),
             stack: self.stack_window().unwrap_or_default(),
+            jni: self.recent_jni(),
         })
     }
 

@@ -1,5 +1,8 @@
 use unidroid::{Crash, Emulator, Result};
 
+#[path = "crash/jni.rs"]
+mod jni;
+
 #[test]
 fn crash_captures_stack_words_before_memory_changes() -> Result<()> {
     for (dir, width, fault) in [("lib64", 8, 0xf9400000u32), ("lib", 4, 0xe5900000)] {
@@ -23,6 +26,7 @@ fn crash_captures_stack_words_before_memory_changes() -> Result<()> {
         }
         emu.write_bytes(sp, &vec![0; 32 * width])?;
         let report = crash.report();
+        assert!(crash.jni.is_empty());
         assert!(report.contains(&format!(
             "\n0x{sp:x}: 0x12340000 0x12340001 0x12340002 0x12340003\n"
         )));
@@ -195,6 +199,13 @@ fn host_failure_starts_at_guest_caller() -> Result<()> {
         let crash = error.downcast_ref::<Crash>().unwrap();
         let lr = crash.registers.iter().find(|r| r.0 == "lr").unwrap().1;
         assert_eq!(crash.backtrace[0].address, lr & !1);
+        assert_eq!(
+            crash.jni.last().unwrap(),
+            &format!(
+                "JNIEnv->GetStaticObjectField java/lang/Void->TYPELjava/lang/Class; from {}",
+                emu.location(lr)
+            )
+        );
         assert!(crash.message.ends_with(&emu.location(lr)));
         assert!(
             crash.backtrace[0]

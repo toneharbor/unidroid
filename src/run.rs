@@ -108,7 +108,7 @@ impl Emulator {
                     .cpu()?
                     .get_data()
                     .watch
-                    .is_some_and(|hit| hit.pc == pc & !1)
+                    .is_some_and(|(hit, _)| hit.pc == pc & !1)
             {
                 self.cpu_mut()?.get_data_mut().watch = None;
             }

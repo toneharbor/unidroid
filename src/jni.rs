@@ -105,6 +105,7 @@ pub(crate) struct JniState {
     vm: u64,
     weak: HashSet<Handle>,
     pending: Option<Handle>,
+    history: env::history::History,
 }
 
 #[cfg(test)]

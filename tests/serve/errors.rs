@@ -54,6 +54,23 @@ fn errors_leave_the_server_ready_for_the_next_command() {
                     .starts_with("unhandled JNI call:")
             );
             assert_eq!(response["crash"]["backtrace"][0]["location"], location);
+            let jni = response["crash"]["jni"].as_array().unwrap();
+            assert_eq!(
+                jni.last().unwrap(),
+                &json!(format!(
+                    "JNIEnv->GetStaticObjectField java/lang/Void->TYPELjava/lang/Class; from {location}"
+                ))
+            );
+            assert!(jni.iter().any(|line| {
+                line.as_str()
+                    .unwrap()
+                    .starts_with("JNIEnv->FindClass(java/lang/Void) from libjnidispatch.so+")
+            }));
+            assert!(jni.iter().any(|line| {
+                line.as_str().unwrap().starts_with(
+                    "JNIEnv->GetStaticFieldID(java/lang/Void->TYPELjava/lang/Class;) from libjnidispatch.so+"
+                )
+            }));
             assert!(response["crash"]["backtrace"][0]["address"].is_string());
             let registers = response["crash"]["registers"].as_object().unwrap();
             assert!(registers.values().all(|value| {

@@ -17,8 +17,19 @@ fn jni_events_keep_the_existing_text_and_can_be_switched_off() -> Result<()> {
             })
             .build()?;
         let m = emu.load_library(format!("tests/fixtures/{abi}/libjnidispatch.so"))?;
-        let _ = emu.call_jni_onload(m, &mut ());
+        let error = emu.call_jni_onload(m, &mut ()).unwrap_err();
+        let crash = error.downcast_ref::<unidroid::Crash>().unwrap();
         let captured = events.borrow();
+        for function in ["FindClass", "NewGlobalRef", "GetStaticFieldID"] {
+            let (text, _) = captured
+                .iter()
+                .rfind(|(_, value)| value["function"] == function)
+                .unwrap();
+            assert!(
+                crash.jni.contains(text),
+                "missing {function} details: {text}"
+            );
+        }
         assert!(captured.iter().any(|(text, value)| value["event"] == "jni"
             && text.starts_with("JNIEnv->FindClass(java/lang/Void) from libjnidispatch.so+")));
         assert!(captured.iter().any(|(text, value)| value["event"] == "jni_call" && text.starts_with("JNIEnv->GetStaticObjectField(java/lang/Void->TYPELjava/lang/Class;, []) from libjnidispatch.so+")));

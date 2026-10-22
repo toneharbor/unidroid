@@ -4,19 +4,46 @@ use crate::{Emulator, Result};
 use std::rc::Rc;
 
 mod arrays;
+pub(super) mod history;
 mod members;
 pub(super) mod strings;
 
 impl Emulator {
+    fn jni_details(&self, index: usize, [a, b, c]: [u64; 3]) -> Result<Option<String>> {
+        Ok(Some(match index {
+            6 | 167 => self.cstring(a)?,
+            33 | 94 | 113 | 144 => format!(
+                "{}->{}{}",
+                self.class_name(Handle(a))?,
+                self.cstring(b)?,
+                self.cstring(c)?
+            ),
+            10 | 21..=25 | 31 | 164..=166 | 168..=171 | 183..=216 | 220..=225 if a != 0 => {
+                format!(
+                    "{} handle=0x{a:x}, arg2=0x{b:x}, arg3=0x{c:x}",
+                    self.class_name(Handle(a))?
+                )
+            }
+            _ => return Ok(None),
+        }))
+    }
+
     pub(crate) fn jni_function(
         &mut self,
         index: usize,
         handler: &mut dyn JniHandler,
     ) -> Result<u64> {
-        let function = jni_name(index);
         let a = self.reg(1)?;
         let b = self.reg(2)?;
         let c = self.reg(3)?;
+        self.jni.history.record(
+            index,
+            self.lr()?,
+            self.threads.tid(),
+            members::member_id(index, b, c),
+            [a, b, c],
+        );
+        let function = jni_name(index);
         // The kind of reference each function takes as its first argument.
         // NewStringUTF, NewDirectByteBuffer and GetObjectRefType take a
         // pointer or any value there, so they are not checked.
@@ -64,22 +91,9 @@ impl Emulator {
             self.validate_ref(&function, a, 6)?;
         }
         if self.trace.jni && !matches!(index,28..=30 | 34..=93 | 95..=112 | 114..=143 | 145..=162) {
-            let details = match index {
-                6 | 167 => self.cstring(a)?,
-                33 | 94 | 113 | 144 => format!(
-                    "{}->{}{}",
-                    self.class_name(Handle(a))?,
-                    self.cstring(b)?,
-                    self.cstring(c)?
-                ),
-                10 | 21..=25 | 31 | 164..=166 | 168..=171 | 183..=216 | 220..=225 if a != 0 => {
-                    format!(
-                        "{} handle=0x{a:x}, arg2=0x{b:x}, arg3=0x{c:x}",
-                        self.class_name(Handle(a))?
-                    )
-                }
-                _ => format!("arg1=0x{a:x}, arg2=0x{b:x}, arg3=0x{c:x}"),
-            };
+            let details = self
+                .jni_details(index, [a, b, c])?
+                .unwrap_or_else(|| format!("arg1=0x{a:x}, arg2=0x{b:x}, arg3=0x{c:x}"));
             self.events.borrow_mut().emit(crate::Event::Jni {
                 function: function.clone(),
                 details,

@@ -15,6 +15,8 @@ pub(super) enum Command {
         at: String,
         size: u64,
         kind: crate::Watch,
+        #[serde(default)]
+        log: bool,
     },
     Unwatch {
         at: String,

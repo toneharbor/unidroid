@@ -49,7 +49,7 @@ For an unknown Java call, send `unhandled` and keep the resulting crash. Add the
 
 ## 3. Read the crash before changing the setup
 
-Save the whole error response. For an error without `crash`, check the command and setup against README or [DEBUGGING.md](../../DEBUGGING.md), whichever covers it. For a guest failure, read `crash.message`, the thread, backtrace and registers together. Start with the first guest frame and its symbol. At a host or JNI stub, that frame can identify the caller better than the saved PC. Use `symbolize`d locations in diagnostics to choose the routine to inspect.
+Save the whole error response. For an error without `crash`, check the command and setup against README or [DEBUGGING.md](../../DEBUGGING.md), whichever covers it. For a guest failure, read `crash.message`, the thread, backtrace and registers together. Read `crash.jni` for the Java calls just before the failure, oldest first, including the call that failed. It is present even when JNI tracing was off. Start with the first guest frame and its symbol. At a host or JNI stub, that frame can identify the caller better than the saved PC. Use `symbolize`d locations in diagnostics to choose the routine to inspect.
 
 Follow a short backtrace with a breakpoint or a narrow trace. Backtraces follow frame pointers; code that omits them can leave only one frame. Read `crash.stack` for app code addresses that may be return addresses; it keeps the words from the moment of the crash. Treat a short backtrace as a limit on the evidence.
 
@@ -75,6 +75,7 @@ Pick the row that answers the current question:
 | Which memory does a call write? | Serve `snapshot` before and after the call, then `unidroid diff before.snap after.snap` | Changed bytes with locations, newly mapped ranges, and changed registers. |
 | Where is this value in memory? | Serve `search` | Matching addresses and locations. A full list of 1000 may hide more matches; narrow the pattern. |
 | Which instruction writes (or reads) this memory? | Serve `watch`, then `backtrace` and `registers` at the stop | `watch.pc` identifies the accessing instruction; `watch.address`, `size`, `write` and `value` describe its access. |
+| Who writes this buffer during the whole call? | Serve `watch` with `"kind":"write","log":true` and `--log-format json` | Stderr `watch` events: accessing `pc`, address, size, value, thread and callers, without stopping the call. |
 | Which range is this address in? | Serve `maps` | Start and exclusive end, permissions, and the library or memory area's name. |
 | What changes if this function returns a known value? | Breakpoint, then `return` | Whether replacing the result changes the failing path. Use it as an experiment to test the cause. |
 

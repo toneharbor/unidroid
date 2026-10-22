@@ -6,7 +6,7 @@ Debugging reference for the [unidroid library and command](README.md).
 
 ### Crash reports and locations
 
-Guest failures carry a `Crash`. Its `Display` is the same error message; `report()` adds the thread, backtrace, registers and stack:
+Guest failures carry a `Crash`. Its `Display` is the same error message; `report()` adds the thread, backtrace, registers, stack and recent JNI calls:
 
 ```rust
 if let Err(error) = emu.call_function(f, &[]) {
@@ -16,7 +16,16 @@ if let Err(error) = emu.call_function(f, &[]) {
 }
 ```
 
-`Crash` has `message`, `thread`, `registers` (name/value pairs), `backtrace` and `stack`. The stack holds up to 32 `(address, value)` pairs of pointer-size words starting at the crash's sp, stopping at the first unreadable word. `report()` prints them after the registers, four words per address-labelled line. Each `Frame` has `address`, `location` and an optional `symbol`. Both types serialize with serde. A crash keeps the state at the failure, including failures in guest threads or nested calls. Host function failures start at the guest caller. `emu.registers()?` and `emu.backtrace()?` read the current state. The backtrace follows frame pointers, skips repeated neighbors and stops at 32 frames or a zero return address. Code without frame pointers may give a short backtrace; look for app return addresses in `crash.stack`. The stack window is read only while building a crash.
+`Crash` has `message`, `thread`, `registers` (name/value pairs), `backtrace`, `stack` and `jni`. The stack holds up to 32 `(address, value)` pairs of pointer-size words starting at the crash's sp, stopping at the first unreadable word. `report()` prints them after the registers, four words per address-labelled line. Each `Frame` has `address`, `location` and an optional `symbol`. Both types serialize with serde. A crash keeps the state at the failure, including failures in guest threads or nested calls. Host function failures start at the guest caller. `emu.registers()?` and `emu.backtrace()?` read the current state. The backtrace follows frame pointers, skips repeated neighbors and stops at 32 frames or a zero return address. Code without frame pointers may give a short backtrace; look for app return addresses in `crash.stack`. The stack window is read only while building a crash.
+
+`jni: Vec<String>` keeps the last 16 JNIEnv calls from any guest thread, oldest first, including the failing call and calls absent from the JNI trace. It is recorded even with tracing off: a fixed-size ring stores plain function indices, caller addresses, thread IDs, member IDs and three raw argument words, with no allocation or formatting while recording. Strings are built only for a crash. Each line names the function and `location(lr)`. Lookup, string and class-handle calls add the JNI trace's details in parentheses; member calls keep ` {class}->{name}{signature}`. Details are read when the crash is built, so changed guest strings show their current contents. Unreadable details are omitted, as are details containing only raw argument words. Calls from another thread append ` in thread N`. `report()` prints these lines after the stack, without a header:
+
+```text
+JNIEnv->FindClass(java/lang/Void) from libjnidispatch.so+0x8b64
+JNIEnv->NewGlobalRef(java/lang/Void handle=0x19, arg2=0x100e0, arg3=0x107b0) from libjnidispatch.so+0x8b80
+JNIEnv->GetStaticFieldID(java/lang/Void->TYPELjava/lang/Class;) from libjnidispatch.so+0x8bb4
+JNIEnv->GetStaticObjectField java/lang/Void->TYPELjava/lang/Class; from libjnidispatch.so+0x8bc4
+```
 
 `emu.location(address)` stays `libfoo.so+0x1234`. `emu.symbolize(address)` adds a covering function name, like `libc.so+0x1f2a4 (strlen+0x10)`. It uses function symbols with a nonzero size from `.dynsym` and `.symtab`, when present. The symbol table is built on first use and shared between instances.
 
@@ -26,7 +35,19 @@ if let Err(error) = emu.call_function(f, &[]) {
 
 A Thumb `IT` instruction and the instructions it makes conditional run as one step. A breakpoint hit inside an `IT` block is reported at the first instruction after the block, or at the next Unicorn stop if the block branches away; a conditional instruction that is skipped does not hit a breakpoint. Watchpoint hits follow the same rule: `Stop.address` is where execution really stopped, while `WatchHit.pc` stays the instruction that accessed memory.
 
-`emu.add_watchpoint(address, size, Watch::Write)?` watches writes to `[address, address + size)`; use `Watch::Read` for reads or `Watch::Access` for either. Size zero errors with `empty watchpoint`. Adding the same start replaces its size and kind. `emu.remove_watchpoint(address)?` removes that start or errors with `no watchpoint at <symbolize(address)>`. Only guest instructions trigger watches: `write_bytes`, serve's `write`, and host JNI functions such as `SetByteArrayRegion` do not. A hit stops after the accessing instruction completes and before the next runs, subject to the Thumb IT rule above. If one instruction makes several watched accesses, only the first is reported. Watches work in guest threads and nested calls. Their memory and instruction hooks exist only while a watchpoint exists; removing the last also flushes translated code.
+`emu.add_watchpoint(address, size, Watch::Write, WatchAction::Stop)?` watches writes to `[address, address + size)`; use `Watch::Read` for reads or `Watch::Access` for either. Size zero errors with `empty watchpoint`. Adding the same start replaces its size, kind and action. `emu.remove_watchpoint(address)?` removes that start or errors with `no watchpoint at <symbolize(address)>`. Only guest instructions trigger watches: `write_bytes`, serve's `write`, and host JNI functions such as `SetByteArrayRegion` do not. A `WatchAction::Stop` hit stops after the accessing instruction completes and before the next runs, subject to the Thumb IT rule above. If one instruction makes several watched accesses, only the first is reported. Watches work in guest threads and nested calls. Their memory and instruction hooks exist only while a watchpoint exists; removing the last also flushes translated code.
+
+`WatchAction::Log` emits `Event::Watch` at the same hit boundary and resumes as `Resume::Continue` would, without calling `stopped`. A breakpoint on the next instruction still stops. The event has `at: String` (`symbolize(pc)`), `pc: u64` (accessing instruction, Thumb bit cleared), `address: u64`, `size: usize`, `write: bool`, `value: u64`, `thread: u32`, and `callers: Vec<String>` (symbolized backtrace frames after the first, read at the hit). Text uses `read` or `write`; it omits ` from ...` when callers are empty:
+
+```text
+watch write 0x40001000:4=0x2a at libfoo.so+0x1234 (f+0x10) thread 1234 from libfoo.so+0x2000 (g+0x8) <- libfoo.so+0x3000 (h+0x4)
+```
+
+JSON uses the `watch` event tag, hex strings for `pc`, `address` and `value`, numbers for `size` and `thread`, and a boolean for `write`:
+
+```json
+{"event":"watch","at":"libfoo.so+0x1234 (f+0x10)","pc":"0x10001234","address":"0x40001000","size":4,"write":true,"value":"0x2a","thread":1234,"callers":["libfoo.so+0x2000 (g+0x8)","libfoo.so+0x3000 (h+0x4)"]}
+```
 
 Stops go to the running call's `JniHandler::stopped(&mut self, emu: &mut Emulator, stop: &Stop) -> Resume`. The default returns `Resume::Continue`, including for `()` and `Probe`. `Stop` has `reason: StopReason` (`Breakpoint`, `Watchpoint`, `Step` or `Finish`), `address: u64` (Thumb bit cleared), `thread: u32`, and `watch: Option<WatchHit>` (`Some` only for watchpoint stops). `WatchHit` holds `pc: u64` (accessing instruction, Thumb bit cleared), `address: u64` (access start, possibly before the watched range), `size: usize`, `write: bool`, and `value: u64` (the written or read bits at access time). At a watch stop, writes have landed and loads have filled their destination registers; `Continue` resumes at `Stop.address` without skipping a breakpoint there. The handler can inspect or change registers and memory, or make a nested call that has stops of its own. Return one of:
 
@@ -99,7 +120,7 @@ function libfoo.so+0x1800 (mix)(0x7, 0x8, 0x40001000, 0xa) from libfoo.so+0x1234
 
 Syscall events show the guest number, arguments, signed result, errno name, instruction location and caller. Import events show calls from app libraries into other modules, including dl, property and unresolved-symbol stubs. The previous executed block in the same guest thread must be in an app library; app PLT stubs count, but internal tail calls within a dependency do not. The caller location comes from lr. They show the first four argument registers, with known C strings quoted and capped at 256 bytes. Dependencies next to an app count as app libraries; dependencies found in rootfs do not.
 
-All diagnostics go through `Event`: `Jni`, `JniCall`, `Syscall`, `Call`, `FunctionCall`, `Instruction` or `Warning`. By default they print their text form on stderr. Capture them with the builder's `on_event`:
+All diagnostics go through `Event`: `Jni`, `JniCall`, `Syscall`, `Call`, `FunctionCall`, `Instruction`, `Watch` or `Warning`. By default they print their text form on stderr. Capture them with the builder's `on_event`:
 
 ```rust
 let emu = Emulator::builder()
@@ -108,7 +129,7 @@ let emu = Emulator::builder()
     .build()?;
 ```
 
-Events serialize as objects tagged with `event`: `jni`, `jni_call`, `syscall`, `call`, `function_call`, `instruction` or `warning`. Arguments are arrays of text; JNI member arguments keep their typed debug form, such as `Object(Handle(7))`. Syscall numbers and returned results are JSON numbers. If dispatch fails, ends the thread or process, or switches away from the thread, `result` is `null` and `errno` is absent. Its text line ends with `= (no return)`. The event is emitted before any crash propagates. Otherwise `errno` is present only for a Linux error result. JNI locations keep the existing text; syscall and import locations include symbols.
+Events serialize as objects tagged with `event`: `jni`, `jni_call`, `syscall`, `call`, `function_call`, `instruction`, `watch` or `warning`. Arguments are arrays of text; JNI member arguments keep their typed debug form, such as `Object(Handle(7))`. Syscall numbers and returned results are JSON numbers. If dispatch fails, ends the thread or process, or switches away from the thread, `result` is `null` and `errno` is absent. Its text line ends with `= (no return)`. The event is emitted before any crash propagates. Otherwise `errno` is present only for a Linux error result. JNI locations keep the existing text; syscall and import locations include symbols.
 
 `Probe::default()` is a `JniHandler` that answers calls with null, zero, false or void. `is_assignable` answers false. Pass it to `call_jni_onload` to explore calls without writing a handler. `probe.calls()` returns `&[ProbedCall]` in first-seen order. Each entry has `op`, `is_static`, `class`, `name`, `signature`, `count` and the first `from` location. For `is_assignable`, `class` is the source and `name` the target class. Defaults can make the library return early or crash.
 
@@ -118,19 +139,21 @@ For the basic protocol, calling and object commands, see [README.md](README.md#s
 
 ### Crash responses
 
-A guest failure adds `crash` to the error response. Other errors still have only `error`. Inside `crash`, frame addresses, register values, and both entries of each `stack` pair are decimal strings; the thread ID is a number. `stack` keeps up to 32 pointer-size words as `[address, value]` pairs starting at the crash's sp, in address order. `registers` is an object keyed by register name, so `crash.registers.pc` reads the program counter. For example:
+A guest failure adds `crash` to the error response. Other errors still have only `error`. Inside `crash`, frame addresses, register values, and both entries of each `stack` pair are decimal strings; the thread ID is a number. `stack` keeps up to 32 pointer-size words as `[address, value]` pairs starting at the crash's sp, in address order. `registers` is an object keyed by register name, so `crash.registers.pc` reads the program counter. `jni` is the same list of recent JNIEnv strings as the library's `Crash::jni`, present even with tracing off. For example:
 
 ```json
-{"error":"unhandled JNI call: ...","crash":{"message":"unhandled JNI call: ...","thread":1234,"registers":{"pc":"65820","x0":"7"},"backtrace":[{"address":"268471236","location":"libjnidispatch.so+0x8bc4","symbol":"JNI_OnLoad+0x3c0"}],"stack":[["1879048160","0"],["1879048168","268471236"]]}}
+{"error":"unhandled JNI call: ...","crash":{"message":"unhandled JNI call: ...","thread":1234,"registers":{"pc":"65820","x0":"7"},"backtrace":[{"address":"268471236","location":"libjnidispatch.so+0x8bc4","symbol":"JNI_OnLoad+0x3c0"}],"stack":[["1879048160","0"],["1879048168","268471236"]],"jni":["JNIEnv->FindClass(java/lang/Void) from libjnidispatch.so+0x8b64","JNIEnv->GetStaticFieldID(java/lang/Void->TYPELjava/lang/Class;) from libjnidispatch.so+0x8bb4","JNIEnv->GetStaticObjectField java/lang/Void->TYPELjava/lang/Class; from libjnidispatch.so+0x8bc4"]}}
 ```
 
-The example abbreviates the registers and stack. If a bad JNI answer replaces the command's error message, `crash` still holds the original guest failure.
+The example abbreviates the registers, stack and JNI history. If a bad JNI answer replaces the command's error message, `crash` still holds the original guest failure.
 
 ### Traces
 
 Change traces during a session with `{"cmd":"trace","jni":true,"syscalls":true,"imports":false,"code":["libfoo.so+0x1000-0x2000"],"calls":["libfoo.so"]}`. Omitted booleans become `false`; omitted `code` and `calls` become empty. `{"cmd":"trace"}` turns all traces off. Log format is chosen when starting the CLI; JSON logs go to stderr and protocol replies go to stdout.
 
 ### Stops and questions
+
+Use `{"cmd":"watch","at":"0x40001000","size":4,"kind":"write","log":true}` to record hits throughout a call. Log hits go to stderr as text or JSON according to `--log-format`, just like traces, and never ask a `break` question. Omitting `log` or setting it to `false` selects stop mode.
 
 Debugger stops arrive as `{"break": ...}` questions. The fields are `reason` (`breakpoint`, `watchpoint`, `step` or `finish`), `address` (decimal string, Thumb bit cleared), `location` (from `symbolize`), `thread` (number), and `registers` (the same object, in register table order, as `registers` and a crash). Watchpoint stops also have `watch: {pc, location, address, size, write, value}`: `pc`, `address` and `value` are decimal strings, `size` is a number, `write` is a boolean, and `location` is the `symbolize` text of `pc`. Other stops omit `watch`. While stopped, any command can run, including a nested `call_function`. Resume the innermost stop with `continue`, `step`, `finish`, `return` (with a decimal string `value`), or `abort`. These have the same behavior as Rust's `Resume`; they have no separate reply. The original command continues and ends with its own `ok` or `error`.
 
@@ -173,7 +196,7 @@ A resume command with no stop open errors with `no breakpoint stop is waiting`. 
 |---|---|---|
 | `trace` | `jni`, `syscalls`, `imports` (booleans, omitted means false), `code`, `calls` (lists of specifications, omitted means empty) | `null` |
 | `break` / `unbreak` | `at` (text for `resolve`) | address with Thumb bit cleared / `null` |
-| `watch` | `at` (text for `resolve`), `size` (number), `kind` (`read`, `write` or `access`) | watched address (decimal string) |
+| `watch` | `at` (text for `resolve`), `size` (number), `kind` (`read`, `write` or `access`), `log` (boolean, omitted or false means stop) | watched address (decimal string) |
 | `unwatch` | `at` (text for `resolve`) | `null` |
 | `search` | `base64` (nonempty byte pattern) | up to 1000 `{address, location}` matches in address order; address is a decimal string |
 | `crypto` | | list of `{name, address, location}` constants; address is a decimal string |

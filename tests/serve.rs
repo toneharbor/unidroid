@@ -84,6 +84,8 @@ mod stop_errors;
 mod stops;
 #[path = "serve/traces.rs"]
 mod traces;
+#[path = "serve/watch_log.rs"]
+mod watch_log;
 
 #[test]
 fn eof_during_a_question_fails_the_process() {
