@@ -2,6 +2,71 @@ use std::{cell::RefCell, rc::Rc};
 use unidroid::{Crash, Emulator, Result, Trace};
 
 #[test]
+fn output_and_environment_syscalls_have_names_and_argument_counts() -> Result<()> {
+    for (dir, numbers) in [("lib64", [64, 66, 160, 48]), ("lib", [4, 146, 122, 334])] {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        let mut emu = Emulator::builder()
+            .on_event(move |event| sink.borrow_mut().push(serde_json::to_value(event).unwrap()))
+            .build()?;
+        let libc = emu.load_library(format!("rootfs/{dir}/libc.so"))?;
+        let buffer = emu.malloc(390)?;
+        let path = emu.new_cstring(&format!("/{dir}/libc.so"))?;
+        emu.set_trace(Trace {
+            syscalls: true,
+            ..Trace::default()
+        })?;
+        for ((function, name, args, count), number) in [
+            ("write", "write", vec![1, buffer, 0], 3),
+            ("writev", "writev", vec![2, buffer, 0], 3),
+            ("uname", "uname", vec![buffer], 1),
+            ("access", "faccessat", vec![path, 0], 4),
+        ]
+        .into_iter()
+        .zip(numbers)
+        {
+            let address = emu.find_symbol(libc, function)?;
+            events.borrow_mut().clear();
+            assert_eq!(emu.call_function(address, &args)?, 0);
+            let captured = events.borrow();
+            let syscalls: Vec<_> = captured
+                .iter()
+                .filter(|event| event["event"] == "syscall")
+                .collect();
+            assert_eq!(syscalls.len(), 1);
+            let event = syscalls[0];
+            assert_eq!(event["name"], name);
+            assert_eq!(event["number"], number);
+            assert_eq!(event["args"].as_array().unwrap().len(), count);
+            assert_eq!(event["result"], 0);
+            assert!(event.get("errno").is_none());
+        }
+        for (function, errno, result) in [
+            ("write", "EBADF", -9),
+            ("writev", "EINVAL", -22),
+            ("uname", "EFAULT", -14),
+            ("access", "ENOENT", -2),
+        ] {
+            let missing = emu.new_cstring("/system/bin/su")?;
+            let args = match function {
+                "write" => vec![0, buffer, 1],
+                "writev" => vec![1, buffer, 1025],
+                "uname" => vec![0],
+                _ => vec![missing, 0],
+            };
+            let address = emu.find_symbol(libc, function)?;
+            events.borrow_mut().clear();
+            assert_eq!(emu.call_function(address, &args)? as u32, u32::MAX);
+            let captured = events.borrow();
+            assert_eq!(captured.len(), 1);
+            assert_eq!(captured[0]["result"], result);
+            assert_eq!(captured[0]["errno"], errno);
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn nonreturning_syscalls_emit_before_the_crash() -> Result<()> {
     for (dir, exit_nr, open_nr, svc, ret) in [
         ("lib64", 93, 56, 0xd4000001u32, 0xd65f03c0),

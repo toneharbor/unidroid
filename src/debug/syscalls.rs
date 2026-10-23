@@ -2,10 +2,13 @@ use crate::{Emulator, Event, arch::Architecture};
 
 fn description(number: u64) -> Option<(&'static str, usize)> {
     Some(match number {
+        48 => ("faccessat", 4),
         56 => ("openat", 4),
         57 => ("close", 1),
         62 => ("lseek", 3),
         63 => ("read", 3),
+        64 => ("write", 3),
+        66 => ("writev", 3),
         67 => ("pread64", 4),
         79 => ("newfstatat", 4),
         80 => ("fstat", 2),
@@ -20,6 +23,7 @@ fn description(number: u64) -> Option<(&'static str, usize)> {
         124 => ("sched_yield", 0),
         132 => ("sigaltstack", 2),
         135 => ("rt_sigprocmask", 4),
+        160 => ("uname", 1),
         167 => ("prctl", 5),
         169 => ("gettimeofday", 2),
         172 => ("getpid", 0),

@@ -18,7 +18,7 @@ let emu = Emulator::builder()
 
 The address layout, mmap/brk/host-malloc allocation, thread switching by executed code bytes and futex virtual time are already deterministic. `fixed_clock(unix_seconds: i64)` gives guest clock syscalls and arm64 direct counter reads one shared elapsed counter, initially zero. `clock_gettime` realtime and `gettimeofday` return the supplied Unix time plus elapsed time; monotonic starts at one second plus elapsed time. Each read then adds one microsecond. Futex virtual time stays separate. On arm64, `mrs` reads of `CNTVCT_EL0` and `CNTPCT_EL0` return monotonic time converted to ticks at the CPU's `CNTFRQ_EL0` frequency. Each counter read consumes the same one-microsecond clock tick and is recorded and replayed as a monotonic clock read. Other system registers keep Unicorn's behavior.
 
-With `fixed_clock`, `stat` and `fstat` report all three timestamps as the supplied Unix seconds with zero nanoseconds, device/uid/gid as zero, and blocks as size rounded up to 512-byte units. The inode is the 64-bit FNV-1a hash of the original guest path, including its spelling; ARM32's additional 32-bit inode field gets the low 32 bits. An open file retains that path for `fstat`. Size, mode, nlink, rdev and blksize keep their usual values.
+With `fixed_clock`, `stat` and `fstat` for files from rootfs report all three timestamps as the supplied Unix seconds with zero nanoseconds, device/uid/gid as zero, and blocks as size rounded up to 512-byte units. The inode is the 64-bit FNV-1a hash of the original guest path, including its spelling; ARM32's additional 32-bit inode field gets the low 32 bits. An open file retains that path for `fstat`. Size, mode, nlink, rdev and blksize keep their usual values. Generated maps files use the metadata values described in [ENVIRONMENT.md](ENVIRONMENT.md) instead.
 
 `random_seed(seed: u64)` supplies a SplitMix64 byte stream to `getrandom`, `/dev/urandom` and `/dev/random`. Successive outputs are consumed as little-endian bytes across all reads, so splitting a read does not change the stream on any platform. The options are independent; omitted options keep their host behavior. The CLI equivalents are `--fixed-clock SECONDS` and `--random-seed N`. Replay always serves recorded clock/random values before consulting either setting.
 
@@ -53,7 +53,7 @@ Rewind restores:
 - Memory mappings, permissions and bytes, including allocations, stacks, TLS and library data. Later mappings and libraries disappear; later host allocations and JNI handles are no longer live, and their addresses and handle numbers can be reused.
 - Loaded modules and loader state, host function stubs, symbol aliases, library directories, rootfs, properties, process name, host malloc/free state and `dlerror` state.
 - Heap tracking records, including live blocks, freed blocks and release order. They follow the restored memory; `Trace.heap` and its hooks stay with the target emulator.
-- Open files and their offsets. Files reopen and seek on each rewind, so reads in one run or copy never move the checkpoint's offset. Keep the rootfs files available and unchanged.
+- Open files and their offsets. Files from rootfs reopen and seek on each rewind; generated maps files restore their saved bytes and offset instead. Reads in one run or copy never move the checkpoint's offset. Keep the rootfs files available and unchanged.
 - The fixed clock and its elapsed counter, and the seeded random generator including partly consumed output. Host clock/random values still come from the host when those settings were omitted.
 - JNI handles, objects, classes, members, registered natives, references and exceptions. Object graphs are copied deeply with an explicit work list, preserving aliases and cycles, including arbitrarily nested object arrays. `new_object`'s `Object::User` payload (`Rc<dyn Any>`) is shared: changes inside that Rust payload remain visible across rewinds and copies.
 
@@ -267,7 +267,7 @@ Syscall events show the guest number, arguments, signed result, errno name, inst
 
 Import hooks appear in import traces under their symbol name with module `<hook>`. Returning `None` can then enter the original export; it preserves the original call's stack and floating-point registers. Hooks and saved originals are restored by rewind, including into a fresh emulator.
 
-All diagnostics go through `Event`: `Jni`, `JniCall`, `Syscall`, `Call`, `FunctionCall`, `Instruction`, `Watch`, `Tracepoint` or `Warning`. By default they print their text form on stderr. Capture them with the builder's `on_event`:
+All diagnostics go through `Event`: `Jni`, `JniCall`, `Syscall`, `Call`, `FunctionCall`, `Instruction`, `Watch`, `Tracepoint`, `Output` or `Warning`. By default they print their text form on stderr. Capture them with the builder's `on_event`:
 
 ```rust
 let emu = Emulator::builder()
@@ -276,7 +276,9 @@ let emu = Emulator::builder()
     .build()?;
 ```
 
-Events serialize as objects tagged with `event`: `jni`, `jni_call`, `syscall`, `call`, `function_call`, `instruction`, `watch`, `tracepoint` or `warning`. Arguments are arrays of text; JNI member arguments keep their typed debug form, such as `Object(Handle(7))`. Syscall numbers and returned results are JSON numbers. If dispatch fails, ends the thread or process, or switches away from the thread, `result` is `null` and `errno` is absent. Its text line ends with `= (no return)`. The event is emitted before any crash propagates. Otherwise `errno` is present only for a Linux error result. JNI locations keep the existing text; syscall and import locations include symbols.
+`Output { fd, text }` reports guest stdout/stderr from `write` and `writev` even with tracing off; one event contains the whole call's bytes decoded as lossy UTF-8. Its text is `stdout: TEXT` or `stderr: TEXT`, dropping one trailing newline, while JSON preserves the text unchanged; see files and system calls in [ENVIRONMENT.md](ENVIRONMENT.md).
+
+Events serialize as objects tagged with `event`: `jni`, `jni_call`, `syscall`, `call`, `function_call`, `instruction`, `watch`, `tracepoint`, `output` or `warning`. Arguments are arrays of text; JNI member arguments keep their typed debug form, such as `Object(Handle(7))`. Syscall numbers and returned results are JSON numbers. If dispatch fails, ends the thread or process, or switches away from the thread, `result` is `null` and `errno` is absent. Its text line ends with `= (no return)`. The event is emitted before any crash propagates. Otherwise `errno` is present only for a Linux error result. JNI locations keep the existing text; syscall and import locations include symbols.
 
 `Probe::default()` is a `JniHandler` that answers calls with null, zero, false or void. `is_assignable` answers false. Pass it to `call_jni_onload` to explore calls without writing a handler. `probe.calls()` returns `&[ProbedCall]` in first-seen order. Each entry has `op`, `is_static`, `class`, `name`, `signature`, `count` and the first `from` location. For `is_assignable`, `class` is the source and `name` the target class. Defaults can make the library return early or crash.
 

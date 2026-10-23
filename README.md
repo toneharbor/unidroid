@@ -458,7 +458,7 @@ Supported:
 
 - Android arm64 (`arm64-v8a`) and 32-bit ARM (`armeabi-v7a`, both ARM and Thumb code), using Android 6.0 (API 23) system libraries
 - Loading a `.so` and its dependencies, relocation (including Android packed relocations), running constructors
-- libdl (`dlopen` / `dlsym` and the rest), system properties, the common syscalls
+- libdl (`dlopen` / `dlsym` and the rest), system properties, the common syscalls including `write`/`writev` to stdout and stderr, `uname` and `faccessat` (see [files and system calls](ENVIRONMENT.md#files-and-system-calls))
 - JNI: classes, methods, fields, strings, arrays, exceptions, global and local references, `RegisterNatives`. Strings and arrays handed to native code come from libc's own `malloc`, as on a phone, so native code may `free` them.
 - Guest threads (`pthread_create`, `pthread_join`, and the futex waits behind locks). They take turns on one CPU and switch about every 10,000 instructions, like unidbg. Switching keeps the translated code. A thread that is still running when your call returns keeps going during your next call. An instance that never starts a thread pays nothing for this.
 - The 32-bit ARM kernel helpers at `0xffff0f60`–`0xffff0fff`, which old libraries and Android 6.0's own libc use
@@ -468,7 +468,7 @@ Not supported:
 
 - iOS
 - Signals and `fork`
-- File access outside `rootfs`. `/dev/urandom` and `/dev/random` are allowed. Every other path is "not found".
+- File access outside `rootfs`. `/dev/urandom`, `/dev/random` and the [generated maps files](ENVIRONMENT.md#files-and-system-calls) are allowed. Every other path is "not found".
 
 A library's dependencies are looked for first in the folders of the libraries you loaded, then in rootfs. That's how an app's own `lib/arm64-v8a` folder works on a phone, so copy an app's libraries together and load the one you need. `dlopen` from the library searches the same way.
 

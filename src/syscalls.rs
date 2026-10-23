@@ -1,6 +1,9 @@
 use crate::{Emulator, MMAP_END, MMAP_START, Prot, Region, Result, page_up};
 use std::{fs::File, io::SeekFrom, path::Component};
 mod files;
+mod output;
+mod procfs;
+mod system;
 pub(crate) use files::{FileState, GuestFile};
 impl Emulator {
     pub(crate) fn syscall(&mut self, guest_nr: u64, mut a: [u64; 6], pc: u64) -> Result<u64> {
@@ -27,6 +30,7 @@ impl Emulator {
     fn dispatch_syscall(&mut self, guest_nr: u64, nr: u64, a: [u64; 6], pc: u64) -> Result<u64> {
         let errno = |n: i64| (-n) as u64;
         Ok(match nr {
+            48 => self.faccessat(a[1])?,
             56 => {
                 if a[2] & 3 != 0 {
                     return Ok(errno(13));
@@ -91,6 +95,8 @@ impl Emulator {
                     Err(_) => errno(5),
                 }
             }
+            64 => self.write_output(a[0], a[1], a[2]),
+            66 => self.writev_output(a[0], a[1], a[2]),
             79 | 80 => {
                 let stat = |file: &GuestFile| {
                     file.stat(
@@ -111,6 +117,7 @@ impl Emulator {
                 self.write_bytes(if nr == 80 { a[1] } else { a[2] }, &bytes[..size])?;
                 0
             }
+            160 => self.uname(a[0]),
             167 => match a[0] {
                 0x53564d41 => 0,
                 15 => {
@@ -176,7 +183,7 @@ impl Emulator {
                 0
             }
             278 => {
-                let mut buffer = vec![0; a[1].min(files::RANDOM_READ_LIMIT) as usize];
+                let mut buffer = vec![0; a[1].min(files::IO_LIMIT) as usize];
                 let mut count = 0;
                 loop {
                     count += self.source.random(&mut buffer[count..])?;
@@ -311,6 +318,16 @@ impl Emulator {
     }
 
     pub(super) fn open_guest(&self, path: &str) -> std::io::Result<GuestFile> {
+        let pid = crate::threads::MAIN_TID;
+        if path == "/proc/self/maps"
+            || path == format!("/proc/{pid}/maps")
+            || path == format!("/proc/self/task/{pid}/maps")
+        {
+            let bytes = self
+                .proc_maps()
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            return Ok(GuestFile::Memory(std::io::Cursor::new(bytes)));
+        }
         if path == "/dev/urandom" || path == "/dev/random" {
             return Ok(GuestFile::Random { path: path.into() });
         }

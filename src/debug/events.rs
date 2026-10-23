@@ -31,6 +31,10 @@ fn access_kind<S: Serializer>(write: &bool, serializer: S) -> std::result::Resul
 #[derive(Debug, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
+    Output {
+        fd: u64,
+        text: String,
+    },
     Jni {
         function: String,
         details: String,
@@ -134,6 +138,12 @@ fn hex_values<S: Serializer>(
 impl fmt::Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Output { fd, text } => write!(
+                f,
+                "{}: {}",
+                if *fd == 1 { "stdout" } else { "stderr" },
+                text.strip_suffix('\n').unwrap_or(text)
+            ),
             Self::Jni {
                 function,
                 details,

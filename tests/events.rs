@@ -2,6 +2,29 @@ use std::{cell::RefCell, rc::Rc};
 use unidroid::{Emulator, Event, Result, Trace};
 
 #[test]
+fn output_events_trim_one_text_newline_and_preserve_json_text() {
+    for (fd, label) in [(1, "stdout"), (2, "stderr")] {
+        for (text, printed) in [
+            ("hello\n", "hello"),
+            ("hello\n\n", "hello\n"),
+            ("hello\r\n", "hello\r"),
+            ("hello", "hello"),
+            ("", ""),
+        ] {
+            let event = Event::Output {
+                fd,
+                text: text.into(),
+            };
+            assert_eq!(event.to_string(), format!("{label}: {printed}"));
+            assert_eq!(
+                serde_json::to_value(event).unwrap(),
+                serde_json::json!({"event":"output", "fd":fd, "text":text})
+            );
+        }
+    }
+}
+
+#[test]
 fn jni_events_keep_the_existing_text_and_can_be_switched_off() -> Result<()> {
     for abi in ["arm64-v8a", "armeabi-v7a"] {
         let events = Rc::new(RefCell::new(Vec::new()));
