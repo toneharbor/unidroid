@@ -110,6 +110,9 @@ macro_rules! members {
 pub(crate) use members;
 
 impl JniHandler for PolicyHandler<'_> {
+    fn import(&mut self, emu: &mut Emulator, call: &crate::ImportCall<'_>) -> Option<u64> {
+        self.fallback.import(emu, call)
+    }
     fn stopped(&mut self, emu: &mut Emulator, stop: &crate::Stop) -> crate::Resume {
         self.fallback.stopped(emu, stop)
     }

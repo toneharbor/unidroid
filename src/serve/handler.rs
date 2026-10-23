@@ -19,6 +19,17 @@ macro_rules! void_handlers {
 }
 
 impl<R: BufRead, W: Write> JniHandler for Session<R, W> {
+    fn import(&mut self, emu: &mut Emulator, call: &crate::ImportCall<'_>) -> Option<u64> {
+        let question = json!({
+            "name":call.name, "args":call.args.iter().map(u64::to_string).collect::<Vec<_>>(),
+            "original":call.original.map(|address| address.to_string()),
+            "from":emu.location(call.return_address),
+        });
+        match self.ask(emu, Response::Import(question), Question::Import) {
+            Some(Reply::Import(value)) => value,
+            _ => None,
+        }
+    }
     fn stopped(&mut self, emu: &mut Emulator, stop: &crate::Stop) -> crate::Resume {
         let registers = match emu.registers() {
             Ok(registers) => response::registers_value(&registers),

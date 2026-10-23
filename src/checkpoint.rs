@@ -151,10 +151,10 @@ impl Emulator {
         }
         self.cpu_mut()?.context_restore(&checkpoint.context)?;
         *self.cpu_mut()?.get_data_mut() = crate::CpuData::default();
+        if self.trace.imports {
+            self.refresh_imports();
+        }
         if modules_changed || created_cpu {
-            if self.trace.imports {
-                self.refresh_imports();
-            }
             self.set_trace(self.trace.clone())?;
         }
         Ok(())

@@ -96,6 +96,7 @@ impl Emulator {
             let (function, module) = match host {
                 HostFunction::Dl(name) => ((*name).to_owned(), "libdl.so".to_owned()),
                 HostFunction::Property => ("__system_property_get".into(), "libc.so".into()),
+                HostFunction::Import { name, .. } => (name.clone(), "<hook>".into()),
                 HostFunction::Unresolved { symbol, .. } => (symbol.clone(), "<unresolved>".into()),
                 HostFunction::Jni(_) | HostFunction::Vm(_) => continue,
             };

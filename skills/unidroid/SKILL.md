@@ -8,7 +8,7 @@ description: >-
 
 ## 1. Inspect before writing a driver
 
-Read the command section of [README.md](../../README.md) for the basic options, calling commands and JNI protocol, and [DEBUGGING.md](../../DEBUGGING.md) for debugging commands, fields and JSON shapes. In a release download, README.md and DEBUGGING.md are next to the binary. If this skill was copied elsewhere, use both files from your unidroid checkout or download; the [online README](https://github.com/zhoupb01/unidroid/blob/main/README.md) and [online debugging reference](https://github.com/zhoupb01/unidroid/blob/main/DEBUGGING.md) describe main.
+Read the command section of [README.md](../../README.md) for the basic options, calling commands and JNI protocol, [DEBUGGING.md](../../DEBUGGING.md) for debugging commands, fields and JSON shapes, and [ENVIRONMENT.md](../../ENVIRONMENT.md) for replacing imported C functions and running constructors yourself. In a release download, README.md, DEBUGGING.md and ENVIRONMENT.md are next to the binary. If this skill was copied elsewhere, use these three files from your unidroid checkout or download; the [online README](https://github.com/zhoupb01/unidroid/blob/main/README.md), [online debugging reference](https://github.com/zhoupb01/unidroid/blob/main/DEBUGGING.md) and [online environment guide](https://github.com/zhoupb01/unidroid/blob/main/ENVIRONMENT.md) describe main.
 
 Run `inspect`, then `inspect --probe` on the target library. These commands use the committed SignUtil sample, from the repo root:
 

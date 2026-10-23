@@ -1,6 +1,6 @@
 use crate::{
-    Emulator, HostFunction, Image, Loaded, Module, Region, Result, SharedMapping, page_down,
-    page_up,
+    Emulator, HostFunction, Image, JniHandler, Loaded, Module, Region, Result, SharedMapping,
+    page_down, page_up,
 };
 use std::{
     collections::HashMap,
@@ -13,6 +13,12 @@ impl Emulator {
         self.symbol_aliases.insert(name.into(), target.into());
     }
     pub fn load_library(&mut self, path: impl AsRef<Path>) -> Result<Module> {
+        let module = self.load_library_without_constructors(path)?;
+        self.run_constructors(module, &mut ())?;
+        Ok(module)
+    }
+    /// Map and relocate a library and its dependencies without running their constructors.
+    pub fn load_library_without_constructors(&mut self, path: impl AsRef<Path>) -> Result<Module> {
         let path = path.as_ref();
         if let Some(directory) = path.parent()
             && !self.library_dirs.iter().any(|loaded| loaded == directory)
@@ -35,7 +41,7 @@ impl Emulator {
     pub(super) fn load_library_internal(&mut self, path: &Path) -> Result<Module> {
         let module = self.load_image(path)?;
         for i in 0..self.modules.len() {
-            self.relocate(Module(i))?;
+            self.relocate(Module(i), None)?;
         }
         if self.trace.imports {
             self.refresh_imports();
@@ -50,7 +56,6 @@ impl Emulator {
             self.trace_coverage(&self.trace.coverage.clone())?;
         }
         self.trace_heap(self.trace.heap)?;
-        self.initialize(module)?;
         Ok(module)
     }
     fn load_image(&mut self, path: &Path) -> Result<Module> {
@@ -161,6 +166,9 @@ impl Emulator {
         if let Some(value) = self.overrides.get(name) {
             return Some(*value);
         }
+        self.exported_symbol(module, name)
+    }
+    pub(super) fn exported_symbol(&self, module: Module, name: &str) -> Option<u64> {
         let m = &self.modules[module.0];
         let symbol = &m.image.symbols[*m.image.exports.get(name)?];
         Some(if symbol.absolute {
@@ -193,8 +201,8 @@ impl Emulator {
         self.search_symbol(module, name, &mut Vec::new())
             .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound).into())
     }
-    fn relocate(&mut self, module: Module) -> Result<()> {
-        if self.modules[module.0].relocated {
+    pub(super) fn relocate(&mut self, module: Module, hook: Option<&str>) -> Result<()> {
+        if self.modules[module.0].relocated && hook.is_none() {
             return Ok(());
         }
         let image = self.modules[module.0].image.clone();
@@ -212,8 +220,13 @@ impl Emulator {
                 )
                 .into());
             };
+            if let Some(name) = hook
+                && (relative || image.symbols[(relocation.info >> 32) as usize].name != name)
+            {
+                continue;
+            }
             let addend = if implicit {
-                self.read_pointer(base + relocation.offset)? as i64
+                implicit_addend(&image, relocation.offset)
             } else {
                 relocation.addend
             };
@@ -256,23 +269,27 @@ impl Emulator {
         self.modules[module.0].relocated = true;
         Ok(())
     }
-    fn initialize(&mut self, module: Module) -> Result<()> {
+    /// Run pending dependency constructors depth first, then this module's constructors.
+    pub fn run_constructors(&mut self, module: Module, handler: &mut dyn JniHandler) -> Result<()> {
+        if module.0 >= self.modules.len() {
+            return Err(format!("no module {} is loaded", module.0).into());
+        }
         if self.modules[module.0].initialized {
             return Ok(());
         }
         self.modules[module.0].initialized = true;
         for dep in self.modules[module.0].dependencies.clone() {
-            self.initialize(dep)?;
+            self.run_constructors(dep, handler)?;
         }
         let image = self.modules[module.0].image.clone();
         let base = self.modules[module.0].base;
         if image.init != 0 {
-            self.call_function(base + image.init, &[])?;
+            self.call_function_with(handler, base + image.init, &[])?;
         }
         for i in 0..image.init_count {
             let address = self.read_pointer(base + image.init_array + i * self.pointer_size())?;
             if address != 0 && address != self.architecture().pointer_mask() {
-                self.call_function(address, &[])?;
+                self.call_function_with(handler, address, &[])?;
             }
         }
         Ok(())
@@ -286,6 +303,25 @@ impl Emulator {
         )
         .unwrap_or_else(|| format!("0x{address:x}"))
     }
+}
+
+fn implicit_addend(image: &Image, address: u64) -> i64 {
+    let segment = image
+        .segments
+        .iter()
+        .find(|segment| address >= segment.p_vaddr && address < segment.p_vaddr + segment.p_memsz)
+        .unwrap();
+    let offset = address - segment.p_vaddr;
+    let size = segment
+        .p_filesz
+        .saturating_sub(offset)
+        .min(image.arch.pointer_size()) as usize;
+    let mut bytes = [0; 8];
+    if size != 0 {
+        let start = (segment.p_offset + offset) as usize;
+        bytes[..size].copy_from_slice(&image.bytes[start..start + size]);
+    }
+    u64::from_le_bytes(bytes) as i64
 }
 
 #[cfg(test)]

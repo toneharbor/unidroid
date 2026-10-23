@@ -6,7 +6,7 @@ fn default_object_depth() -> usize {
     1
 }
 
-fn default_tracepoint_log() -> bool {
+fn default_true() -> bool {
     true
 }
 
@@ -33,7 +33,7 @@ pub(super) enum Command {
     Tracepoint {
         at: String,
         values: Vec<String>,
-        #[serde(default = "default_tracepoint_log")]
+        #[serde(default = "default_true")]
         log: bool,
     },
     Untracepoint {
@@ -107,6 +107,14 @@ pub(super) enum Command {
     },
     Load {
         path: String,
+        #[serde(default = "default_true")]
+        constructors: bool,
+    },
+    RunConstructors {
+        module: usize,
+    },
+    HookImport {
+        name: String,
     },
     Alias {
         name: String,

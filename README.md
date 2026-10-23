@@ -122,6 +122,8 @@ emu.superclass("com/example/Base", "java/lang/Object");
 
 Now `GetSuperclass` answers, and `call_static_jni_method(.., "com/example/Sign", ..)` also finds a native method registered on `com/example/Base`. Without it, `GetSuperclass` stops and says which class to declare.
 
+See [ENVIRONMENT.md](ENVIRONMENT.md) for replacing imported C functions and running constructors yourself.
+
 ## The `unidroid` command
 
 Agents running or debugging a `.so`: read [skills/unidroid/SKILL.md](skills/unidroid/SKILL.md) for the work order and debugging tools. Read it in place, or copy `skills/unidroid/` into your agent's skills directory to install it.
@@ -256,6 +258,9 @@ Commands:
 | command | fields | result |
 |---|---|---|
 | `load` | `path` | module number |
+| `load` (optional field) | `constructors` (boolean, default `true`; `false` defers constructors) | module number |
+| `hook_import` | `name` | `null` |
+| `run_constructors` | `module` | `null` |
 | `alias` | `name`, `target` | `null` |
 | `superclass` | `class`, `superclass` | `null` |
 | `onload` | `module` | `JNI_OnLoad`'s return |
@@ -287,6 +292,8 @@ A question looks like this:
 - `op` is `call`, `get` (read a field), `set` (write a field), `new` (a constructor) or `is_assignable` (that one carries `from` and `to` instead).
 - `type` is what your answer must be, using the letters above. `V` means just `{"cmd":"answer"}`.
 - `args` are written the same way as values. For `set`, the value being written is in `args`.
+
+Hooked C calls ask `{"import":{"name":"strlen","args":["4096","0","0","0"],"original":"268439552","from":"libfoo.so+0x1234"}}`. `args` holds four ARM32 or eight ARM64 register values; it and `original` use decimal strings, and `original` is `null` if absent. Reply `{"cmd":"answer","value":"5"}` to return 5, or `{"cmd":"unhandled"}` to run the original. A malformed import answer returns an error and leaves the question open for another answer. Nested commands, including `call_function` of `original`, work while waiting; resume commands error and leave the question open. Policies have no import rules; without a driver (batch or fields), imports pass through. Record/replay includes these questions and commands.
 
 ### Answering Java calls from a file
 

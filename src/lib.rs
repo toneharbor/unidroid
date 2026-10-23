@@ -6,6 +6,8 @@ pub use checkpoint::Checkpoint;
 mod debug;
 mod dl;
 mod elf;
+mod hook;
+pub use hook::ImportCall;
 mod jni;
 mod loader;
 mod memory;
@@ -102,6 +104,7 @@ enum HostFunction {
     Vm(usize),
     Property,
     Dl(&'static str),
+    Import { name: String, original: Option<u64> },
     Unresolved { symbol: String, module: String },
 }
 
@@ -200,6 +203,7 @@ impl Emulator {
         Ok(())
     }
     fn setup_cpu(&mut self, arch: Architecture) -> Result<()> {
+        let pending_imports = std::mem::take(&mut self.host);
         self.create_cpu(arch)?;
         let uc = self.cpu_mut()?;
         uc.mem_map(TRAMPOLINE, TRAMPOLINE_SIZE, Prot::READ | Prot::EXEC)?;
@@ -265,6 +269,7 @@ impl Emulator {
             let address = self.stub(HostFunction::Dl(name))?;
             self.overrides.insert(name.into(), address);
         }
+        self.install_pending_imports(pending_imports)?;
         self.setup_jni()?;
         self.dlerror_buf = self.malloc(self.dlerror_capacity)?;
         self.trace_imports(self.trace.imports)?;

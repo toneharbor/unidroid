@@ -99,6 +99,8 @@ JNIEnv->GetStaticObjectField java/lang/Void->TYPELjava/lang/Class; from libjnidi
 
 ### Breakpoints, watchpoints and stops
 
+To stop inside a constructor, first call `let module = emu.load_library_without_constructors(path)?`, set the breakpoint, then call `emu.run_constructors(module, &mut handler)?`. Pending dependencies run depth first before the module's `DT_INIT` and `DT_INIT_ARRAY`. Stops reach `handler.stopped`, and hooked imports reach `handler.import`. Ordinary `load_library` uses `()` for constructors, so stops auto-continue and imports pass through to their originals.
+
 `emu.add_breakpoint(address)?` stops before the instruction at that address. `emu.remove_breakpoint(address)?` removes it and errors if none is there. Both clear the Thumb bit; adding the same address twice keeps one breakpoint. Breakpoints also work on code that already ran and in any guest thread. With no breakpoints, watchpoints, tracepoints, step or finish active, no debugger hook is installed.
 
 A Thumb `IT` instruction and the instructions it makes conditional run as one step. A breakpoint hit inside an `IT` block is reported at the first instruction after the block, or at the next Unicorn stop if the block branches away; a conditional instruction that is skipped does not hit a breakpoint. Watchpoint hits follow the same rule: `Stop.address` is where execution really stopped, while `WatchHit.pc` stays the instruction that accessed memory.
@@ -263,6 +265,8 @@ function libfoo.so+0x1800 (mix)(0x7, 0x8, 0x40001000, 0xa) from libfoo.so+0x1234
 
 Syscall events show the guest number, arguments, signed result, errno name, instruction location and caller. Import events show calls from app libraries into other modules, including dl, property and unresolved-symbol stubs. The previous executed block in the same guest thread must be in an app library; app PLT stubs count, but internal tail calls within a dependency do not. The caller location comes from lr. They show the first four argument registers, with known C strings quoted and capped at 256 bytes. Dependencies next to an app count as app libraries; dependencies found in rootfs do not.
 
+Import hooks appear in import traces under their symbol name with module `<hook>`. Returning `None` can then enter the original export; it preserves the original call's stack and floating-point registers. Hooks and saved originals are restored by rewind, including into a fresh emulator.
+
 All diagnostics go through `Event`: `Jni`, `JniCall`, `Syscall`, `Call`, `FunctionCall`, `Instruction`, `Watch`, `Tracepoint` or `Warning`. By default they print their text form on stderr. Capture them with the builder's `on_event`:
 
 ```rust
@@ -299,6 +303,10 @@ Change traces during a session with `{"cmd":"trace","jni":true,"syscalls":true,"
 Heap and object replies use decimal strings for addresses, sizes, offsets and word values. Thread IDs are numbers and `live` is a boolean. Allocation `backtrace` and `freed` frames use the same JSON as a crash’s `backtrace`; `freed` is null while the block is live and also for a retired record whose release was not observed. A field’s `target` is null, `{kind:"block", address, offset, object}`, or `{kind:"location", location}`. Referrers have `{address, location, block, object}`; `block` is a decimal string or null, and `object` is the nested object or null. Fields without a printable string have `string: null`. For example, enable `{"cmd":"trace","heap":true}`, run the call, then inspect `{"cmd":"heap"}` or `{"cmd":"object","at":"0x50001010","depth":1}`.
 
 ### Stops and questions
+
+Serve `load` runs constructors with the session as handler, so constructor breakpoints and hooked imports reach the driver. To set a breakpoint after mapping but before execution, send `{"cmd":"load","path":"libfoo.so","constructors":false}`, then `break`, then `{"cmd":"run_constructors","module":0}`. The last command returns `{"ok":null}` after pending constructors finish; the module number is the one returned by `load`.
+
+Import questions use `{"import":{"name":"strlen","args":["4096","0","0","0"],"original":"268439552","from":"libfoo.so+0x1234"}}`; the example is ARM32, and ARM64 has eight arguments. Reply with `{"cmd":"answer","value":"5"}` or `{"cmd":"unhandled"}`. `unhandled` tail-jumps to the original, or fails with the symbol and caller when `original` is `null`. As with JNI questions, nested commands work, including calling `original`; resume commands error and keep the import question open. Answer or resume the innermost question first. The command list is in [README.md](README.md); the Rust hook example is in [ENVIRONMENT.md](ENVIRONMENT.md).
 
 Use `{"cmd":"watch","at":"0x40001000","size":4,"kind":"write","log":true}` to record hits throughout a call. Log hits go to stderr as text or JSON according to `--log-format`, just like traces, and never ask a `break` question. Omitting `log` or setting it to `false` selects stop mode.
 

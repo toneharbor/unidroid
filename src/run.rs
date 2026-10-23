@@ -1,3 +1,4 @@
+use crate::hook::HostResult;
 use crate::{CpuData, Emulator, HostFunction, JniHandler, RETURN, Result, TRAMPOLINE, threads};
 use unicorn_engine::unicorn_const::{MemType, uc_error};
 
@@ -187,11 +188,20 @@ impl Emulator {
                     pc = self.switch_thread(pc)?;
                     continue;
                 }
-                self.write_host_result(result?)?;
-                if stepping {
-                    pc = self.lr()?;
-                    let reg = self.architecture().pc();
-                    self.cpu_mut()?.reg_write(reg, pc)?;
+                match result? {
+                    HostResult::Return(value) => {
+                        self.write_host_result(value)?;
+                        if stepping {
+                            pc = self.lr()?;
+                            let reg = self.architecture().pc();
+                            self.cpu_mut()?.reg_write(reg, pc)?;
+                        }
+                    }
+                    HostResult::Jump(address) => {
+                        pc = address;
+                        let reg = self.architecture().pc();
+                        self.cpu_mut()?.reg_write(reg, pc)?;
+                    }
                 }
             } else {
                 let args = [
@@ -257,8 +267,11 @@ impl Emulator {
         &mut self,
         function: HostFunction,
         handler: &mut dyn JniHandler,
-    ) -> Result<u64> {
-        match function {
+    ) -> Result<HostResult> {
+        let result = match function {
+            HostFunction::Import { name, original } => {
+                return self.import_call(&name, original, handler);
+            }
             HostFunction::Jni(index) => self.jni_function(index, handler),
             HostFunction::Vm(index) => self.vm_function(index),
             HostFunction::Property => {
@@ -274,8 +287,9 @@ impl Emulator {
                 self.location(self.lr()?)
             )
             .into()),
-            HostFunction::Dl(name) => self.dl_function(name),
-        }
+            HostFunction::Dl(name) => self.dl_function(name, handler),
+        };
+        result.map(HostResult::Return)
     }
 }
 

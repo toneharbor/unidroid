@@ -11,6 +11,9 @@ pub struct JniCall<'a> {
 }
 
 pub trait JniHandler {
+    fn import(&mut self, _emu: &mut Emulator, _call: &crate::ImportCall<'_>) -> Option<u64> {
+        None
+    }
     fn stopped(&mut self, _emu: &mut Emulator, _stop: &crate::Stop) -> crate::Resume {
         crate::Resume::Continue
     }

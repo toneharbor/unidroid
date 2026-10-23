@@ -3,11 +3,13 @@ use crate::Resume;
 
 pub(super) enum Question<'a> {
     Jni { kind: u8, context: &'a str },
+    Import,
     Stop,
 }
 
 pub(super) enum Reply {
     Jni(Option<JniValue>),
+    Import(Option<u64>),
     Resume(Resume),
 }
 
@@ -43,12 +45,19 @@ impl<R: BufRead, W: Write> Session<R, W> {
                 Question::Jni { .. } => {
                     "stdin closed while a JNI question was waiting for an answer"
                 }
+                Question::Import => {
+                    "stdin closed while an import question was waiting for an answer"
+                }
                 Question::Stop => {
                     "stdin closed while a breakpoint stop was waiting for a resume command"
                 }
             })?;
             let error = match command {
                 Ok(Command::Answer { value }) => match question {
+                    Question::Import => match serde_json::from_value::<wire::Address>(value) {
+                        Ok(value) => return Ok(Reply::Import(Some(value.0))),
+                        Err(error) => format!("import answer: {error}"),
+                    },
                     Question::Jni { kind, context } => {
                         return Ok(Reply::Jni(match decode(kind, &value, context) {
                             Ok(value) => Some(value),
@@ -59,13 +68,14 @@ impl<R: BufRead, W: Write> Session<R, W> {
                         }));
                     }
                     Question::Stop => {
-                        "breakpoint stop expects continue, step, finish, return or abort"
+                        "breakpoint stop expects continue, step, finish, return or abort".into()
                     }
                 },
                 Ok(Command::Unhandled) => match question {
                     Question::Jni { .. } => return Ok(Reply::Jni(None)),
+                    Question::Import => return Ok(Reply::Import(None)),
                     Question::Stop => {
-                        "breakpoint stop expects continue, step, finish, return or abort"
+                        "breakpoint stop expects continue, step, finish, return or abort".into()
                     }
                 },
                 Ok(
@@ -85,17 +95,15 @@ impl<R: BufRead, W: Write> Session<R, W> {
                             _ => unreachable!(),
                         }));
                     }
-                    Question::Jni { .. } => "JNI question expects answer or unhandled",
+                    Question::Jni { .. } => "JNI question expects answer or unhandled".into(),
+                    Question::Import => "import question expects answer or unhandled".into(),
                 },
                 command => {
                     self.respond(emu, command)?;
                     continue;
                 }
             };
-            self.write(Response::Error {
-                error: error.into(),
-                crash: None,
-            })?;
+            self.write(Response::Error { error, crash: None })?;
         }
     }
 }

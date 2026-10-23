@@ -9,6 +9,7 @@ pub(super) enum Response {
     #[serde(rename = "ok")]
     Registers(Registers),
     Jni(Value),
+    Import(Value),
     Break(Break),
     #[serde(untagged)]
     Error {

@@ -274,7 +274,21 @@ impl<R: BufRead, W: Write> Session<R, W> {
                 })?;
                 Value::Null
             }
-            Command::Load { path } => json!(emu.load_library(path)?.0),
+            Command::Load { path, constructors } => {
+                let module = emu.load_library_without_constructors(path)?;
+                if constructors {
+                    emu.run_constructors(module, self)?;
+                }
+                json!(module.0)
+            }
+            Command::RunConstructors { module } => {
+                emu.run_constructors(Module(module), self)?;
+                Value::Null
+            }
+            Command::HookImport { name } => {
+                emu.hook_import(name)?;
+                Value::Null
+            }
             Command::Alias { name, target } => {
                 emu.symbol_alias(name, target);
                 Value::Null

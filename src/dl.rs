@@ -1,4 +1,4 @@
-use crate::{Emulator, Module, Result};
+use crate::{Emulator, JniHandler, Module, Result};
 use std::path::Path;
 
 impl Emulator {
@@ -25,7 +25,7 @@ impl Emulator {
         self.set_dlerror(&format!("invalid handle: 0x{handle:x}"))
     }
 
-    pub(super) fn dl_function(&mut self, name: &str) -> Result<u64> {
+    pub(super) fn dl_function(&mut self, name: &str, handler: &mut dyn JniHandler) -> Result<u64> {
         let a = self.reg(0)?;
         let b = self.reg(1)?;
         match name {
@@ -40,6 +40,7 @@ impl Emulator {
                     return Ok(0);
                 };
                 if let Some(i) = self.modules.iter().position(|m| m.name == name) {
+                    self.run_constructors(Module(i), handler)?;
                     self.modules[i].dl_references += 1;
                     return Ok(i as u64 + 1);
                 }
@@ -54,7 +55,10 @@ impl Emulator {
                     return Ok(0);
                 };
                 let context = self.cpu()?.context_init()?;
-                let result = self.load_library_internal(&path);
+                let result = self.load_library_internal(&path).and_then(|module| {
+                    self.run_constructors(module, handler)?;
+                    Ok(module)
+                });
                 self.cpu_mut()?.context_restore(&context)?;
                 let module = result?;
                 self.modules[module.0].dl_references += 1;
@@ -133,7 +137,8 @@ impl Emulator {
             }
             "dl_iterate_phdr" => {
                 for i in 0..self.modules.len() {
-                    let result = self.call_function(
+                    let result = self.call_function_with(
+                        handler,
                         a,
                         &[self.modules[i].info_ptr, 4 * self.pointer_size(), b],
                     )?;
