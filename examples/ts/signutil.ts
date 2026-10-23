@@ -28,38 +28,25 @@ async function request(message: object): Promise<Value> {
   }
 }
 
-const entries = new Map<string, Value>();
-let keys: Value;
-let keySet: Value;
-
-async function handle(q: Question): Promise<Value | undefined> {
-  if (q.op !== "call") return undefined;
-  switch (`${q.class}->${q.name}${q.signature}`) {
-    case "java/util/HashMap->size()I": return entries.size;
-    case "java/util/HashMap->keySet()Ljava/util/Set;": return keySet;
-    case "java/util/Set->toArray()[Ljava/lang/Object;": return keys;
-    case "java/util/HashMap->get(Ljava/lang/Object;)Ljava/lang/Object;": {
-      const key = await request({ cmd: "string", handle: q.args[0] });
-      return entries.get(String(key)) ?? 0;
-    }
-  }
+async function handle(_q: Question): Promise<Value | undefined> {
+  // Answer app-specific Java calls here. Standard map calls are built in.
+  return undefined;
 }
 
 try {
   const module = await request({
     cmd: "load", path: "tests/fixtures/armeabi-v7a/libsignutil.so",
   });
-  const keyHandles: Value[] = [];
+  const entries: Value[][] = [];
   for (const key of ["a", "b"]) {
-    keyHandles.push(await request({ cmd: "new_string", value: key }));
-    entries.set(key, await request({ cmd: "new_array", type: "B", base64: "Yg==" }));
+    const keyHandle = await request({ cmd: "new_string", value: key });
+    const value = await request({ cmd: "new_array", type: "B", base64: "Yg==" });
+    entries.push([keyHandle, value]);
   }
-  keys = await request({ cmd: "new_object_array", class: "java/lang/Object", items: keyHandles });
-  keySet = await request({ cmd: "new_object", class: "java/util/Set" });
   await request({ cmd: "onload", module });
   const aa = await request({ cmd: "new_string", value: "aa" });
   const bb = await request({ cmd: "new_string", value: "bb" });
-  const map = await request({ cmd: "new_object", class: "java/util/HashMap" });
+  const map = await request({ cmd: "new_java_map", class: "java/util/HashMap", entries });
   const cc = await request({ cmd: "new_string", value: "cc" });
   const result = await request({
     cmd: "call_static",
@@ -68,7 +55,7 @@ try {
     args: [aa, bb, map, cc, 10],
   });
   const sign = await request({ cmd: "string", handle: result });
-  for (const handle of [aa, bb, map, cc, result, keys, keySet, ...keyHandles, ...entries.values()]) {
+  for (const handle of [aa, bb, map, cc, result, ...entries.flat()]) {
     await request({ cmd: "release", handle });
   }
   console.log(`sign: ${sign}`);

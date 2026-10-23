@@ -183,6 +183,27 @@ pub(super) enum Command {
     ObjectArray {
         handle: u64,
     },
+    NewJavaMap {
+        class: String,
+        entries: Vec<[u64; 2]>,
+    },
+    JavaMap {
+        handle: u64,
+    },
+    NewJavaList {
+        class: String,
+        items: Vec<u64>,
+    },
+    JavaList {
+        handle: u64,
+    },
+    NewBoxed {
+        r#type: String,
+        value: Value,
+    },
+    Unboxed {
+        handle: u64,
+    },
     NewObject {
         class: String,
     },

@@ -355,6 +355,48 @@ impl<R: BufRead, W: Write> Session<R, W> {
                     .map(|handle| handle.0)
                     .collect::<Vec<_>>()
             ),
+            Command::NewJavaMap { class, entries } => {
+                let entries = entries
+                    .into_iter()
+                    .map(|[key, value]| (Handle(key), Handle(value)))
+                    .collect::<Vec<_>>();
+                let handle = emu.new_java_map(&class, &entries)?;
+                json!(handle.0)
+            }
+            Command::JavaMap { handle } => {
+                let entries = emu
+                    .java_map(Handle(handle))?
+                    .into_iter()
+                    .map(|(key, value)| [key.0, value.0])
+                    .collect::<Vec<_>>();
+                json!(entries)
+            }
+            Command::NewJavaList { class, items } => {
+                let items = items.into_iter().map(Handle).collect::<Vec<_>>();
+                let handle = emu.new_java_list(&class, &items)?;
+                json!(handle.0)
+            }
+            Command::JavaList { handle } => {
+                let items = emu
+                    .java_list(Handle(handle))?
+                    .into_iter()
+                    .map(|handle| handle.0)
+                    .collect::<Vec<_>>();
+                json!(items)
+            }
+            Command::NewBoxed { r#type, value } => {
+                if !matches!(r#type.as_str(), "Z" | "B" | "C" | "S" | "I" | "J" | "F" | "D") {
+                    return Err(format!("expected boxed type Z B C S I J F D, got {type}").into());
+                }
+                let value = decode(r#type.as_bytes()[0], &value, "boxed value")?;
+                let handle = emu.new_boxed(value)?;
+                json!(handle.0)
+            }
+            Command::Unboxed { handle } => {
+                let value = emu.unboxed(Handle(handle))?;
+                let r#type = char::from(value.type_code()).to_string();
+                json!({"type": r#type, "value": encode(value)})
+            }
             Command::NewObject { class } => json!(emu.new_object(&class, ()).0),
             Command::Class { name } => json!(emu.class(&name).0),
             Command::Release { handle } => {

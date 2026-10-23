@@ -1,6 +1,6 @@
 use crate::jni::handler::dispatch;
 use crate::jni::value::decode;
-use crate::jni::{Handle, JniCall, JniHandler, JniValue, MEMBER_ID_BASE, Member, Object};
+use crate::jni::{Handle, JniCall, JniHandler, JniValue, MEMBER_ID_BASE, Member};
 use crate::{Emulator, Result};
 
 pub(super) fn member_id(index: usize, b: u64, c: u64) -> Option<u64> {
@@ -86,38 +86,10 @@ impl Emulator {
                         from: self.location(self.lr()?),
                     });
                 }
-                let result = if constructor {
-                    if member.class == "java/lang/String"
-                        && member.signature == "([BLjava/lang/String;)V"
-                    {
-                        self.validate_ref(&function, args[0].object().0, 3)?;
-                        self.validate_ref(&function, args[1].object().0, 2)?;
-                        let bytes = self.byte_array(args[0].object())?;
-                        let charset = self
-                            .string(args[1].object())?
-                            .to_ascii_lowercase()
-                            .replace('-', "");
-                        let text = match charset.as_str() {
-                            "utf8" => Some(String::from_utf8_lossy(&bytes).into_owned()),
-                            "iso88591" => Some(bytes.iter().map(|&b| char::from(b)).collect()),
-                            "usascii" => Some(
-                                bytes
-                                    .iter()
-                                    .map(|&b| if b < 128 { char::from(b) } else { '\u{fffd}' })
-                                    .collect(),
-                            ),
-                            _ => None,
-                        };
-                        text.map(|text| {
-                            JniValue::Object(
-                                self.insert_object(Object::String(text.encode_utf16().collect())),
-                            )
-                        })
-                    } else {
-                        handler.new_object(self, &call).map(JniValue::Object)
-                    }
-                } else {
-                    dispatch(handler, self, &call, operation, kind)
+                let result = match crate::jni::java::dispatch(self, &call, operation, &function)? {
+                    Some(value) => Some(value),
+                    None if constructor => handler.new_object(self, &call).map(JniValue::Object),
+                    None => dispatch(handler, self, &call, operation, kind),
                 };
                 let value = result.ok_or_else(|| {
                     self.jni_error(&function, &member.class, &member.name, &member.signature)

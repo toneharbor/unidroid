@@ -26,7 +26,7 @@ impl Clone for JniState {
         }
         let mut seen = HashMap::new();
         let mut pending = Vec::new();
-        let copied = Self {
+        let mut copied = Self {
             objects: self
                 .objects
                 .iter()
@@ -55,6 +55,8 @@ impl Clone for JniState {
             member_ids: self.member_ids.clone(),
             natives: self.natives.clone(),
             next_handle: self.next_handle,
+            identities: HashMap::new(),
+            next_identity: self.next_identity,
             scope: self.scope,
             env: self.env,
             vm: self.vm,
@@ -64,13 +66,21 @@ impl Clone for JniState {
         };
         while let Some(object) = pending.pop() {
             let mut value = object.borrow().clone();
-            if let Object::ObjectArray(items, _) = &mut value {
-                for item in items.iter_mut().flatten() {
+            value.references(|item| {
+                if let Some(item) = item {
                     *item = copy(item, &mut seen, &mut pending);
                 }
-            }
+            });
             *seen[&Rc::as_ptr(&object)].borrow_mut() = value;
         }
+        copied.identities = seen
+            .iter()
+            .filter_map(|(old, new)| {
+                self.identities
+                    .get(old)
+                    .map(|(_, id)| (Rc::as_ptr(new), (Rc::downgrade(new), *id)))
+            })
+            .collect();
         copied
     }
 }
@@ -81,7 +91,7 @@ impl JniState {
 }
 impl Drop for JniState {
     fn drop(&mut self) {
-        // Each state owns its graph. Break array cycles when replacing or dropping it.
+        // Each state owns its graph. Break object cycles when replacing or dropping it.
         let mut pending: Vec<_> = self
             .objects
             .values()
@@ -90,16 +100,31 @@ impl Drop for JniState {
             .collect();
         let mut seen = HashSet::new();
         while let Some(object) = pending.pop() {
-            if seen.insert(Rc::as_ptr(&object))
-                && let Object::ObjectArray(items, _) = &mut *object.borrow_mut()
-            {
-                pending.extend(std::mem::take(items).into_iter().flatten());
+            if seen.insert(Rc::as_ptr(&object)) {
+                object
+                    .borrow_mut()
+                    .references(|item| pending.extend(item.take()));
             }
         }
     }
 }
 
 impl Emulator {
+    pub(super) fn identity_hash(&mut self, object: &Rc<RefCell<Object>>) -> i32 {
+        if let Some((_, id)) = self.jni.identities.get(&Rc::as_ptr(object)) {
+            return *id;
+        }
+        // Weak references prevent address reuse; discard dead records before assigning another hash.
+        self.jni
+            .identities
+            .retain(|_, (object, _)| object.strong_count() != 0);
+        self.jni.next_identity = self.jni.next_identity.wrapping_add(1);
+        let id = self.jni.next_identity;
+        self.jni
+            .identities
+            .insert(Rc::as_ptr(object), (Rc::downgrade(object), id));
+        id
+    }
     pub(super) fn insert_ref(&mut self, object: Rc<RefCell<Object>>, scope: usize) -> Handle {
         let handle = loop {
             self.jni.next_handle = self.jni.next_handle % (MEMBER_ID_BASE - 1) + 1;
@@ -121,7 +146,7 @@ impl Emulator {
         let scope = self.jni.scope;
         self.insert_ref(Rc::new(RefCell::new(object)), scope)
     }
-    fn insert_api_object(&mut self, object: Object) -> Handle {
+    pub(super) fn insert_api_object(&mut self, object: Object) -> Handle {
         self.insert_ref(Rc::new(RefCell::new(object)), 0)
     }
     pub(super) fn jni_object(&self, handle: Handle) -> Result<Rc<RefCell<Object>>> {

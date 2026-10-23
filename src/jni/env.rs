@@ -125,6 +125,8 @@ impl Emulator {
                 Ok(
                     if to == "java/lang/Object" || self.class_chain(&from).contains(&to.as_str()) {
                         1
+                    } else if let Some(answer) = super::java::assignable(self, &from, &to) {
+                        answer as u64
                     } else {
                         handler
                             .is_assignable(self, &from, &to)

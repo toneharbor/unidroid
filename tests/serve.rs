@@ -76,6 +76,8 @@ mod debug;
 mod errors;
 #[path = "serve/hooks.rs"]
 mod hooks;
+#[path = "serve/java.rs"]
+mod java;
 #[path = "serve/policy.rs"]
 mod policy;
 #[path = "serve/record.rs"]

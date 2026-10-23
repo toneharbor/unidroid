@@ -39,15 +39,6 @@ impl JniHandler for JnaHandler {
         };
         Some(emu.class(name))
     }
-    fn new_object(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<Handle> {
-        if call.class == "java/lang/String" && call.name == "<init>" && call.signature == "([B)V" {
-            Some(emu.new_string(&String::from_utf8_lossy(
-                &emu.byte_array(call.args[0].object()).ok()?,
-            )))
-        } else {
-            None
-        }
-    }
 }
 
 pub struct Output {

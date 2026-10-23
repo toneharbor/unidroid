@@ -29,6 +29,20 @@ impl From<i64> for JniValue {
     }
 }
 impl JniValue {
+    pub(crate) fn type_code(self) -> u8 {
+        match self {
+            Self::Object(_) => b'L',
+            Self::Boolean(_) => b'Z',
+            Self::Byte(_) => b'B',
+            Self::Char(_) => b'C',
+            Self::Short(_) => b'S',
+            Self::Int(_) => b'I',
+            Self::Long(_) => b'J',
+            Self::Float(_) => b'F',
+            Self::Double(_) => b'D',
+            Self::Void => b'V',
+        }
+    }
     pub(crate) fn kind(self) -> u8 {
         match self {
             Self::Long(_) => b'J',

@@ -3,6 +3,7 @@ use crate::{Emulator, Module, Result};
 
 mod arrays;
 mod calls;
+mod java;
 mod natives;
 mod objects;
 mod strings;

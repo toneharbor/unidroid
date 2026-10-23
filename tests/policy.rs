@@ -10,6 +10,8 @@ fn call(signature: &str) -> JniCall<'_> {
     }
 }
 
+#[path = "policy/collections.rs"]
+mod collections;
 #[path = "policy/errors.rs"]
 mod errors;
 #[path = "policy/matching.rs"]

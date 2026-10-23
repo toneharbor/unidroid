@@ -2,6 +2,64 @@
 
 unidroid emulates Android for native libraries; you can replace imported C calls with host logic.
 
+## Built-in Java classes
+
+Common Java calls are answered before `JniHandler`, policy rules, `Probe` and the serve driver. Instance calls use the receiver's built-in kind plus the method name and JNI signature, so looking up `get` on `java/util/Map` works on a built-in HashMap. Constructors, static methods and static fields use the class name. Uncovered methods, charsets and digest algorithms still reach your handler. Objects created with `new_object(class, value)` remain opaque, even when their class is `java/util/HashMap`; their calls still reach your handler.
+
+| class | built-in calls |
+|---|---|
+| `java/lang/Object` | `getClass`, `hashCode`, `equals` on built-in objects and strings; `toString` on strings, boxes, StringBuilder, maps and lists when their elements have built-in text |
+| `java/lang/Class` | `getName` on class objects, using dots, such as `java.lang.String` |
+| `java/lang/String` | empty, byte-array (with optional range and charset name), string-copy and char-array constructors; `getBytes`, `length`, `isEmpty`, `charAt`, `toCharArray`, `equals`, `equalsIgnoreCase`, `hashCode`, `compareTo`, `toString`, `startsWith`, `endsWith`, `contains`, both `indexOf` forms, both `substring` forms, `toLowerCase`, `toUpperCase`, `trim`, `concat`, `replace`; static `valueOf` for int, long, boolean, char and Object |
+| `java/lang/CharSequence` | `length` and `toString` on strings and StringBuilders |
+| `java/nio/charset/Charset`, `StandardCharsets` | `Charset.forName`, `name`; static fields `UTF_8`, `US_ASCII`, `ISO_8859_1`, `UTF_16LE`, `UTF_16BE` |
+| `java/lang/StringBuilder` | empty, string and capacity constructors; `append` for String, Object, int, long, char and boolean; `length`, `toString` |
+| `java/lang/Boolean`, `Byte`, `Character`, `Short`, `Integer`, `Long`, `Float`, `Double` | primitive constructors and static `valueOf`; matching primitive accessor and `toString`; `intValue` and `longValue` on Byte, Short, Integer and Long; static `Integer.parseInt` (optional radix), `Long.parseLong`, `Integer.toString`, `Long.toString`, `Integer.toHexString` |
+| `java/util/HashMap`, `LinkedHashMap`, `TreeMap` | empty constructors; capacity constructors on HashMap and LinkedHashMap; `put`, `get`, `getOrDefault`, `containsKey`, `remove(Object)`, `size`, `isEmpty`, `clear`, `keySet`, `values`, `entrySet`; entries answer `getKey`, `getValue` |
+| `java/util/HashSet` and map views | empty HashSet constructor and `add`; `contains`, `size`, `isEmpty`, `iterator`, `toArray()` on sets and views |
+| `java/util/ArrayList`, `LinkedList` | empty constructors; ArrayList capacity constructor; both `add` forms, `get`, `set`, `remove(int)`, `size`, `isEmpty`, `contains`, `indexOf`, `clear`, `iterator`, `toArray()` |
+| `java/util/Iterator` | `hasNext`, `next` |
+| `java/security/MessageDigest` | static `getInstance`; `update(byte[])`, `update(byte[], offset, length)`, `update(byte)`; `digest()`, `digest(byte[])`, `reset`, `getAlgorithm` |
+| `android/util/Base64` | static `encodeToString(byte[], flags)`, `encode(byte[], flags)`, `decode(String, flags)`, `decode(byte[], flags)` |
+
+String lengths and indexes count UTF-16 units, including each half of a surrogate pair. Supported charsets are UTF-8 (the default), US-ASCII, ISO-8859-1, UTF-16LE and UTF-16BE; names ignore case, hyphens and underscores. Object forms of String `valueOf` and StringBuilder `append` use built-in `toString`, with `"null"` for null. Unknown element text falls through to your handler. Map and list text uses Java's `{key=value, ...}` and `[item, ...]` forms.
+
+String keys compare by UTF-16 content; boxed keys compare by primitive type and Java value, including Java's NaN and signed-zero rules. Other keys compare by object identity, including across different handles to the same object. HashMap and HashSet use Java string and box hashes, a power-of-two table starting at 16 by default, a 0.75 load factor and bucket order. Entries within each bucket keep insertion order, including through resizing; removal and reinsertion moves a key to the end of its bucket. Long buckets are not converted to trees. LinkedHashMap keeps insertion order. TreeMap sorts strings by UTF-16 and comparable boxed keys by value; unsupported comparisons fall through to the handler, or return an error from `new_java_map`.
+
+Map views (`keySet`, `values`, `entrySet`) and iterators are **snapshots taken when created**. This differs from Java's live views. They keep references to their elements. Releasing an element's host handle does not remove it from a collection. All built-in object state is copied by checkpoints, preserving aliases and cycles; rewind restores collection contents, iterator positions, StringBuilder contents and digest state.
+
+`IsInstanceOf` and `IsAssignableFrom` recognize built-in class hierarchies after explicit `superclass` declarations. A declared app subclass of HashMap is also a Map. Built-in sources answer false for unrelated `java/` or `javax/` targets; app-specific targets still reach `is_assignable`. `GetSuperclass` continues to use explicit declarations.
+
+Digests support MD5, SHA-1 (also SHA1 and SHA), SHA-224, SHA-256, SHA-384 and SHA-512, ignoring case. `digest` returns bytes and resets the digest. `getAlgorithm` preserves the requested name. Base64 flags are Android's `DEFAULT` 0, `NO_PADDING` 1, `NO_WRAP` 2, `CRLF` 4 and `URL_SAFE` 8. Wrapped encoding breaks after 76 characters; nonempty output ends in exactly one line break, and empty output has none. Decoding accepts padded or unpadded input and skips non-alphabet bytes as Android does. Invalid padding throws `IllegalArgumentException` with `bad base-64`.
+
+Data errors set pending JNI exceptions and return zero or null. These include `NumberFormatException` for invalid numbers, `IndexOutOfBoundsException` for invalid list indexes and `NoSuchElementException` for exhausted iterators. Native code can inspect and clear them with JNI exception functions.
+
+Create and inspect built-in collections and boxes from Rust:
+
+```rust
+pub fn new_java_map(&mut self, class: &str, entries: &[(Handle, Handle)]) -> Result<Handle>;
+pub fn java_map(&mut self, handle: Handle) -> Result<Vec<(Handle, Handle)>>;
+pub fn new_java_list(&mut self, class: &str, items: &[Handle]) -> Result<Handle>;
+pub fn java_list(&mut self, handle: Handle) -> Result<Vec<Handle>>;
+pub fn new_boxed(&mut self, value: JniValue) -> Result<Handle>;
+pub fn unboxed(&self, handle: Handle) -> Result<JniValue>;
+```
+
+Map classes are `java/util/HashMap`, `java/util/LinkedHashMap` and `java/util/TreeMap`; list classes are `java/util/ArrayList` and `java/util/LinkedList`. Entries are inserted in the supplied order. `new_boxed` accepts the eight primitive `JniValue` variants and rejects `Object` and `Void`. Wrong classes, invalid handles and wrong object kinds return errors. `java_map` returns iteration order; `java_list` returns list order. Both create fresh host handles to the existing elements, with `Handle(0)` for null. Release the returned handles when done.
+
+```rust
+let key = emu.new_string("count");
+let value = emu.new_boxed(JniValue::Int(2))?;
+let map = emu.new_java_map("java/util/HashMap", &[(key, value)])?;
+let entries = emu.java_map(map)?;
+assert_eq!(emu.unboxed(entries[0].1)?, JniValue::Int(2));
+for handle in [key, value, map, entries[0].0, entries[0].1] {
+    emu.release(handle);
+}
+```
+
+Serve has the same six command names; see the command table and recursive map/list policy values in [README.md](README.md). The SignUtil Rust, Python and TypeScript examples use built-in maps and need no map handlers.
+
 ## Files and system calls
 
 Guest `write` and `writev` to fd 1 (stdout) and fd 2 (stderr) emit `Event::Output { fd, text }` even with tracing off. Each call emits one event, with `writev` buffers concatenated in order before lossy UTF-8 decoding, and returns the number of bytes accepted. Both calls accept at most 33554431 bytes, the same limit as `getrandom` and random-device reads; `writev` shares this limit across entries and can stop partway through an entry. The default event printer writes to host stderr; the builder's `on_event` can capture the output. Text events use `stdout: TEXT` or `stderr: TEXT` and drop one trailing newline; JSON uses `{"event":"output","fd":1,"text":"hello\n"}` and preserves the text. See [DEBUGGING.md](DEBUGGING.md) for events.

@@ -48,7 +48,7 @@ The crate doesn't include `rootfs`. Copy the `rootfs` directory from this reposi
 ```rust
 use unidroid::{Emulator, JniHandler, JniCall, Handle, JniValue, Trace};
 
-// Setting up the environment: whatever Java the .so asks for, you answer here.
+// Answer app-specific Java calls here.
 struct Env;
 impl JniHandler for Env {
     fn call_static_object_method(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<Handle> {
@@ -92,6 +92,8 @@ unhandled JNI call: CallStaticObjectMethodV java/lang/System->getProperty(Ljava/
 
 Add the matching method to `JniHandler` and run again. It's the same idea as setting up the environment in unidbg.
 
+See [ENVIRONMENT.md](ENVIRONMENT.md) for built-in Java classes.
+
 For crash reports, debugger controls, memory inspection and traces, see [the library debugging reference](DEBUGGING.md#library). [Checkpoints and rewind](DEBUGGING.md#checkpoints-and-rewind) let you try inputs from one prepared state or copy it into independent emulators. `emu.crypto_constants()` scans mapped memory when called and names known algorithm tables and constants. It sees values stored as data, including tables made during `JNI_OnLoad`; values built by instructions and custom Base64 alphabets are not found.
 
 Enable `Trace { heap: true, ..Trace::default() }` to track libc allocations and their callers. `emu.heap()` returns allocation history; `emu.object(address, depth)` expands a live block into pointer fields, strings and referrers. Serve exposes `trace` with `heap`, `heap` and `object`. Tracked snapshots and `unidroid diff` include allocated and freed blocks. See Heap and objects in [DEBUGGING.md](DEBUGGING.md) for depth rules, host allocations and allocator limits.
@@ -113,7 +115,7 @@ emu.load_library("libd-lib.so")?;
 
 The alias is used only when no loaded library has the real name.
 
-There are no Java classes, so unidroid doesn't know which class extends which. If a library calls `GetSuperclass`, or registers a native method on a parent class and you call it through a child class, tell unidroid the parents first:
+Apart from the built-in classes, unidroid doesn't know which class extends which. If a library calls `GetSuperclass`, or registers a native method on a parent class and you call it through a child class, tell unidroid the parents first:
 
 ```rust
 emu.superclass("com/example/Sign", "com/example/Base");
@@ -142,7 +144,7 @@ It lands at `target/release/unidroid`. It has six subcommands.
 target/release/unidroid inspect --rootfs rootfs libfoo.so
 ```
 
-No code needed. It prints what the library is, which libraries it needs, its `Java_` functions, and whether it has `JNI_OnLoad`. Then it runs `JNI_OnLoad` and prints each Java call it makes (on stderr). It stops at the first one, because nothing answers it yet. Last, it lists the methods registered through `RegisterNatives` and the crypto constants found in mapped memory. Now you know what to call, which Java calls you'll have to answer and which algorithm tables to inspect.
+No code needed. It prints what the library is, which libraries it needs, its `Java_` functions, and whether it has `JNI_OnLoad`. Then it runs `JNI_OnLoad` and prints each Java call it makes (on stderr). It stops at the first call the built-ins do not answer. Last, it lists the methods registered through `RegisterNatives` and the crypto constants found in mapped memory. Now you know what to call, which Java calls you'll have to answer and which algorithm tables to inspect.
 
 For the SignUtil sample:
 
@@ -178,33 +180,27 @@ target/release/unidroid serve --rootfs rootfs
 
 Your program starts this as a child process. Then the two talk through stdin and stdout, one JSON object per line. Logs go to stderr, so they never mix with the messages.
 
-You send commands. unidroid answers each one with `{"ok": ...}` or `{"error": "..."}`. When the library calls Java in the middle of a command, unidroid sends a `{"jni": ...}` question instead, and you answer it. This is the same job `JniHandler` does in Rust, written in your own language:
+You send commands. unidroid answers each one with `{"ok": ...}` or `{"error": "..."}`. When a Java call is not covered by the built-ins or policy, unidroid sends a `{"jni": ...}` question instead, and you answer it. This is the same job `JniHandler` does in Rust, written in your own language:
 
 Part of a real run of the SignUtil example (`→` you send, `←` unidroid replies; some lines left out):
 
 ```
 → {"cmd":"load","path":"tests/fixtures/armeabi-v7a/libsignutil.so"}
 ← {"ok":0}
+   ... create keys "a" → 1, "b" → 3 and byte arrays containing "b" → 2, 4 ...
 → {"cmd":"onload","module":0}
 ← {"ok":65540}
-→ {"cmd":"new_string","value":"aa"}
+   ... create "aa" → 5, "bb" → 6 ...
+→ {"cmd":"new_java_map","class":"java/util/HashMap","entries":[[1,2],[3,4]]}
 ← {"ok":7}
-   ... bb → 8, a HashMap → 9, cc → 10 ...
-→ {"cmd":"call_static","class":"com/anjuke/mobile/sign/SignUtil","method":"getSign0(Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/String;I)Ljava/lang/String;","args":[7,8,9,10,10]}
-← {"jni":{"args":[],"class":"java/util/HashMap","name":"size","op":"call","receiver":9,"signature":"()I","static":false,"type":"I"}}
-→ {"cmd":"answer","value":2}
-   ... keySet, toArray ...
-← {"jni":{"args":[14],"class":"java/util/HashMap","name":"get","op":"call","receiver":9,"signature":"(Ljava/lang/Object;)Ljava/lang/Object;","static":false,"type":"L"}}
-→ {"cmd":"string","handle":14}
-← {"ok":"a"}
-→ {"cmd":"answer","value":2}
-   ... get("b") ...
-← {"ok":16}
-→ {"cmd":"string","handle":16}
+   ... create "cc" → 8 ...
+→ {"cmd":"call_static","class":"com/anjuke/mobile/sign/SignUtil","method":"getSign0(Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;Ljava/lang/String;I)Ljava/lang/String;","args":[5,6,7,8,10]}
+← {"ok":18}
+→ {"cmd":"string","handle":18}
 ← {"ok":"1000ed2f7e5ecd00bb4a6454e1d487b7dc7500040002000acc"}
 ```
 
-Look at the `get` question: before answering, the program sends `string` to read which key is wanted (`"a"`), then answers with the handle of that key's value. While a question is open you can send any other command like this, except `checkpoint` and `rewind`, which need the call to have ended (see [Checkpoints and rewind](DEBUGGING.md#checkpoints-and-rewind)). A command that runs library code can even bring a question of its own; answer it first. If you don't know the answer, send `{"cmd":"unhandled"}`. The command then fails with the usual `unhandled JNI call: ...` message.
+The built-in map answers `size`, `keySet`, `toArray` and `get`, so this run needs no Java answers from the driver. Map views and iterators are snapshots taken when created. While an app-specific question is open you can send other commands to inspect its arguments, except `checkpoint` and `rewind`, which need the call to have ended (see [Checkpoints and rewind](DEBUGGING.md#checkpoints-and-rewind)). A command that runs library code can even bring a question of its own; answer it first. If you don't know the answer, send `{"cmd":"unhandled"}`. The command then fails with the usual `unhandled JNI call: ...` message.
 
 A full working example in TypeScript, with no npm packages: [examples/ts/signutil.ts](examples/ts/signutil.ts). Run it with:
 
@@ -275,6 +271,12 @@ Commands:
 | `new_string` / `string` | `value` / `handle` | handle / the string |
 | `new_array` / `array` | `type` (`Z B C S I J F D`), `base64` / `handle` | handle / base64 |
 | `new_object_array` / `object_array` | `class`, `items` / `handle` | handle / list of handles |
+| `new_java_map` | `class`, `entries` (list of `[key, value]` handles) | handle |
+| `java_map` | `handle` | list of `[key, value]` handles in iteration order |
+| `new_java_list` | `class`, `items` (handles) | handle |
+| `java_list` | `handle` | list of handles |
+| `new_boxed` | `type` (`Z B C S I J F D`), `value` (using the value table) | handle |
+| `unboxed` | `handle` | `{type, value}` (using the value table) |
 | `new_object` | `class` | handle |
 | `class` | `name` | handle |
 | `release` | `handle` | `null` |
@@ -297,7 +299,7 @@ Hooked C calls ask `{"import":{"name":"strlen","args":["4096","0","0","0"],"orig
 
 ### Answering Java calls from a file
 
-Use `serve --policy java.json` or `inspect --policy java.json LIB` to reuse known Java answers. Uncovered calls still reach the serve driver. Inspect stops at the first uncovered call, or uses `Probe` defaults with `--probe`; its `Probed calls` list includes only calls that reached Probe.
+Use `serve --policy java.json` or `inspect --policy java.json LIB` to reuse known Java answers. Built-ins answer first, without consuming policy sequences. Uncovered calls still reach the serve driver. Inspect stops at the first uncovered call, or uses `Probe` defaults with `--probe`; its `Probed calls` list includes only calls that reached Probe.
 
 ```json
 {"rules": [
@@ -322,8 +324,9 @@ Policy values use the call's type letter:
 | `F D` | number |
 | `J` | decimal string, such as `"-9007199254740993"` |
 | `L` | `null`, a string (creates a new `java/lang/String`), `{"object":"class/Name"}`, or `{"array":"B","base64":"AQID"}` |
+| `L` (collections) | `{"map":"java/util/HashMap","entries":[["key","value"]]}` or `{"list":"java/util/ArrayList","items":["value",null]}`; keys, values and items are recursive `L` values |
 
-Arrays accept `Z B C S I J F D` and use the same little-endian bytes as serve's `new_array`. Object, string and array answers create fresh handles each time. A constructor (`new`) needs an `L` answer even though its signature ends in `V`.
+Collection answers create fresh built-in maps and lists; supported classes and snapshot behavior are described in [ENVIRONMENT.md](ENVIRONMENT.md). Arrays accept `Z B C S I J F D` and use the same little-endian bytes as serve's `new_array`. Object, string and array answers create fresh handles each time. A constructor (`new`) needs an `L` answer even though its signature ends in `V`.
 
 In Rust, load a file with `Policy::load(path)` or JSON text with `Policy::parse(text)`, then wrap your existing handler:
 

@@ -1,6 +1,7 @@
 mod calls;
 mod env;
 mod handler;
+mod java;
 mod names;
 mod objects;
 mod value;
@@ -12,7 +13,7 @@ use std::{
     any::Any,
     cell::RefCell,
     collections::{HashMap, HashSet},
-    rc::Rc,
+    rc::{Rc, Weak},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -64,6 +65,16 @@ const ARRAY_TYPES: [PrimitiveType; 8] = [
 enum Object {
     Class(String),
     String(Vec<u16>),
+    Boxed(JniValue),
+    StringBuilder(Vec<u16>),
+    Charset(java::Charset),
+    Digest(Box<java::Digest>),
+    Map(java::Map),
+    Set(java::Map),
+    List(String, Vec<java::ObjectRef>),
+    View(String, Vec<java::ObjectRef>),
+    Entry(String, java::ObjectRef, java::ObjectRef),
+    Iterator(String, Vec<java::ObjectRef>, usize),
     Array(PrimitiveType, Vec<u8>),
     User(String, Rc<dyn Any>),
     ObjectArray(Vec<Option<Rc<RefCell<Object>>>>, String),
@@ -71,10 +82,34 @@ enum Object {
     Exception(String, Option<String>),
 }
 impl Object {
+    fn references(&mut self, mut visit: impl FnMut(&mut java::ObjectRef)) {
+        match self {
+            Self::ObjectArray(items, _)
+            | Self::List(_, items)
+            | Self::View(_, items)
+            | Self::Iterator(_, items, _) => items.iter_mut().for_each(visit),
+            Self::Map(map) | Self::Set(map) => map.references(visit),
+            Self::Entry(_, key, value) => {
+                visit(key);
+                visit(value);
+            }
+            _ => {}
+        }
+    }
     fn java_type(&self) -> String {
         match self {
             Self::Class(_) => "java/lang/Class".into(),
             Self::String(_) => "java/lang/String".into(),
+            Self::Boxed(value) => java::boxed_class(*value).unwrap().into(),
+            Self::StringBuilder(_) => "java/lang/StringBuilder".into(),
+            Self::Charset(_) => "java/nio/charset/Charset".into(),
+            Self::Digest(_) => "java/security/MessageDigest".into(),
+            Self::Map(map) => map.class().into(),
+            Self::Set(_) => "java/util/HashSet".into(),
+            Self::List(class, _)
+            | Self::View(class, _)
+            | Self::Entry(class, ..)
+            | Self::Iterator(class, ..) => class.clone(),
             Self::Array(kind, _) => kind.signature().into(),
             Self::User(class, _) | Self::Exception(class, _) => class.clone(),
             Self::ObjectArray(_, class) => format!("[L{class};"),
@@ -101,6 +136,8 @@ pub(crate) struct JniState {
     member_ids: HashMap<(String, String, String, bool, bool), u64>,
     natives: HashMap<(String, String), u64>,
     next_handle: u64,
+    identities: HashMap<*const RefCell<Object>, (Weak<RefCell<Object>>, i32)>,
+    next_identity: i32,
     scope: usize,
     env: u64,
     vm: u64,

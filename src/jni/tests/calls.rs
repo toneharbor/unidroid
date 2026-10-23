@@ -387,14 +387,6 @@ fn rust_jni_handler_can_call_guest_code_without_clobbering_the_outer_call() -> R
             self.fields += 1;
             Some(emu.class(name))
         }
-        fn new_object(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<Handle> {
-            if (call.class, call.name, call.signature) != ("java/lang/String", "<init>", "([B)V") {
-                return None;
-            }
-            Some(emu.new_string(&String::from_utf8_lossy(
-                &emu.byte_array(call.args[0].object()).ok()?,
-            )))
-        }
         fn call_static_object_method(
             &mut self,
             emu: &mut Emulator,
