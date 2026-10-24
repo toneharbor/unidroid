@@ -4,23 +4,45 @@ use std::os::unix::fs::MetadataExt;
 
 impl Node {
     pub(super) fn stat(
-        &self,
+        &mut self,
         path: &str,
         arch: Architecture,
-        fixed: Option<i64>,
-    ) -> FsResult<([u8; 128], usize)> {
+        source: &mut crate::source::Source,
+    ) -> Result<([u8; 128], usize)> {
+        let fixed = source.shared.borrow().state.fixed_clock;
         let fields = match &self.data {
-            Data::Host(host) => host_stat(&std::fs::metadata(host)?, path, fixed),
-            Data::Random => host_stat(&std::fs::metadata("/dev/urandom")?, path, fixed),
+            Data::Host(host) => {
+                host_stat(&std::fs::metadata(host).map_err(Error::from)?, path, fixed)
+            }
+            Data::Symlink(target, metadata) => {
+                let mut fields = host_stat(metadata, path, fixed);
+                fields.mode = 0o120777;
+                fields.size = target.len() as u64;
+                fields
+            }
+            Data::Random => host_stat(
+                &std::fs::metadata("/dev/urandom").map_err(Error::from)?,
+                path,
+                fixed,
+            ),
             data => {
                 let generated = matches!(data, Data::Generated(_));
                 let size = match data {
                     Data::Bytes(bytes) | Data::Generated(bytes) => bytes.len() as u64,
                     _ => 0,
                 };
-                let (sec, nanos) = fixed
-                    .map(|sec| (sec, 0))
-                    .unwrap_or_else(|| if generated { now() } else { self.changed });
+                let (sec, nanos) = if let Some(sec) = fixed {
+                    (sec, 0)
+                } else if !generated && let Some(time) = self.changed {
+                    time
+                } else {
+                    let time = source.time(crate::source::Clock::Realtime)?;
+                    let time = (time.sec, time.nsec);
+                    if !generated {
+                        self.changed = Some(time);
+                    }
+                    time
+                };
                 Stat {
                     dev: u64::from(generated),
                     ino: if generated { 1 } else { inode(path.as_bytes()) },
@@ -71,19 +93,18 @@ fn host_stat(m: &std::fs::Metadata, path: &str, fixed_clock: Option<i64>) -> Sta
     fields
 }
 impl Emulator {
-    pub(crate) fn stat_file(&self, fd: u64) -> FsResult<([u8; 128], usize)> {
+    pub(crate) fn stat_file(&mut self, fd: u64) -> Result<([u8; 128], usize)> {
+        let arch = self.architecture();
         let file = self.vfs.descriptor(fd)?.file.borrow();
-        file.node.borrow().stat(
-            &file.path,
-            self.architecture(),
-            self.source.shared.borrow().state.fixed_clock,
-        )
+        file.node
+            .borrow_mut()
+            .stat(&file.path, arch, &mut self.source)
     }
-    pub(crate) fn stat_path(&self, path: &str) -> FsResult<([u8; 128], usize)> {
-        self.guest_node(path)?.borrow().stat(
-            path,
-            self.architecture(),
-            self.source.shared.borrow().state.fixed_clock,
-        )
+    pub(crate) fn stat_path(&mut self, path: &str, follow: bool) -> Result<([u8; 128], usize)> {
+        let path = self.resolve_path(path, follow)?;
+        let arch = self.architecture();
+        self.node_at(&path)?
+            .borrow_mut()
+            .stat(&path, arch, &mut self.source)
     }
 }

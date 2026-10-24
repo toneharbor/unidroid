@@ -2,7 +2,9 @@ use super::*;
 
 impl Emulator {
     pub(crate) fn mkdir(&mut self, path: &str, mode: u32) -> FsResult<u64> {
-        match self.guest_node(path) {
+        let resolved = self.resolve_path(path, false)?;
+        let path = resolved.as_str();
+        match self.node_at(path) {
             Ok(_) => return Err(Error(17)),
             Err(Error(2)) => {}
             Err(error) => return Err(error),
@@ -18,7 +20,9 @@ impl Emulator {
         if flags & !0x200 != 0 {
             return Err(Error(22));
         }
-        let node = self.guest_node(path)?;
+        let resolved = self.resolve_path(path, false)?;
+        let path = resolved.as_str();
+        let node = self.node_at(path)?;
         let directory = node.borrow().is_dir();
         if flags & 0x200 != 0 {
             if !directory {
@@ -37,7 +41,11 @@ impl Emulator {
         Ok(0)
     }
     pub(crate) fn rename(&mut self, from: &str, to: &str) -> FsResult<u64> {
-        let source = self.guest_node(from)?;
+        let resolved_from = self.resolve_path(from, false)?;
+        let resolved_to = self.resolve_path(to, false)?;
+        let from = resolved_from.as_str();
+        let to = resolved_to.as_str();
+        let source = self.node_at(from)?;
         if from == to {
             return Ok(0);
         }
@@ -49,7 +57,7 @@ impl Emulator {
             return Err(Error(22));
         }
         self.require_parent(to)?;
-        match self.guest_node(to) {
+        match self.node_at(to) {
             Ok(target) => {
                 let target_dir = target.borrow().is_dir();
                 if directory && !target_dir {
@@ -72,9 +80,15 @@ impl Emulator {
         for (path, node, data) in moved {
             let mut entry = node.borrow_mut();
             entry.data = data;
-            entry.changed = now();
+            entry.changed = None;
             drop(entry);
             self.vfs.overlay.insert(path, node);
+        }
+        for descriptor in self.vfs.fds.values() {
+            let mut file = descriptor.file.borrow_mut();
+            if resolution::under(&file.path, from) {
+                file.path = format!("{to}{}", &file.path[from.len()..]);
+            }
         }
         Ok(0)
     }
@@ -84,14 +98,14 @@ impl Emulator {
         to: &str,
         moved: &mut Vec<(String, NodeRef, Data)>,
     ) -> FsResult<()> {
-        let node = self.guest_node(from)?;
+        let node = self.node_at(from)?;
         let directory = node.borrow().is_dir();
         let data = if directory {
             Data::Directory
         } else {
             match &node.borrow().data {
-                Data::Bytes(bytes) => Data::Bytes(bytes.clone()),
-                _ => Data::Bytes(Rc::new(node.borrow().bytes()?)),
+                Data::Bytes(_) | Data::Symlink(_, _) => node.borrow().data.clone(),
+                _ => Data::Bytes(Rc::new(node.borrow().copy_bytes()?)),
             }
         };
         moved.push((to.into(), node, data));

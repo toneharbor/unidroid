@@ -1,5 +1,5 @@
 use super::*;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
 
 pub(super) fn normalize(path: &str) -> String {
     let mut parts = Vec::new();
@@ -60,17 +60,80 @@ pub(super) fn generated_paths() -> Vec<String> {
 }
 impl Emulator {
     pub(super) fn rootfs_path(&self, path: &str) -> FsResult<PathBuf> {
-        let root = self.rootfs.canonicalize()?;
-        let host = root.join(path.trim_start_matches('/')).canonicalize()?;
-        if !host.starts_with(root) {
-            return Err(Error(2));
+        let mut host = self.rootfs.clone();
+        let mut parts = path.split('/').filter(|part| !part.is_empty()).peekable();
+        while let Some(part) = parts.next() {
+            host.push(part);
+            // A guest overlay directory can cover a host symlink. Never follow
+            // that hidden host link when looking for lower-layer children.
+            if parts.peek().is_some() {
+                let metadata = std::fs::symlink_metadata(&host)?;
+                if metadata.is_symlink() {
+                    return Err(Error(2));
+                }
+                if !metadata.is_dir() {
+                    return Err(Error(20));
+                }
+            }
         }
         Ok(host)
     }
-    pub(crate) fn guest_node(&self, path: &str) -> FsResult<NodeRef> {
-        if path != "/" && !self.guest_node(parent(path))?.borrow().is_dir() {
-            return Err(Error(20));
+    pub(super) fn resolve_path(&self, path: &str, follow_last: bool) -> FsResult<String> {
+        let mut pending = normalize(path);
+        let mut links = 0;
+        'lookup: loop {
+            if pending != "/" && !self.node_at("/")?.borrow().is_dir() {
+                return Err(Error(20));
+            }
+            let mut resolved = String::new();
+            let mut parts = pending
+                .split('/')
+                .filter(|part| !part.is_empty())
+                .peekable();
+            while let Some(part) = parts.next() {
+                let parent = resolved.clone();
+                resolved.push('/');
+                resolved.push_str(part);
+                let last = parts.peek().is_none();
+                if last && !follow_last {
+                    return Ok(resolved);
+                }
+                let node = match self.node_at(&resolved) {
+                    Ok(node) => node,
+                    Err(Error(2)) if last => return Ok(resolved),
+                    Err(error) => return Err(error),
+                };
+                let node = node.borrow();
+                if let Data::Symlink(target, _) = &node.data {
+                    links += 1;
+                    if links > 40 {
+                        return Err(Error(40));
+                    }
+                    let target = String::from_utf8_lossy(target);
+                    let target = if target.starts_with('/') {
+                        target.into_owned()
+                    } else {
+                        format!("{parent}/{target}")
+                    };
+                    pending =
+                        normalize(&format!("{target}/{}", parts.collect::<Vec<_>>().join("/")));
+                    continue 'lookup;
+                }
+                if !last && !node.is_dir() {
+                    return Err(Error(20));
+                }
+            }
+            return Ok(if resolved.is_empty() {
+                "/".into()
+            } else {
+                resolved
+            });
         }
+    }
+    pub(crate) fn guest_node(&self, path: &str) -> FsResult<NodeRef> {
+        self.node_at(&self.resolve_path(path, true)?)
+    }
+    pub(super) fn node_at(&self, path: &str) -> FsResult<NodeRef> {
         if let Some(node) = self.vfs.overlay.get(path) {
             return Ok(node.clone());
         }
@@ -115,7 +178,11 @@ impl Emulator {
             }
         }
         let host = self.rootfs_path(path)?;
-        let metadata = std::fs::metadata(&host)?;
+        let metadata = std::fs::symlink_metadata(&host)?;
+        if metadata.is_symlink() {
+            let target = std::fs::read_link(host)?.as_os_str().as_bytes().to_vec();
+            return Ok(Node::new(Data::Symlink(target, metadata), 0o120777));
+        }
         Ok(Node::new(Data::Host(host), metadata.mode()))
     }
 }

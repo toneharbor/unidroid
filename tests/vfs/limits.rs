@@ -1,5 +1,74 @@
-use super::{call, errno};
+use super::{TestRoot, call, errno};
 use unidroid::{Emulator, Result};
+
+#[test]
+fn host_copies_reject_large_files_but_truncation_skips_the_copy() -> Result<()> {
+    let root = TestRoot::new("large-host")?;
+    std::fs::create_dir(root.0.join("tree"))?;
+    let host = root.0.join("tree/large");
+    std::fs::File::create(&host)?.set_len((1 << 30) + 1)?;
+    for dir in ["lib64", "lib"] {
+        for name in ["/tree/large", "/linked"] {
+            let mut emu = Emulator::builder().rootfs(&root.0).build()?;
+            emu.add_host_file("/linked", &host)?;
+            let libc = emu.load_library(format!("rootfs/{dir}/libc.so"))?;
+            let path = emu.new_cstring(name)?;
+            let destination = emu.new_cstring("/destination")?;
+            emu.add_file("/destination", b"keep")?;
+            let result = call(&mut emu, libc, "open", &[path, 2])?;
+            errno(&mut emu, libc, result, 27)?;
+            let result = call(&mut emu, libc, "rename", &[path, destination])?;
+            errno(&mut emu, libc, result, 27)?;
+            assert_eq!(emu.file("/destination")?, b"keep");
+            let tree = emu.new_cstring("/tree")?;
+            let moved = emu.new_cstring("/moved")?;
+            let result = call(&mut emu, libc, "rename", &[tree, moved])?;
+            errno(&mut emu, libc, result, 27)?;
+            assert_eq!(call(&mut emu, libc, "access", &[path, 0])?, 0);
+            let fd = call(&mut emu, libc, "open", &[path, 0x202])?;
+            assert_ne!(fd as u32, u32::MAX);
+            assert_eq!(emu.file(name)?, b"");
+            assert_eq!(std::fs::metadata(&host)?.len(), (1 << 30) + 1);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn seeks_past_signed_range_preserve_the_offset() -> Result<()> {
+    for dir in ["lib64", "lib"] {
+        let mut emu = Emulator::builder().build()?;
+        emu.add_file("/value", b"x")?;
+        let libc = emu.load_library(format!("rootfs/{dir}/libc.so"))?;
+        let path = emu.new_cstring("/value")?;
+        let fd = call(&mut emu, libc, "open", &[path, 0])?;
+        assert_eq!(call(&mut emu, libc, "lseek", &[fd, 1, 0])?, 1);
+        let result = call(&mut emu, libc, "lseek", &[fd, u64::MAX, 0])?;
+        errno(&mut emu, libc, result, 22)?;
+        assert_eq!(call(&mut emu, libc, "lseek", &[fd, 0, 1])?, 1);
+        // ARM32 currently exposes only 32-bit lseek, not _llseek.
+        if dir == "lib" {
+            continue;
+        }
+        for whence in [1, 2] {
+            let result = call(&mut emu, libc, "lseek", &[fd, i64::MAX as u64, whence])?;
+            errno(&mut emu, libc, result, 22)?;
+            assert_eq!(call(&mut emu, libc, "lseek", &[fd, 0, 1])?, 1);
+        }
+        assert_eq!(
+            call(&mut emu, libc, "lseek", &[fd, i64::MAX as u64, 0])?,
+            i64::MAX as u64
+        );
+        let result = call(&mut emu, libc, "lseek", &[fd, 1, 1])?;
+        errno(&mut emu, libc, result, 22)?;
+        // The failed seek left INT64_MAX intact.
+        assert_eq!(
+            call(&mut emu, libc, "lseek", &[fd, (-i64::MAX) as u64, 1])?,
+            0
+        );
+    }
+    Ok(())
+}
 
 #[test]
 fn truncation_rejects_lengths_past_file_limit() -> Result<()> {

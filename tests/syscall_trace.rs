@@ -68,9 +68,9 @@ fn output_and_environment_syscalls_have_names_and_argument_counts() -> Result<()
 
 #[test]
 fn nonreturning_syscalls_emit_before_the_crash() -> Result<()> {
-    for (dir, exit_nr, open_nr, svc, ret) in [
-        ("lib64", 93, 56, 0xd4000001u32, 0xd65f03c0),
-        ("lib", 1, 322, 0xef000000, 0xe12fff1e),
+    for (dir, exit_nr, exit_group_nr, svc, ret) in [
+        ("lib64", 93, 94, 0xd4000001u32, 0xd65f03c0),
+        ("lib", 1, 248, 0xef000000, 0xe12fff1e),
     ] {
         let events = Rc::new(RefCell::new(Vec::new()));
         let sink = events.clone();
@@ -87,7 +87,7 @@ fn nonreturning_syscalls_emit_before_the_crash() -> Result<()> {
         })?;
         for (number, name, args) in [
             (exit_nr, "exit", vec![7]),
-            (open_nr, "openat", vec![0, 1, 0, 0]),
+            (exit_group_nr, "exit_group", vec![7]),
         ] {
             let mov = if dir == "lib64" {
                 0xd2800008 | (number << 5)
@@ -151,6 +151,19 @@ fn syscalls_report_guest_numbers_paths_results_and_errno() -> Result<()> {
             captured[0],
             serde_json::json!({"event":"syscall", "name":"openat", "number":number,
             "args":["0x0", "\"/missing-test-file\"", "0x80000", "0x0"], "result":-2, "errno":"ENOENT", "at":"0x20104", "from":"0x20000"})
+        );
+        drop(captured);
+        events.borrow_mut().clear();
+        assert_eq!(
+            emu.call_function(0x20100, &[0, 1, 0, 0])? as u32,
+            (-14i32) as u32
+        );
+        let captured = events.borrow();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(
+            captured[0],
+            serde_json::json!({"event":"syscall", "name":"openat", "number":number,
+            "args":["0x0", "0x1", "0x0", "0x0"], "result":-14, "errno":"EFAULT", "at":"0x20104", "from":"0x20000"})
         );
         drop(captured);
         events.borrow_mut().clear();

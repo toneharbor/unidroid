@@ -16,14 +16,39 @@ mod layers;
 mod limits;
 #[path = "vfs/paths.rs"]
 mod paths;
+#[path = "vfs/reads.rs"]
+mod reads;
+#[path = "vfs/recording.rs"]
+mod recording;
 #[path = "vfs/serve.rs"]
 mod serve;
 #[path = "vfs/stat.rs"]
 mod stat;
+#[path = "vfs/symlinks.rs"]
+mod symlinks;
 #[path = "vfs/trace.rs"]
 mod trace;
 #[path = "vfs/writes.rs"]
 mod writes;
+
+struct TestRoot(std::path::PathBuf);
+
+impl TestRoot {
+    fn new(name: &str) -> Result<Self> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path =
+            std::path::PathBuf::from(format!("target/vfs-{name}-{}-{id}", std::process::id()));
+        std::fs::create_dir_all(&path)?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for TestRoot {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).unwrap();
+    }
+}
 
 fn errno(emu: &mut Emulator, libc: Module, result: u64, expected: u32) -> Result<()> {
     assert_eq!(result as u32, u32::MAX);

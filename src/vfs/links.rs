@@ -1,10 +1,14 @@
 use super::*;
-use std::os::unix::ffi::OsStrExt;
 
 impl Emulator {
     pub(crate) fn read_link(&self, path: &str) -> FsResult<Vec<u8>> {
-        if self.vfs.overlay.contains_key(path) {
-            return Err(Error(22));
+        let resolved = self.resolve_path(path, false)?;
+        let path = resolved.as_str();
+        if let Some(node) = self.vfs.overlay.get(path) {
+            return match &node.borrow().data {
+                Data::Symlink(target, _) => Ok(target.clone()),
+                _ => Err(Error(22)),
+            };
         }
         if self.vfs.hidden(path) {
             return Err(Error(2));
@@ -33,20 +37,9 @@ impl Emulator {
             };
             return Ok(format!("/system/bin/app_process{bits}").into_bytes());
         }
-        // Resolve the parent only: dangling links still have a readable target.
-        let parent = resolution::parent(path);
-        if !self.vfs.hidden(parent) {
-            let host = self
-                .rootfs_path(parent)
-                .map(|parent| parent.join(path.rsplit('/').next().unwrap()));
-            if let Ok(host) = host
-                && let Ok(metadata) = std::fs::symlink_metadata(&host)
-                && metadata.is_symlink()
-            {
-                return Ok(std::fs::read_link(host)?.as_os_str().as_bytes().to_vec());
-            }
+        match &self.node_at(path)?.borrow().data {
+            Data::Symlink(target, _) => Ok(target.clone()),
+            _ => Err(Error(22)),
         }
-        self.guest_node(path)?;
-        Err(Error(22))
     }
 }

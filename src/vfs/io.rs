@@ -20,7 +20,7 @@ impl Vfs {
             return Err(Error(27));
         }
         Rc::make_mut(bytes).resize(length as usize, 0);
-        node.changed = now();
+        node.changed = None;
         Ok(0)
     }
     pub(crate) fn writable(&self, fd: u64) -> FsResult<()> {
@@ -31,6 +31,22 @@ impl Vfs {
     }
 }
 impl Emulator {
+    pub(crate) fn read_file(
+        &mut self,
+        fd: u64,
+        address: u64,
+        count: u64,
+        position: Option<u64>,
+    ) -> Result<u64> {
+        let bytes = self.read_file_bytes(fd, count, position)?;
+        self.write_bytes(address, &bytes).map_err(|_| Error(14))?;
+        let shared = &self.vfs.descriptor(fd)?.file;
+        let mut file = shared.borrow_mut();
+        if position.is_none() && !matches!(file.node.borrow().data, Data::Random) {
+            file.offset += bytes.len() as u64;
+        }
+        Ok(bytes.len() as u64)
+    }
     pub(crate) fn read_file_bytes(
         &mut self,
         fd: u64,
@@ -38,7 +54,7 @@ impl Emulator {
         position: Option<u64>,
     ) -> Result<Vec<u8>> {
         let shared = self.vfs.descriptor(fd)?.file.clone();
-        let mut file = shared.borrow_mut();
+        let file = shared.borrow();
         let offset = position.unwrap_or(file.offset);
         let mut bytes = vec![0; file.read_length(count, offset)?];
         let random = matches!(file.node.borrow().data, Data::Random);
@@ -47,9 +63,6 @@ impl Emulator {
         } else {
             file.read(&mut bytes, offset)?
         };
-        if position.is_none() && !random {
-            file.offset += count as u64;
-        }
         bytes.truncate(count);
         Ok(bytes)
     }

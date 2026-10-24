@@ -61,12 +61,13 @@ pub(super) type NodeRef = Rc<RefCell<Node>>;
 pub(super) struct Node {
     data: Data,
     mode: u32,
-    changed: (i64, i64),
+    changed: Option<(i64, i64)>,
 }
 #[derive(Clone)]
 pub(super) enum Data {
     Bytes(Rc<Vec<u8>>),
     Host(PathBuf),
+    Symlink(Vec<u8>, std::fs::Metadata),
     Directory,
     Generated(Rc<Vec<u8>>),
     Random,
@@ -77,11 +78,19 @@ impl Node {
         Rc::new(RefCell::new(Self {
             data,
             mode,
-            changed: now(),
+            changed: None,
         }))
     }
     fn is_dir(&self) -> bool {
         self.mode & 0o170000 == 0o040000
+    }
+    fn copy_bytes(&self) -> FsResult<Vec<u8>> {
+        if let Data::Host(path) = &self.data
+            && std::fs::metadata(path)?.len() > FILE_LIMIT
+        {
+            return Err(Error(27));
+        }
+        self.bytes()
     }
     fn bytes(&self) -> FsResult<Vec<u8>> {
         if self.is_dir() {
@@ -93,12 +102,6 @@ impl Node {
             _ => Err(Error(22)),
         }
     }
-}
-fn now() -> (i64, i64) {
-    let time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap();
-    (time.as_secs() as i64, time.subsec_nanos() as i64)
 }
 pub(super) fn inode(path: &[u8]) -> u64 {
     path.iter().copied().fold(0xcbf29ce484222325, |hash, byte| {

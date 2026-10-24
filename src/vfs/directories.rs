@@ -14,9 +14,9 @@ impl Emulator {
         }
         let mut entries = BTreeMap::new();
         if !self.vfs.hidden(path) {
-            let host = self.rootfs.join(path.trim_start_matches('/'));
-            if host.is_dir() {
-                let host = self.rootfs_path(path)?;
+            if let Ok(host) = self.rootfs_path(path)
+                && std::fs::symlink_metadata(&host).is_ok_and(|metadata| metadata.is_dir())
+            {
                 for entry in std::fs::read_dir(host)? {
                     let entry = entry?;
                     let name = entry.file_name().as_bytes().to_vec();
@@ -58,7 +58,13 @@ impl Emulator {
             if child != path && resolution::parent(child) == path {
                 entries.insert(
                     child.rsplit('/').next().unwrap().as_bytes().to_vec(),
-                    if node.borrow().is_dir() { 4 } else { 8 },
+                    if matches!(node.borrow().data, Data::Symlink(_, _)) {
+                        10
+                    } else if node.borrow().is_dir() {
+                        4
+                    } else {
+                        8
+                    },
                 );
             }
         }
@@ -87,16 +93,18 @@ impl Emulator {
         Ok(result)
     }
 }
-impl Vfs {
-    pub(crate) fn getdents(&mut self, fd: u64, count: u64) -> FsResult<Vec<u8>> {
-        let mut file = self.descriptor(fd)?.file.borrow_mut();
+impl Emulator {
+    pub(crate) fn getdents(&mut self, fd: u64, address: u64, count: u64) -> Result<u64> {
+        let shared = self.vfs.descriptor(fd)?.file.clone();
+        let mut file = shared.borrow_mut();
         let entries = file.entries.clone().ok_or(Error(20))?;
+        let mut position = file.offset;
         let mut bytes = Vec::new();
         for (index, entry) in entries.iter().enumerate().skip(file.offset as usize) {
             let length = (19 + entry.name.len() + 1).next_multiple_of(8);
             if bytes.len() as u64 + length as u64 > count.min(IO_LIMIT) {
                 if bytes.is_empty() {
-                    return Err(Error(22));
+                    return Err(Error(22).into());
                 }
                 break;
             }
@@ -107,8 +115,10 @@ impl Vfs {
             bytes[start + 16..start + 18].copy_from_slice(&(length as u16).to_le_bytes());
             bytes[start + 18] = entry.kind;
             bytes[start + 19..start + 19 + entry.name.len()].copy_from_slice(&entry.name);
-            file.offset = index as u64 + 1;
+            position = index as u64 + 1;
         }
-        Ok(bytes)
+        self.write_bytes(address, &bytes).map_err(|_| Error(14))?;
+        file.offset = position;
+        Ok(bytes.len() as u64)
     }
 }

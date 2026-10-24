@@ -1,8 +1,11 @@
 use crate::{Emulator, Result, vfs::Error};
 
 impl Emulator {
+    fn path_argument(&self, address: u64) -> crate::vfs::FsResult<String> {
+        self.cstring(address).map_err(|_| Error(14))
+    }
     fn file_path(&self, dirfd: u64, address: u64) -> Result<String> {
-        Ok(self.guest_path(dirfd, &self.cstring(address)?)?)
+        Ok(self.guest_path(dirfd, &self.path_argument(address)?)?)
     }
     pub(super) fn file_syscall(&mut self, nr: u64, a: [u64; 6]) -> Result<u64> {
         match self.file_operation(nr, a) {
@@ -44,20 +47,14 @@ impl Emulator {
                 self.open_file(&path, a[2] as u32, a[3] as u32)?
             }
             57 => self.vfs.close(a[0])?,
-            61 => {
-                let bytes = self.vfs.getdents(a[0], a[2])?;
-                self.write_bytes(a[1], &bytes).map_err(|_| Error(14))?;
-                bytes.len() as u64
-            }
+            61 => self.getdents(a[0], a[1], a[2])?,
             62 => self.vfs.seek(a[0], a[1], a[2])?,
             63 | 67 => {
                 let position = (nr == 67).then_some(a[3]);
                 if position.is_some_and(|offset| (offset as i64) < 0) {
                     return Err(Error(22).into());
                 }
-                let bytes = self.read_file_bytes(a[0], a[2], position)?;
-                self.write_bytes(a[1], &bytes).map_err(|_| Error(14))?;
-                bytes.len() as u64
+                self.read_file(a[0], a[1], a[2], position)?
             }
             68 => {
                 self.vfs.writable(a[0])?;
@@ -83,7 +80,16 @@ impl Emulator {
                 let (bytes, size) = if nr == 80 {
                     self.stat_file(a[0])?
                 } else {
-                    self.stat_path(&self.file_path(a[0], a[1])?)?
+                    let path = self.path_argument(a[1])?;
+                    if path.is_empty() && a[3] & 0x1000 != 0 {
+                        if a[0] as i32 == -100 {
+                            self.stat_path("/", true)?
+                        } else {
+                            self.stat_file(a[0])?
+                        }
+                    } else {
+                        self.stat_path(&self.guest_path(a[0], &path)?, a[3] & 0x100 == 0)?
+                    }
                 };
                 self.write_bytes(if nr == 80 { a[1] } else { a[2] }, &bytes[..size])
                     .map_err(|_| Error(14))?;

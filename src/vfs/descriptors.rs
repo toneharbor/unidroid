@@ -80,7 +80,7 @@ impl OpenFile {
             let data = Rc::make_mut(data);
             data.resize(data.len().max(end), 0);
             data[offset as usize..end].copy_from_slice(&bytes[..count]);
-            node.changed = now();
+            node.changed = None;
         }
         if position.is_none() {
             self.offset = end as u64;
@@ -97,7 +97,10 @@ impl OpenFile {
             2 => self.length()?,
             _ => return Err(Error(22)),
         };
-        self.offset = base.checked_add_signed(offset as i64).ok_or(Error(22))?;
+        self.offset = base
+            .checked_add_signed(offset as i64)
+            .filter(|offset| *offset <= i64::MAX as u64)
+            .ok_or(Error(22))?;
         Ok(self.offset)
     }
 }
@@ -134,9 +137,12 @@ impl Emulator {
         Ok(resolution::normalize(&format!("{base}/{path}")))
     }
     pub(crate) fn open_file(&mut self, path: &str, flags: u32, mode: u32) -> FsResult<u64> {
-        let existing = self.guest_node(path);
+        let exclusive = flags & 0xc0 == 0xc0;
+        let resolved = self.resolve_path(path, !exclusive)?;
+        let path = resolved.as_str();
+        let existing = self.node_at(path);
         let node = match existing {
-            Ok(_) if flags & 0xc0 == 0xc0 => return Err(Error(17)),
+            Ok(_) if exclusive => return Err(Error(17)),
             Ok(node) => node,
             Err(Error(2)) if flags & 0x40 != 0 => {
                 self.require_parent(path)?;
@@ -160,10 +166,10 @@ impl Emulator {
                 let bytes = if flags & 0x200 != 0 {
                     Vec::new()
                 } else {
-                    node.borrow().bytes()?
+                    node.borrow().copy_bytes()?
                 };
                 node.borrow_mut().data = Data::Bytes(Rc::new(bytes));
-                node.borrow_mut().changed = now();
+                node.borrow_mut().changed = None;
                 self.vfs.overlay.insert(path.into(), node.clone());
             }
         }
@@ -171,7 +177,7 @@ impl Emulator {
             let mut node = node.borrow_mut();
             if let Data::Bytes(bytes) = &mut node.data {
                 *bytes = Rc::new(Vec::new());
-                node.changed = now();
+                node.changed = None;
             }
         }
         let host = match &node.borrow().data {

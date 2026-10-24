@@ -27,8 +27,8 @@ fn overlay_precedes_generated_files_and_whiteouts_hide_lower_subtrees() -> Resul
         emu.add_file("/proc/self/fd", b"regular")?;
         let link = emu.new_cstring(&format!("/proc/self/fd/{fd}"))?;
         let result = call(&mut emu, libc, "readlink", &[link, buffer, 128])?;
-        // The whiteout still hides lower generated links.
-        errno(&mut emu, libc, result, 2)?;
+        // A regular overlay parent blocks traversal before the hidden child lookup.
+        errno(&mut emu, libc, result, 20)?;
         let path = emu.new_cstring("/dev")?;
         let dev = call(&mut emu, libc, "opendir", &[path])?;
         let mut names = Vec::new();
@@ -46,6 +46,11 @@ fn overlay_precedes_generated_files_and_whiteouts_hide_lower_subtrees() -> Resul
         }
         assert_eq!(names, [".", "..", "random", "urandom"]);
         assert_eq!(call(&mut emu, libc, "closedir", &[dev])?, 0);
+        // The root is also a path component: an overlay file there blocks traversal.
+        let random = emu.new_cstring("/dev/urandom")?;
+        emu.add_file("/", b"regular")?;
+        let result = call(&mut emu, libc, "access", &[random, 0])?;
+        errno(&mut emu, libc, result, 20)?;
     }
     Ok(())
 }

@@ -86,6 +86,7 @@ impl Emulator {
             32 => "EPIPE",
             38 => "ENOSYS",
             39 => "ENOTEMPTY",
+            40 => "ELOOP",
             110 => "ETIMEDOUT",
             _ => return None,
         };

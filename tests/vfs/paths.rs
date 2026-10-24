@@ -2,6 +2,44 @@ use super::{call, errno};
 use unidroid::{Emulator, Result};
 
 #[test]
+fn open_descriptors_follow_renamed_paths() -> Result<()> {
+    for dir in ["lib64", "lib"] {
+        let mut emu = Emulator::builder().build()?;
+        emu.add_file("/a/sub/value", b"abc")?;
+        emu.add_file("/ab/value", b"stay")?;
+        let libc = emu.load_library(format!("rootfs/{dir}/libc.so"))?;
+        let mut fds = Vec::new();
+        for name in ["/a", "/a/sub", "/a/sub/value", "/ab/value"] {
+            let path = emu.new_cstring(name)?;
+            fds.push(call(&mut emu, libc, "open", &[path, 0])?);
+        }
+        fds.push(call(&mut emu, libc, "dup", &[fds[0]])?);
+        let from = emu.new_cstring("/a")?;
+        let to = emu.new_cstring("/b")?;
+        assert_eq!(call(&mut emu, libc, "rename", &[from, to])?, 0);
+        assert_eq!(call(&mut emu, libc, "mkdir", &[from, 0o700])?, 0);
+        let child = emu.new_cstring("x")?;
+        let fd = call(&mut emu, libc, "openat", &[fds[4], child, 0x42, 0o600])?;
+        assert_ne!(fd as u32, u32::MAX);
+        assert_eq!(emu.file("/b/x")?, b"");
+        assert!(emu.file("/a/x").is_err());
+        let buffer = emu.malloc(128)?;
+        for (fd, expected) in
+            fds.into_iter()
+                .zip(["/b", "/b/sub", "/b/sub/value", "/ab/value", "/b"])
+        {
+            let link = emu.new_cstring(&format!("/proc/self/fd/{fd}"))?;
+            assert_eq!(
+                call(&mut emu, libc, "readlink", &[link, buffer, 128])?,
+                expected.len() as u64
+            );
+            assert_eq!(emu.read_bytes(buffer, expected.len())?, expected.as_bytes());
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn at_operations_resolve_directory_fds_and_absolute_paths_ignore_them() -> Result<()> {
     for dir in ["lib64", "lib"] {
         let mut emu = Emulator::builder().build()?;

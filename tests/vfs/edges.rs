@@ -1,4 +1,4 @@
-use super::{call, errno};
+use super::{TestRoot, call, errno};
 use unidroid::{Emulator, Result};
 
 #[test]
@@ -69,16 +69,15 @@ fn writes_and_writev_share_the_io_limit_and_update_overlay_files() -> Result<()>
 }
 
 #[test]
-fn rootfs_links_report_host_targets_and_directory_link_types() -> Result<()> {
+fn rootfs_links_report_target_text_and_directory_link_types() -> Result<()> {
     use std::os::unix::fs::symlink;
     for (dir, nr) in [("lib64", 61), ("lib", 217)] {
-        let root =
-            std::env::temp_dir().join(format!("unidroid-vfs-links-{}-{dir}", std::process::id()));
-        std::fs::create_dir_all(&root)?;
+        let sandbox = TestRoot::new("rootfs-links")?;
+        let root = &sandbox.0;
         std::fs::copy(format!("rootfs/{dir}/libdl.so"), root.join("file"))?;
         symlink("file", root.join("link"))?;
         symlink("missing", root.join("dangling"))?;
-        let mut emu = Emulator::builder().rootfs(&root).build()?;
+        let mut emu = Emulator::builder().rootfs(root).build()?;
         let libc = emu.load_library(format!("rootfs/{dir}/libc.so"))?;
         let buffer = emu.malloc(256)?;
         for (name, target) in [
@@ -122,7 +121,6 @@ fn rootfs_links_report_host_targets_and_directory_link_types() -> Result<()> {
         let result = call(&mut emu, libc, "readlink", &[path, buffer, 256])?;
         errno(&mut emu, libc, result, 22)?;
         drop(emu);
-        std::fs::remove_dir_all(root)?;
     }
     Ok(())
 }

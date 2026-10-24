@@ -76,6 +76,41 @@ fn file_operations_return_linux_errors() -> Result<()> {
 }
 
 #[test]
+fn unreadable_paths_return_efault() -> Result<()> {
+    let cwd = (-100i64) as u64;
+    for dir in ["lib64", "lib"] {
+        let mut emu = Emulator::builder().build()?;
+        emu.add_file("/value", b"abc")?;
+        let libc = emu.load_library(format!("rootfs/{dir}/libc.so"))?;
+        let path = emu.new_cstring("/value")?;
+        let buffer = emu.malloc(128)?;
+        for bad in [0, 0xdead0000] {
+            let mut operations = vec![
+                ("openat", vec![cwd, bad, 0]),
+                ("fstatat", vec![cwd, bad, buffer, 0]),
+                ("faccessat", vec![cwd, bad, 0, 0]),
+                ("mkdirat", vec![cwd, bad, 0o700]),
+                ("unlinkat", vec![cwd, bad, 0]),
+                ("renameat", vec![cwd, bad, cwd, path]),
+                ("renameat", vec![cwd, path, cwd, bad]),
+                ("readlinkat", vec![cwd, bad, buffer, 128]),
+            ];
+            if dir == "lib64" {
+                operations.extend([
+                    ("syscall", vec![276, cwd, bad, cwd, path, 0]),
+                    ("syscall", vec![276, cwd, path, cwd, bad, 0]),
+                ]);
+            }
+            for (name, args) in operations {
+                let result = call(&mut emu, libc, name, &args)?;
+                errno(&mut emu, libc, result, 14)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn relative_paths_check_dirfds_for_every_at_operation() -> Result<()> {
     for dir in ["lib64", "lib"] {
         let mut emu = Emulator::builder().build()?;
