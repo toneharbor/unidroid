@@ -4,7 +4,7 @@ mod elf;
 
 #[test]
 fn loader_service_calls_do_not_grow_the_api_heap() -> Result<()> {
-    let library = elf::TestLibrary::new(false);
+    let library = elf::TestLibrary::new(true, false);
     let mut emu = Emulator::builder().build()?;
     let module = emu.load_library(&library.0)?;
     let open = emu.find_symbol(module, "dlopen")?;
@@ -38,7 +38,7 @@ fn loader_service_calls_do_not_grow_the_api_heap() -> Result<()> {
 
 #[test]
 fn api_heap_reuses_and_coalesces_freed_blocks() -> Result<()> {
-    let library = elf::TestLibrary::new(false);
+    let library = elf::TestLibrary::new(true, false);
     let mut emu = Emulator::builder().build()?;
     emu.load_library(&library.0)?;
     let first = emu.malloc(32)?;
@@ -53,7 +53,7 @@ fn api_heap_reuses_and_coalesces_freed_blocks() -> Result<()> {
 
 #[test]
 fn weak_undefined_imports_resolve_to_zero() -> Result<()> {
-    let library = elf::TestLibrary::new(false);
+    let library = elf::TestLibrary::new(true, false);
     let mut emu = Emulator::builder().build()?;
     let module = emu.load_library(&library.0)?;
     assert_eq!(emu.read_bytes(0x10000000 + 0x1620, 8)?, [0; 8]);

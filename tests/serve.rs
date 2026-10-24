@@ -72,6 +72,8 @@ impl Client {
 mod crypto;
 #[path = "serve/debug.rs"]
 mod debug;
+#[path = "serve/disconnect.rs"]
+mod disconnect;
 #[path = "serve/errors.rs"]
 mod errors;
 #[path = "serve/hooks.rs"]
@@ -182,7 +184,7 @@ fn values_memory_and_c_calls_round_trip() {
 #[test]
 fn c_calls_forward_methods_fields_constructors_and_assignability() {
     // Export a JNI method that returns its JNIEnv pointer, using the existing tiny ELF builder.
-    let library = elf::TestLibrary::new(false);
+    let library = elf::TestLibrary::new(true, false);
     let mut bytes = std::fs::read(&library.0).unwrap();
     let name = b"Java_test_Bridge_env\0";
     bytes[0x1800..0x1800 + name.len()].copy_from_slice(name);

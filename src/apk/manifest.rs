@@ -195,7 +195,8 @@ fn attributes(
             4 => {
                 version_name = match kind {
                     3 => Some(pool.string(value)?),
-                    0x10 | 0x11 => Some(value.to_string()),
+                    0x10 => Some((value as i32).to_string()),
+                    0x11 => Some(format!("0x{value:x}")),
                     1 => None,
                     _ => return Err(format!("unsupported versionName type {kind}").into()),
                 }

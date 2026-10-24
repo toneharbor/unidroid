@@ -128,7 +128,7 @@ mod elf;
 
 #[test]
 fn reports_no_constants_in_a_library_without_signatures() -> Result<()> {
-    let library = elf::TestLibrary::new(false);
+    let library = elf::TestLibrary::new(true, false);
     let mut emu = Emulator::builder().build()?;
     emu.load_library(&library.0)?;
     assert!(emu.crypto_constants()?.is_empty());

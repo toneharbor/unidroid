@@ -62,7 +62,7 @@ impl Apk {
                 signatures: signatures.signatures,
                 signers: signatures.signers,
                 signing_history: signatures.signing_history,
-                archives: Rc::new(archive::Archives::new(archive)),
+                archives: Rc::new(archive::Archives::new(archive)?),
             })
         };
         parse().map_err(|error| format!("APK {}: {error}", path.display()).into())

@@ -1,6 +1,8 @@
 use unidroid::{Emulator, Result};
 #[path = "support/elf.rs"]
 mod elf;
+#[path = "loader/errors.rs"]
+mod errors;
 
 #[test]
 fn cpu_calls_require_a_library_but_host_objects_do_not() -> Result<()> {
@@ -57,7 +59,7 @@ fn loading_the_other_architecture_reports_the_filename() -> Result<()> {
 
 #[test]
 fn jni_onload_without_an_export_returns_not_found() -> Result<()> {
-    let library = elf::TestLibrary::new(false);
+    let library = elf::TestLibrary::new(true, false);
     let mut emu = Emulator::builder().build()?;
     let module = emu.load_library(&library.0)?;
     let error = emu.call_jni_onload(module, &mut ()).unwrap_err();
@@ -71,7 +73,7 @@ fn jni_onload_without_an_export_returns_not_found() -> Result<()> {
 #[test]
 fn relocation_constructors_bss_and_shared_code_isolation() -> Result<()> {
     for relocate_code in [false, true] {
-        let library = elf::TestLibrary::new(relocate_code);
+        let library = elf::TestLibrary::new(true, relocate_code);
         let mut first = Emulator::builder().build()?;
         let mut second = Emulator::builder().build()?;
         let module = first.load_library(&library.0)?;
@@ -201,7 +203,7 @@ fn libdl_resolves_dependencies_and_clears_errors() -> Result<()> {
 
 #[test]
 fn dependencies_and_dlopen_find_siblings_of_public_loads() -> Result<()> {
-    let library = elf::TestLibrary::new(false);
+    let library = elf::TestLibrary::new(true, false);
     let directory = library.0.with_extension("siblings");
     std::fs::create_dir(&directory)?;
     let main = directory.join("libtmessages.29.so");

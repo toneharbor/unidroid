@@ -74,7 +74,11 @@ impl Emulator {
             original,
             return_address,
         };
-        match handler.import(self, &call) {
+        let answer = handler.import(self, &call);
+        if let Some((address, error)) = self.cpu_mut()?.get_data_mut().source_error.take() {
+            return Err(format!("{error} from {}", self.location(address)).into());
+        }
+        match answer {
             Some(value) => Ok(HostResult::Return(value)),
             None => original.map(HostResult::Jump).ok_or_else(|| {
                 format!(

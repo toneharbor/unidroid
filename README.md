@@ -304,7 +304,7 @@ A question looks like this:
 - `type` is what your answer must be, using the letters above. `V` means just `{"cmd":"answer"}`.
 - `args` are written the same way as values. For `set`, the value being written is in `args`.
 
-Hooked C calls ask `{"import":{"name":"strlen","args":["4096","0","0","0"],"original":"268439552","from":"libfoo.so+0x1234"}}`. `args` holds four ARM32 or eight ARM64 register values; it and `original` use decimal strings, and `original` is `null` if absent. Reply `{"cmd":"answer","value":"5"}` to return 5, or `{"cmd":"unhandled"}` to run the original. A malformed import answer returns an error and leaves the question open for another answer. Nested commands, including `call_function` of `original`, work while waiting; resume commands error and leave the question open. Policies have no import rules; without a driver (batch or fields), imports pass through. Record/replay includes these questions and commands.
+Hooked C calls ask `{"import":{"name":"strlen","args":["4096","0","0","0"],"original":"268439552","from":"libfoo.so+0x1234"}}`. `args` holds four ARM32 or eight ARM64 register values; it and `original` use decimal strings, and `original` is `null` if absent. Reply `{"cmd":"answer","value":"5"}` to return 5, or `{"cmd":"unhandled"}` to run the original. If the client disconnects or question I/O fails, the guest call stops with the session error; the original runs only after an explicit `unhandled` reply. JNI and debugger stop questions also stop the guest on disconnection or I/O failure. A malformed import answer returns an error and leaves the question open for another answer. Nested commands, including `call_function` of `original`, work while waiting; resume commands error and leave the question open. Policies have no import rules; without a driver (batch or fields), imports pass through. Record/replay includes these questions and commands.
 
 ### Answering Java calls from a file
 
@@ -482,7 +482,7 @@ Not supported:
 - Signals and `fork`
 - Writing to the host file system. Guest files resolve through an in-memory overlay, generated files and read-only `rootfs`; all writes stay in memory and host files are never changed. Added files, writable files, directories and links are covered in [ENVIRONMENT.md](ENVIRONMENT.md).
 
-A library's dependencies are looked for first in the APK's ABI folders (base, then the neighboring architecture split), then in the folders of loaded host libraries, then in rootfs. `load_apk_library("libfoo.so")` and guest `dlopen` use that same name search; `dlopen` first honors an existing explicit rootfs path without `..`. Without an APK, host folders and rootfs work as before. See [ENVIRONMENT.md](ENVIRONMENT.md) for ABI selection, metadata and guest paths.
+A library's dependencies are looked for first in the APK's ABI folders (base, then the neighboring architecture split), then in the folders of loaded host libraries, then in rootfs. `load_apk_library("libfoo.so")` and guest `dlopen` use that same name search; `dlopen` first reuses a loaded module with the same file name, then honors an existing explicit rootfs path without `..`. Without an APK, host folders and rootfs work as before. See [ENVIRONMENT.md](ENVIRONMENT.md) for ABI selection, metadata and guest paths.
 
 A dependency found in none of these locations (such as `libEGL.so`) only prints a warning. Calling an unresolved function stops and names it; with an APK, built-in asset functions work even without `libandroid.so`.
 

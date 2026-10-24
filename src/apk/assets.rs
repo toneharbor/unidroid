@@ -25,7 +25,7 @@ fn entry(path: &str) -> String {
 
 impl Apk {
     fn asset(&self, path: &str) -> Result<Option<Vec<u8>>> {
-        let archive = self.archives.get(&self.path, false)?.unwrap();
+        let archive = &self.archives.base;
         let entry = entry(path);
         if entry.ends_with('/') || !archive.contains(&entry) {
             return Ok(None);
@@ -33,7 +33,7 @@ impl Apk {
         archive.read(&entry).map(Some)
     }
     pub(crate) fn asset_names(&self, path: &str, files_only: bool) -> Result<Vec<String>> {
-        let archive = self.archives.get(&self.path, false)?.unwrap();
+        let archive = &self.archives.base;
         let prefix = format!("{}/", entry(path).trim_end_matches('/'));
         let zip = archive.zip.borrow();
         let mut names = BTreeSet::new();

@@ -142,7 +142,7 @@ impl Emulator {
             dl_references: 0,
         });
         for needed in &image.needed {
-            if let Some(library) = self.find_library(needed)? {
+            if let Some(library) = self.find_library(needed) {
                 let dep = self.load_image(library)?;
                 self.modules[id.0].dependencies.push(dep);
             } else {
@@ -203,6 +203,7 @@ impl Emulator {
         }
         let image = self.modules[module.0].image.clone();
         let base = self.modules[module.0].base;
+        let name = self.modules[module.0].name.clone();
         let mut unresolved = HashMap::new();
         for relocation in &image.relocations {
             let kind = relocation.info as u32;
@@ -221,8 +222,15 @@ impl Emulator {
             {
                 continue;
             }
+            let context = |error: Box<dyn std::error::Error>| -> Box<dyn std::error::Error> {
+                format!(
+                    "relocation in {name} at offset 0x{:x}: {error}",
+                    relocation.offset
+                )
+                .into()
+            };
             let addend = if implicit {
-                implicit_addend(&image, relocation.offset)
+                implicit_addend(&image, relocation.offset).map_err(context)?
             } else {
                 relocation.addend
             };
@@ -260,7 +268,8 @@ impl Emulator {
                 }
             }
             .wrapping_add_signed(addend);
-            self.write_pointer(base + relocation.offset, value)?;
+            self.write_pointer(base + relocation.offset, value)
+                .map_err(context)?;
         }
         self.modules[module.0].relocated = true;
         Ok(())
@@ -301,12 +310,12 @@ impl Emulator {
     }
 }
 
-fn implicit_addend(image: &Image, address: u64) -> i64 {
+fn implicit_addend(image: &Image, address: u64) -> Result<i64> {
     let segment = image
         .segments
         .iter()
         .find(|segment| address >= segment.p_vaddr && address < segment.p_vaddr + segment.p_memsz)
-        .unwrap();
+        .ok_or("target is outside every PT_LOAD segment")?;
     let offset = address - segment.p_vaddr;
     let size = segment
         .p_filesz
@@ -317,7 +326,7 @@ fn implicit_addend(image: &Image, address: u64) -> i64 {
         let start = (segment.p_offset + offset) as usize;
         bytes[..size].copy_from_slice(&image.bytes[start..start + size]);
     }
-    u64::from_le_bytes(bytes) as i64
+    Ok(u64::from_le_bytes(bytes) as i64)
 }
 
 #[cfg(test)]
@@ -329,14 +338,14 @@ mod tests {
     fn symbol_alias_binds_missing_imports_but_preserves_exports() -> Result<()> {
         for binding in [0x10, 0x20] {
             for exported in [false, true] {
-                let importer = test_elf::TestLibrary::new(false);
+                let importer = test_elf::TestLibrary::new(true, false);
                 let mut bytes = std::fs::read(&importer.0)?;
                 // The synthetic ELF's fourth symbol is an undefined import named "weak".
                 bytes[0x1264] = binding;
                 std::fs::write(&importer.0, bytes)?;
                 let mut emu = Emulator::builder().build()?;
                 emu.symbol_alias("weak", "answer");
-                let exporter = test_elf::TestLibrary::new(false);
+                let exporter = test_elf::TestLibrary::new(true, false);
                 let expected = if exported {
                     let mut bytes = std::fs::read(&exporter.0)?;
                     // Export that name at the distinct "protect" function's address.

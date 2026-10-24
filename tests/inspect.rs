@@ -150,7 +150,7 @@ fn both_subcommands_accept_repeatable_superclasses() {
 
 #[test]
 fn inspect_names_a_non_arm_library_in_its_error() {
-    let library = elf::TestLibrary::new(false);
+    let library = elf::TestLibrary::new(true, false);
     let mut bytes = std::fs::read(&library.0).unwrap();
     bytes[18..20].copy_from_slice(&62u16.to_le_bytes()); // EM_X86_64
     std::fs::write(&library.0, bytes).unwrap();

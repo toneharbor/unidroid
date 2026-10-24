@@ -211,3 +211,23 @@ fn v1_certificates_keep_bytes_and_central_directory_order() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn integer_version_names_follow_android_coercion() -> Result<()> {
+    for utf8 in [true, false] {
+        for (value, expected) in [
+            (Value::Int(u32::MAX), "-1"),
+            (Value::Int(42), "42"),
+            (Value::Hex(42), "0x2a"),
+            (Value::Hex(u32::MAX), "0xffffffff"),
+        ] {
+            let file = TestApk::manifest(&manifest::xml(
+                utf8,
+                &[package(), android("versionName", 0, value)],
+            ))?;
+            let emu = Emulator::builder().apk(&file.path).build()?;
+            assert_eq!(emu.apk().unwrap().version_name.as_deref(), Some(expected));
+        }
+    }
+    Ok(())
+}

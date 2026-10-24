@@ -29,9 +29,7 @@ impl Library {
         match self {
             Self::Host(path) => Image::open(path),
             Self::Apk { archive, entry, .. } => {
-                Image::cached(&archive.path, Some(entry), || archive.image(entry)).map_err(
-                    |error| format!("APK {} entry {entry}: {error}", archive.path.display()).into(),
-                )
+                Image::cached(&archive.path, Some(entry), || archive.image(entry))
             }
         }
     }
@@ -47,7 +45,7 @@ impl Emulator {
         let apk = self
             .apk()
             .ok_or_else(|| format!("cannot load APK library {name}: no APK configured"))?;
-        let library = self.find_library(name)?.ok_or_else(|| {
+        let library = self.find_library(name).ok_or_else(|| {
             format!(
                 "library {name} not found in APK {}, loaded library folders or rootfs",
                 apk.path.display()
@@ -57,7 +55,7 @@ impl Emulator {
     }
 
     /// One search order for named loads, dependencies and dlopen.
-    pub(crate) fn find_library(&self, name: &str) -> Result<Option<Library>> {
+    pub(crate) fn find_library(&self, name: &str) -> Option<Library> {
         if let Some(apk) = self.apk() {
             let arches: &[Architecture] = match self.arch {
                 Some(Architecture::Arm64) => &[Architecture::Arm64],
@@ -65,39 +63,30 @@ impl Emulator {
                 None => &[Architecture::Arm64, Architecture::Arm32],
             };
             for &arch in arches {
-                let (abis, split): (&[&str], &str) = match arch {
-                    Architecture::Arm64 => (&["arm64-v8a"], "config.arm64_v8a.apk"),
-                    Architecture::Arm32 => (&["armeabi-v7a", "armeabi"], "config.armeabi_v7a.apk"),
+                let abis: &[&str] = match arch {
+                    Architecture::Arm64 => &["arm64-v8a"],
+                    Architecture::Arm32 => &["armeabi-v7a", "armeabi"],
                 };
-                let split = apk.path.with_file_name(split);
-                for path in [&apk.path, &split] {
-                    let archive = apk
-                        .archives
-                        .get(path, path == &split)
-                        .map_err(|error| format!("loading {name}: {error}"))?;
-                    let Some(archive) = archive else {
-                        continue;
-                    };
+                for archive in apk.archives.libraries(arch) {
                     for abi in abis {
                         let entry = format!("lib/{abi}/{name}");
                         if archive.contains(&entry) {
-                            return Ok(Some(Library::Apk {
+                            return Some(Library::Apk {
                                 archive,
                                 entry,
                                 guest: format!("{}/{name}", apk.native_library_dir(arch)),
-                            }));
+                            });
                         }
                     }
                 }
             }
         }
         let dir = self.arch.unwrap_or(Architecture::Arm64).library_dir();
-        Ok(self
-            .library_dirs
+        self.library_dirs
             .iter()
             .map(|directory| directory.join(name))
             .chain(std::iter::once(self.rootfs.join(dir).join(name)))
             .find(|path| path.is_file())
-            .map(Library::Host))
+            .map(Library::Host)
     }
 }

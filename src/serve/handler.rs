@@ -27,7 +27,16 @@ impl<R: BufRead, W: Write> JniHandler for Session<R, W> {
         });
         match self.ask(emu, Response::Import(question), Question::Import) {
             Some(Reply::Import(value)) => value,
-            _ => None,
+            _ => {
+                if let Some(error) = &self.error {
+                    // Carry the failure across the Option-returning handler boundary.
+                    emu.cpu_mut()
+                        .expect("import callback has a CPU")
+                        .get_data_mut()
+                        .source_error = Some((call.return_address, error.to_string().into()));
+                }
+                None
+            }
         }
     }
     fn stopped(&mut self, emu: &mut Emulator, stop: &crate::Stop) -> crate::Resume {

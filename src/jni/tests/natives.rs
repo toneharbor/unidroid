@@ -111,7 +111,7 @@ fn inherited_registered_natives_receive_the_declaring_class_or_receiver() -> Res
 
 #[test]
 fn inherited_java_exports_precede_ancestor_registrations_and_use_short_names_first() -> Result<()> {
-    let library = crate::test_elf::TestLibrary::new(false);
+    let library = crate::test_elf::TestLibrary::new(true, false);
     let mut bytes = std::fs::read(&library.0)?;
     let names = b"Java_example_Parent_a\0Java_example_Parent_a__\0";
     bytes[0x1800..0x1800 + names.len()].copy_from_slice(names);
@@ -141,7 +141,7 @@ fn inherited_java_exports_precede_ancestor_registrations_and_use_short_names_fir
     // Removing the short name leaves the long Java_ export on the same class.
     bytes[0x1218..0x121c].copy_from_slice(&1u32.to_le_bytes());
     bytes[0x1238..0x1240].copy_from_slice(&0x200u64.to_le_bytes());
-    let long_library = crate::test_elf::TestLibrary::new(false);
+    let long_library = crate::test_elf::TestLibrary::new(true, false);
     std::fs::write(&long_library.0, bytes)?;
     let mut emu = Emulator::builder().build()?;
     emu.load_library(&long_library.0)?;

@@ -2,7 +2,6 @@ use crate::Result;
 use memmap2::{Mmap, MmapOptions};
 use std::{
     cell::RefCell,
-    collections::HashMap,
     fs::File,
     io::Read,
     path::{Path, PathBuf},
@@ -57,6 +56,17 @@ impl Archive {
             && let Some(offset) = entry.data_start()
             && offset.is_multiple_of(4096)
         {
+            let file_len = self.file.metadata()?.len();
+            if entry.compressed_size() != entry.size()
+                || offset
+                    .checked_add(entry.size())
+                    .is_none_or(|end| end > file_len)
+            {
+                return Err(
+                    "stored entry size does not match its compressed size or exceeds the APK file"
+                        .into(),
+                );
+            }
             let size = usize::try_from(entry.size())?;
             // APK files must stay unchanged while cached images are in use.
             return Ok(unsafe {
@@ -75,24 +85,39 @@ impl Archive {
     }
 }
 
-/// Shared across metadata copies and checkpoints. Missing splits may appear later.
+/// Archives opened at build, shared across metadata copies and checkpoints.
 #[derive(Debug)]
-pub(super) struct Archives(RefCell<HashMap<PathBuf, Rc<Archive>>>);
+pub(super) struct Archives {
+    pub(super) base: Rc<Archive>,
+    splits: [Option<Rc<Archive>>; 2],
+}
 impl Archives {
-    pub(super) fn new(base: Rc<Archive>) -> Self {
-        Self(RefCell::new(HashMap::from([(base.path.clone(), base)])))
+    pub(super) fn new(base: Rc<Archive>) -> Result<Self> {
+        let open = |name| -> Result<Option<Rc<Archive>>> {
+            let path = base.path.with_file_name(name);
+            if path.exists() {
+                Ok(Some(Rc::new(Archive::open(&path)?)))
+            } else {
+                Ok(None)
+            }
+        };
+        let splits = [
+            open("config.arm64_v8a.apk")?,
+            open("config.armeabi_v7a.apk")?,
+        ];
+        Ok(Self { base, splits })
     }
 
-    pub(super) fn get(&self, path: &Path, optional: bool) -> Result<Option<Rc<Archive>>> {
-        let mut archives = self.0.borrow_mut();
-        if let Some(archive) = archives.get(path) {
-            return Ok(Some(archive.clone()));
-        }
-        if optional && !path.is_file() {
-            return Ok(None);
-        }
-        let archive = Rc::new(Archive::open(path)?);
-        archives.insert(path.to_owned(), archive.clone());
-        Ok(Some(archive))
+    pub(super) fn libraries(
+        &self,
+        arch: crate::Architecture,
+    ) -> impl Iterator<Item = Rc<Archive>> + '_ {
+        let index = match arch {
+            crate::Architecture::Arm64 => 0,
+            crate::Architecture::Arm32 => 1,
+        };
+        std::iter::once(&self.base)
+            .chain(self.splits[index].iter())
+            .cloned()
     }
 }

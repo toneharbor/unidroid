@@ -168,3 +168,35 @@ fn apk_jna_matches_unidbg_for_compressed_aligned_and_unaligned_entries() -> Resu
     }
     Ok(())
 }
+
+#[test]
+fn split_archives_are_validated_at_build_and_late_splits_are_ignored() -> Result<()> {
+    for (abi, dir, split_name) in [
+        ("arm64-v8a", "lib64", "config.arm64_v8a.apk"),
+        ("armeabi-v7a", "lib", "config.armeabi_v7a.apk"),
+    ] {
+        let base = TestApk::manifest(&manifest::xml(true, &[package()]))?;
+        let split_path = base.path.with_file_name(split_name);
+        std::fs::write(&split_path, b"not a zip")?;
+        let error = Emulator::builder()
+            .apk(&base.path)
+            .build()
+            .err()
+            .expect("invalid split must fail build")
+            .to_string();
+        assert!(error.contains(split_path.to_str().unwrap()), "{error}");
+        std::fs::remove_file(&split_path)?;
+        let mut emu = Emulator::builder().apk(&base.path).build()?;
+        let bytes = std::fs::read(format!("rootfs/{dir}/libdl.so"))?;
+        let split = TestApk::new(&[(&format!("lib/{abi}/liblate.so"), &bytes, Stored, 1)])?;
+        std::fs::copy(&split.path, &split_path)?;
+        let error = emu.load_apk_library("liblate.so").unwrap_err().to_string();
+        assert!(
+            error.contains("liblate.so") && error.contains("not found"),
+            "{error}"
+        );
+        let mut fresh = Emulator::builder().apk(&base.path).build()?;
+        fresh.load_apk_library("liblate.so")?;
+    }
+    Ok(())
+}

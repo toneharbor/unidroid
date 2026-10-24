@@ -98,12 +98,26 @@ impl Image {
     ) -> Result<Arc<Self>> {
         type ImageCache = HashMap<(PathBuf, Option<String>), Arc<Image>>;
         static IMAGES: OnceLock<Mutex<ImageCache>> = OnceLock::new();
-        let key = (path.canonicalize()?, entry.map(str::to_owned));
-        let mut cache = IMAGES.get_or_init(Default::default).lock().unwrap();
-        if let Some(image) = cache.get(&key) {
-            return Ok(image.clone());
-        }
-        let bytes = bytes()?;
+        let load = || -> Result<Arc<Self>> {
+            let key = (path.canonicalize()?, entry.map(str::to_owned));
+            let mut cache = IMAGES.get_or_init(Default::default).lock().unwrap();
+            if let Some(image) = cache.get(&key) {
+                return Ok(image.clone());
+            }
+            let image = Arc::new(Self::parse(bytes()?)?);
+            cache.insert(key, image.clone());
+            Ok(image)
+        };
+        load().map_err(|error| {
+            let source = match entry {
+                Some(entry) => format!("{}!/{entry}", path.display()),
+                None => path.display().to_string(),
+            };
+            format!("ELF {source}: {error}").into()
+        })
+    }
+
+    fn parse(bytes: Mmap) -> Result<Self> {
         let elf = Elf::parse(&bytes)?;
         let arch = match (elf.header.e_machine, elf.is_64) {
             (183, true) => Architecture::Arm64,
@@ -112,6 +126,37 @@ impl Image {
         };
         if !elf.little_endian {
             return Err(std::io::Error::from(std::io::ErrorKind::InvalidData).into());
+        }
+        let segments: Vec<_> = elf
+            .program_headers
+            .iter()
+            .filter(|s| s.p_type == PT_LOAD)
+            .cloned()
+            .collect();
+        if segments.is_empty() {
+            return Err("missing PT_LOAD segments".into());
+        }
+        let mut size = 0;
+        for segment in &segments {
+            let file_end = segment
+                .p_offset
+                .checked_add(segment.p_filesz)
+                .ok_or("PT_LOAD file range overflows")?;
+            if file_end > bytes.len() as u64 {
+                return Err("PT_LOAD file range exceeds the file".into());
+            }
+            if segment.p_filesz > segment.p_memsz {
+                return Err("PT_LOAD file size exceeds memory size".into());
+            }
+            let end = segment
+                .p_vaddr
+                .checked_add(segment.p_memsz)
+                .ok_or("PT_LOAD virtual range overflows")?;
+            let aligned_end = end
+                .checked_add(crate::PAGE - 1)
+                .map(crate::page_down)
+                .ok_or("PT_LOAD page-aligned virtual range overflows")?;
+            size = size.max(aligned_end);
         }
         let mut relocations: Vec<_> = elf
             .dynrelas
@@ -124,7 +169,7 @@ impl Image {
                 addend: r.r_addend.unwrap_or(0),
             })
             .collect();
-        let dynamic = elf.dynamic.as_ref().unwrap();
+        let dynamic = elf.dynamic.as_ref().ok_or("missing PT_DYNAMIC table")?;
         let tag = |tag| {
             dynamic
                 .dyns
@@ -134,24 +179,22 @@ impl Image {
         };
         let packed = tag(arch.packed_rel_tag());
         if packed != 0 {
-            let seg = elf
-                .program_headers
+            let seg = segments
                 .iter()
-                .find(|s| {
-                    s.p_type == PT_LOAD && packed >= s.p_vaddr && packed < s.p_vaddr + s.p_filesz
-                })
-                .unwrap();
-            let start = (seg.p_offset + packed - seg.p_vaddr) as usize;
-            relocations.extend(
-                android_relocations(
-                    &bytes[start..start + tag(arch.packed_rel_tag() + 1) as usize],
-                )?
-                .into_iter()
-                .map(|mut r| {
-                    r.info = arch.relocation_info(r.info);
-                    r
-                }),
-            );
+                .find(|s| packed >= s.p_vaddr && packed - s.p_vaddr < s.p_filesz)
+                .ok_or("packed relocations are outside every file-backed PT_LOAD segment")?;
+            let offset = packed - seg.p_vaddr;
+            let size = tag(arch.packed_rel_tag() + 1);
+            if size > seg.p_filesz - offset {
+                return Err("packed relocation range exceeds its PT_LOAD segment".into());
+            }
+            // PT_LOAD validation bounds this range in the file.
+            let start = (seg.p_offset + offset) as usize;
+            let packed_bytes = &bytes[start..start + size as usize];
+            relocations.extend(android_relocations(packed_bytes)?.into_iter().map(|mut r| {
+                r.info = arch.relocation_info(r.info);
+                r
+            }));
         }
         let symbols: Vec<_> = elf
             .dynsyms
@@ -172,18 +215,7 @@ impl Image {
             .filter(|(_, s)| s.defined && !s.name.is_empty())
             .map(|(i, s)| (s.name.clone(), i))
             .collect();
-        let segments: Vec<_> = elf
-            .program_headers
-            .iter()
-            .filter(|s| s.p_type == PT_LOAD)
-            .cloned()
-            .collect();
-        let size = segments
-            .iter()
-            .map(|s| crate::page_up(s.p_vaddr + s.p_memsz))
-            .max()
-            .unwrap();
-        let image = Self {
+        Ok(Self {
             arch,
             segments,
             dynstr: tag(5),
@@ -199,10 +231,7 @@ impl Image {
             phnum: elf.header.e_phnum,
             functions: OnceLock::new(),
             bytes,
-        };
-        let image = Arc::new(image);
-        cache.insert(key, image.clone());
-        Ok(image)
+        })
     }
 }
 
@@ -238,7 +267,7 @@ pub fn android_relocations(bytes: &[u8]) -> Result<Vec<Relocation>> {
     let count = usize::try_from(sleb(&mut bytes)?)?;
     let mut offset = sleb(&mut bytes)?;
     let mut addend = 0i64;
-    let mut relocs = Vec::with_capacity(count);
+    let mut relocs = Vec::new();
     while relocs.len() < count {
         let size = usize::try_from(sleb(&mut bytes)?)?;
         let flags = sleb(&mut bytes)?;

@@ -61,14 +61,20 @@ fn guest_dlopen_existing_rootfs_path_precedes_apk_name_lookup() -> Result<()> {
 
 #[test]
 fn guest_dlopen_apk_errors_include_the_guest_caller() -> Result<()> {
-    for (dir, split) in [
-        ("lib64", "config.arm64_v8a.apk"),
-        ("lib", "config.armeabi_v7a.apk"),
+    for (abi, dir, split) in [
+        ("arm64-v8a", "lib64", "config.arm64_v8a.apk"),
+        ("armeabi-v7a", "lib", "config.armeabi_v7a.apk"),
     ] {
         let file = TestApk::manifest(&manifest::xml(true, &[package()]))?;
+        let broken = TestApk::new(&[(
+            &format!("lib/{abi}/not-loaded.so"),
+            b"not an ELF",
+            Stored,
+            1,
+        )])?;
+        std::fs::copy(&broken.path, file.path.with_file_name(split))?;
         let mut emu = Emulator::builder().apk(&file.path).build()?;
         let libc = emu.load_library(format!("rootfs/{dir}/libc.so"))?;
-        std::fs::write(file.path.with_file_name(split), b"not a zip")?;
         let name = emu.new_cstring("not-loaded.so")?;
         let error = call(&mut emu, libc, "dlopen", &[name, 2])
             .unwrap_err()

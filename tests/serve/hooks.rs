@@ -2,64 +2,79 @@ use super::*;
 
 #[test]
 fn deferred_load_and_constructor_commands_stop_once() {
-    // This generated constructor uses AArch64 code.
-    let library = elf::TestLibrary::new(false);
-    let mut client = Client::start();
-    let module = client.request(json!({"cmd":"load", "path":library.0, "constructors":false}));
-    let data = client.request(json!({"cmd":"find_symbol", "module":module, "name":"data"}));
-    assert_eq!(
-        client.request(json!({"cmd":"read", "address":data, "size":8})),
-        "AAAAAAAAAAA="
-    );
-    let modules = client.request(json!({"cmd":"modules"}));
-    let base: u64 = modules[0]["base"].as_str().unwrap().parse().unwrap();
-    client.request(json!({"cmd":"break", "at":format!("0x{:x}", base + 0x220)}));
-    client.send(json!({"cmd":"run_constructors", "module":module}));
-    assert_eq!(
-        client.receive()["break"]["address"],
-        (base + 0x220).to_string()
-    );
-    client.send(json!({"cmd":"continue"}));
-    assert_eq!(client.receive(), json!({"ok":null}));
-    assert_eq!(
-        client.request(json!({"cmd":"read", "address":data, "size":8})),
-        "KgAAAAAAAAA="
-    );
-    assert_eq!(
-        client.request(json!({"cmd":"run_constructors", "module":module})),
-        Value::Null
-    );
-    client.finish();
+    for arm64 in [true, false] {
+        let library = elf::TestLibrary::new(arm64, false);
+        let mut client = Client::start();
+        let module = client.request(json!({"cmd":"load", "path":library.0, "constructors":false}));
+        let data = client.request(json!({"cmd":"find_symbol", "module":module, "name":"data"}));
+        assert_eq!(
+            client.request(json!({"cmd":"read", "address":data, "size":8})),
+            "AAAAAAAAAAA="
+        );
+        let modules = client.request(json!({"cmd":"modules"}));
+        let base: u64 = modules[0]["base"].as_str().unwrap().parse().unwrap();
+        client.request(json!({"cmd":"break", "at":format!("0x{:x}", base + 0x220)}));
+        client.send(json!({"cmd":"run_constructors", "module":module}));
+        assert_eq!(
+            client.receive()["break"]["address"],
+            (base + 0x220).to_string()
+        );
+        client.send(json!({"cmd":"continue"}));
+        assert_eq!(client.receive(), json!({"ok":null}));
+        assert_eq!(
+            client.request(json!({"cmd":"read", "address":data, "size":8})),
+            "KgAAAAAAAAA="
+        );
+        assert_eq!(
+            client.request(json!({"cmd":"run_constructors", "module":module})),
+            Value::Null
+        );
+        client.finish();
+    }
 }
 
 #[test]
 fn load_runs_constructor_stops_and_import_questions() {
-    let library = elf::TestLibrary::new(false);
-    let mut bytes = std::fs::read(&library.0).unwrap();
-    // DT_INIT runs the normal constructor; DT_INIT_ARRAY calls the answer export.
-    bytes[0x10a0..0x10a8].copy_from_slice(&12u64.to_le_bytes());
-    bytes[0x10a8..0x10b0].copy_from_slice(&0x220u64.to_le_bytes());
-    bytes[0x1408..0x1410].copy_from_slice(&((1u64 << 32) | 257).to_le_bytes());
-    bytes[0x1410..0x1418].fill(0);
-    std::fs::write(&library.0, bytes).unwrap();
-    let mut client = Client::start();
-    let module = client.request(json!({"cmd":"load", "path":library.0, "constructors":false}));
-    let modules = client.request(json!({"cmd":"modules"}));
-    let base: u64 = modules[0]["base"].as_str().unwrap().parse().unwrap();
-    client.request(json!({"cmd":"break", "at":format!("0x{:x}", base + 0x220)}));
-    client.request(json!({"cmd":"hook_import", "name":"answer"}));
-    client.send(json!({"cmd":"load", "path":library.0}));
-    assert_eq!(
-        client.receive()["break"]["address"],
-        (base + 0x220).to_string()
-    );
-    client.send(json!({"cmd":"continue"}));
-    let question = client.receive();
-    assert_eq!(question["import"]["name"], "answer");
-    assert_eq!(question["import"]["original"], (base + 0x200).to_string());
-    client.send(json!({"cmd":"answer", "value":"73"}));
-    assert_eq!(client.receive(), json!({"ok":module}));
-    client.finish();
+    for arm64 in [true, false] {
+        let library = elf::TestLibrary::new(arm64, false);
+        let mut bytes = std::fs::read(&library.0).unwrap();
+        // DT_INIT runs the normal constructor; DT_INIT_ARRAY calls the answer export.
+        let width = if arm64 { 8 } else { 4 };
+        for (offset, value) in [
+            (0x1000 + 20 * width, 12u64),
+            (0x1000 + 21 * width, 0x220),
+            (
+                0x1400 + width,
+                if arm64 {
+                    (1u64 << 32) | 257
+                } else {
+                    (1 << 8) | 2
+                },
+            ),
+            (if arm64 { 0x1410 } else { 0x1500 }, 0),
+        ] {
+            bytes[offset..offset + width].copy_from_slice(&value.to_le_bytes()[..width]);
+        }
+        std::fs::write(&library.0, bytes).unwrap();
+        let mut client = Client::start();
+        let module = client.request(json!({"cmd":"load", "path":library.0, "constructors":false}));
+        let modules = client.request(json!({"cmd":"modules"}));
+        let base: u64 = modules[0]["base"].as_str().unwrap().parse().unwrap();
+        client.request(json!({"cmd":"break", "at":format!("0x{:x}", base + 0x220)}));
+        client.request(json!({"cmd":"hook_import", "name":"answer"}));
+        client.send(json!({"cmd":"load", "path":library.0}));
+        assert_eq!(
+            client.receive()["break"]["address"],
+            (base + 0x220).to_string()
+        );
+        client.send(json!({"cmd":"continue"}));
+        let question = client.receive();
+        assert_eq!(question["import"]["name"], "answer");
+        assert_eq!(question["import"]["original"], (base + 0x200).to_string());
+        client.send(json!({"cmd":"answer", "value":"73"}));
+        assert_eq!(client.receive(), json!({"ok":module}));
+        client.finish();
+    }
 }
 
 #[test]

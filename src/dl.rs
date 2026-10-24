@@ -50,7 +50,6 @@ impl Emulator {
                     Some(crate::apk::libraries::Library::Host(full))
                 } else {
                     self.find_library(&name)
-                        .map_err(|error| format!("{error} from {from}"))?
                 };
                 let Some(library) = library else {
                     self.set_dlerror(&format!("dlopen failed: library \"{name}\" not found"))?;

@@ -41,7 +41,7 @@ fn dependency_loads_and_rewinds_parse_each_archive_once() -> Result<()> {
         let base_path = base.path.canonicalize()?;
         let split_path = split_path.canonicalize()?;
         assert_eq!(parses(&base_path), 1);
-        assert_eq!(parses(&split_path), 0);
+        assert_eq!(parses(&split_path), 1);
         emu.load_apk_library("libjnidispatch.so")?;
         assert!(emu.modules().len() >= 4);
         assert_eq!(parses(&base_path), 1);
