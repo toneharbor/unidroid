@@ -1,11 +1,6 @@
-use super::{Handle, JniState, MEMBER_ID_BASE, Object, PrimitiveType, Reference};
+use super::{Handle, JniState, MEMBER_ID_BASE, Object, PendingException, PrimitiveType, Reference};
 use crate::{Emulator, Result};
-use std::{
-    any::Any,
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    rc::Rc,
-};
+use std::{any::Any, cell::RefCell, collections::HashMap, rc::Rc};
 
 impl Clone for JniState {
     fn clone(&self) -> Self {
@@ -31,6 +26,16 @@ impl Clone for JniState {
                 .application
                 .as_ref()
                 .map(|object| copy(object, &mut seen, &mut pending)),
+            boxed: self
+                .boxed
+                .iter()
+                .map(|(&key, object)| (key, copy(object, &mut seen, &mut pending)))
+                .collect(),
+            charsets: self
+                .charsets
+                .iter()
+                .map(|(&key, object)| (key, copy(object, &mut seen, &mut pending)))
+                .collect(),
             objects: self
                 .objects
                 .iter()
@@ -54,6 +59,7 @@ impl Clone for JniState {
                     )
                 })
                 .collect(),
+            containers: Vec::new(),
             superclasses: self.superclasses.clone(),
             members: self.members.clone(),
             member_ids: self.member_ids.clone(),
@@ -65,7 +71,7 @@ impl Clone for JniState {
             env: self.env,
             vm: self.vm,
             weak: self.weak.clone(),
-            pending: self.pending,
+            pending: self.pending.clone(),
             history: Default::default(),
         };
         while let Some(object) = pending.pop() {
@@ -76,6 +82,9 @@ impl Clone for JniState {
                 }
             });
             *seen[&Rc::as_ptr(&object)].borrow_mut() = value;
+        }
+        for object in seen.values() {
+            copied.track_container(object);
         }
         copied.identities = seen
             .iter()
@@ -89,27 +98,30 @@ impl Clone for JniState {
     }
 }
 impl JniState {
+    fn track_container(&mut self, object: &Rc<RefCell<Object>>) {
+        if object.borrow().is_container() {
+            // Prune before growing the registry, without scanning it for every allocation.
+            if self.containers.len() == self.containers.capacity() {
+                self.containers.retain(|object| object.strong_count() != 0);
+            }
+            self.containers.push(Rc::downgrade(object));
+        }
+    }
     pub(crate) fn rewind(&mut self, saved: &Self) {
         *self = saved.clone();
     }
 }
 impl Drop for JniState {
     fn drop(&mut self) {
-        // Each state owns its graph. Break object cycles when replacing or dropping it.
-        let mut pending: Vec<_> = self
-            .objects
-            .values()
-            .map(|r| r.object.clone())
-            .chain(self.classes.values().map(|(_, object)| object.clone()))
-            .chain(self.application.iter().cloned())
+        // Hold every live container while breaking edges, including orphaned cycles.
+        // This also prevents recursive destruction of deeply nested containers.
+        let containers: Vec<_> = self
+            .containers
+            .iter()
+            .filter_map(|object| object.upgrade())
             .collect();
-        let mut seen = HashSet::new();
-        while let Some(object) = pending.pop() {
-            if seen.insert(Rc::as_ptr(&object)) {
-                object
-                    .borrow_mut()
-                    .references(|item| pending.extend(item.take()));
-            }
+        for object in &containers {
+            object.borrow_mut().references(|item| *item = None);
         }
     }
 }
@@ -147,12 +159,18 @@ impl Emulator {
         self.jni.objects.insert(handle, Reference { object, scope });
         handle
     }
+    pub(super) fn allocate_object(&mut self, object: Object) -> Rc<RefCell<Object>> {
+        let object = Rc::new(RefCell::new(object));
+        self.jni.track_container(&object);
+        object
+    }
     pub(super) fn insert_object(&mut self, object: Object) -> Handle {
-        let scope = self.jni.scope;
-        self.insert_ref(Rc::new(RefCell::new(object)), scope)
+        let object = self.allocate_object(object);
+        self.insert_ref(object, self.jni.scope)
     }
     pub(super) fn insert_api_object(&mut self, object: Object) -> Handle {
-        self.insert_ref(Rc::new(RefCell::new(object)), 0)
+        let object = self.allocate_object(object);
+        self.insert_ref(object, 0)
     }
     pub(super) fn jni_object(&self, handle: Handle) -> Result<Rc<RefCell<Object>>> {
         self.jni
@@ -273,15 +291,20 @@ impl Emulator {
             .collect())
     }
     pub(super) fn pending_exception(&mut self, class: &str, message: Option<String>) {
+        let handle = self.insert_api_object(Object::Exception(class.into(), message));
+        self.set_pending_exception(handle);
+    }
+    pub(super) fn set_pending_exception(&mut self, handle: Handle) {
         if let Some(old) = self.jni.pending.take() {
-            self.release(old);
+            self.release(old.handle);
         }
-        let handle = self.insert_object(Object::Exception(class.into(), message));
-        self.jni.objects.get_mut(&handle).unwrap().scope = 0;
-        self.jni.pending = Some(handle);
+        self.jni.pending = Some(PendingException {
+            handle,
+            from: self.location(self.lr().unwrap_or(0)),
+        });
     }
     pub(super) fn exception_result(&mut self) -> Result<()> {
-        let Some(handle) = self.jni.pending.take() else {
+        let Some(PendingException { handle, from }) = self.jni.pending.take() else {
             return Ok(());
         };
         let object = self.jni_object(handle)?;
@@ -291,8 +314,10 @@ impl Emulator {
         };
         self.release(handle);
         Err(match message {
-            Some(message) => format!("java exception thrown by native code: {class}: {message}"),
-            None => format!("java exception thrown by native code: {class}"),
+            Some(message) => {
+                format!("java exception thrown by native code: {class}: {message} from {from}")
+            }
+            None => format!("java exception thrown by native code: {class} from {from}"),
         }
         .into())
     }

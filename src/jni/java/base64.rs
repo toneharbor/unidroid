@@ -5,7 +5,11 @@ use ::base64::{
     engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
 };
 
-pub(super) fn call(emu: &mut Emulator, call: &JniCall<'_>) -> Result<Option<JniValue>> {
+pub(super) fn call(
+    emu: &mut Emulator,
+    call: &JniCall<'_>,
+    function: &str,
+) -> Result<Option<JniValue>> {
     if call.class != "android/util/Base64" {
         return Ok(None);
     }
@@ -31,13 +35,10 @@ pub(super) fn call(emu: &mut Emulator, call: &JniCall<'_>) -> Result<Option<JniV
             .with_decode_allow_trailing_bits(true),
     );
     let handle = call.args[0].object();
-    if handle.0 == 0 {
-        return Err(exception("java/lang/NullPointerException", None));
-    }
     let input = if call.signature.starts_with("(Ljava/lang/String;") {
         charset::Charset::Utf8.encode(&units(emu, handle)?)
     } else {
-        emu.byte_array(handle)?
+        array(emu, handle, function)?
     };
     let output = if call.name == "decode" {
         // Android's SKIP table covers every non-alphabet byte, not just whitespace.

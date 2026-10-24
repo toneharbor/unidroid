@@ -139,6 +139,21 @@ pub(super) fn static_call(
                 && call.name == "valueOf"
                 && call.signature == format!("({})L{};", value.type_code() as char, call.class)))
     {
+        if !constructor
+            && match value {
+                JniValue::Boolean(_) => true,
+                JniValue::Char(value) => value <= 127,
+                _ => integer(value).is_some_and(|value| (-128..=127).contains(&value)),
+            }
+        {
+            let object = emu
+                .jni
+                .boxed
+                .entry((value.type_code(), value.bits()))
+                .or_insert_with(|| Rc::new(RefCell::new(Object::Boxed(value))))
+                .clone();
+            return Ok(Some(return_ref(emu, Some(object))));
+        }
         return Ok(Some(emu.insert_object(Object::Boxed(value)).into()));
     }
     if constructor {

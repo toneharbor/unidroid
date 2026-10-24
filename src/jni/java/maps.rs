@@ -242,11 +242,11 @@ pub(super) fn call(
                         .map(|(key, value)| match call.name {
                             "keySet" => key,
                             "values" => value,
-                            _ => Some(Rc::new(RefCell::new(Object::Entry(
+                            _ => Some(emu.allocate_object(Object::Entry(
                                 map.kind.entry_class().into(),
                                 key,
                                 value,
-                            )))),
+                            ))),
                         })
                         .collect();
                     let suffix = match (map.kind, call.name) {

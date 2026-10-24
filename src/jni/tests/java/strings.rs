@@ -1,6 +1,69 @@
 use super::*;
 
 #[test]
+fn string_value_of_object_returns_its_to_string_result() -> Result<()> {
+    struct Text(Handle);
+    impl JniHandler for Text {
+        fn call_object_method(&mut self, _: &mut Emulator, call: &JniCall<'_>) -> Option<Handle> {
+            assert_eq!(
+                (call.class, call.name, call.signature),
+                ("test/Text", "toString", "()Ljava/lang/String;")
+            );
+            Some(self.0)
+        }
+    }
+    for arch in ARCHES {
+        let mut emu = emulator(arch)?;
+        let string = emu.new_string("same string");
+        let result = static_call(
+            &mut emu,
+            "java/lang/String",
+            "valueOf(Ljava/lang/Object;)Ljava/lang/String;",
+            &[string.into()],
+        )?
+        .object();
+        assert_eq!(jni_call(&mut emu, 24, &[string.0, result.0])?, 1);
+        emu.release(result);
+        assert_eq!(emu.string(string)?, "same string");
+        let null = static_call(
+            &mut emu,
+            "java/lang/String",
+            "valueOf(Ljava/lang/Object;)Ljava/lang/String;",
+            &[Handle(0).into()],
+        )?
+        .object();
+        assert_eq!(emu.string(null)?, "null");
+        let builder = construct(
+            &mut emu,
+            "java/lang/StringBuilder",
+            "(Ljava/lang/String;)V",
+            &[string.into()],
+        )?;
+        let result = static_call(
+            &mut emu,
+            "java/lang/String",
+            "valueOf(Ljava/lang/Object;)Ljava/lang/String;",
+            &[builder.into()],
+        )?
+        .object();
+        assert_eq!(emu.string(result)?, text(&mut emu, builder)?);
+        let object = emu.new_object("test/Text", ());
+        let result = member(
+            &mut emu,
+            &mut Text(string),
+            Handle(0),
+            "java/lang/String",
+            "valueOf(Ljava/lang/Object;)Ljava/lang/String;",
+            &[object.into()],
+            1,
+        )?
+        .object();
+        assert_eq!(jni_call(&mut emu, 24, &[string.0, result.0])?, 1);
+    }
+    Ok(())
+}
+
+#[test]
 fn strings_use_utf16_and_builtin_dispatch_before_the_handler() -> Result<()> {
     for arch in ARCHES {
         let mut emu = emulator(arch)?;

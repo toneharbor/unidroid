@@ -1,4 +1,4 @@
-use super::{Handle, JniCall, JniValue, Object};
+use super::{Handle, JniCall, JniHandler, JniValue, Object};
 use crate::{Emulator, Result};
 use std::{cell::RefCell, rc::Rc};
 
@@ -41,8 +41,9 @@ pub(super) fn dispatch(
     call: &JniCall<'_>,
     op: u8,
     function: &str,
+    handler: &mut dyn JniHandler,
 ) -> Result<Option<JniValue>> {
-    let result = dispatch_inner(emu, call, op, function);
+    let result = dispatch_inner(emu, call, op, function, handler);
     match result {
         Err(error) => match error.downcast::<Exception>() {
             Ok(error) => {
@@ -75,6 +76,7 @@ fn dispatch_inner(
     call: &JniCall<'_>,
     op: u8,
     function: &str,
+    handler: &mut dyn JniHandler,
 ) -> Result<Option<JniValue>> {
     if emu.apk().is_some()
         && let Some(value) = super::android::dispatch(emu, call, op)?
@@ -108,6 +110,28 @@ fn dispatch_inner(
                     | "(Ljava/lang/Object;)Ljava/lang/String;"
             )
         {
+            if call.signature == "(Ljava/lang/Object;)Ljava/lang/String;"
+                && let Some(receiver) = reference(emu, call.args[0].object())?
+            {
+                let class = receiver.borrow().java_type();
+                let to_string = JniCall {
+                    class: &class,
+                    name: "toString",
+                    signature: "()Ljava/lang/String;",
+                    receiver: call.args[0].object(),
+                    args: &[],
+                };
+                return dispatch_inner(emu, &to_string, 0, function, handler)?
+                    .or_else(|| {
+                        handler
+                            .call_object_method(emu, &to_string)
+                            .map(JniValue::Object)
+                    })
+                    .map(Some)
+                    .ok_or_else(|| {
+                        emu.jni_error(function, &class, to_string.name, to_string.signature)
+                    });
+            }
             return Ok(builder::argument(emu, call.args[0])?.map(|value| string(emu, value)));
         }
         if call.class == "java/nio/charset/Charset"
@@ -123,7 +147,7 @@ fn dispatch_inner(
         if let Some(value) = digest::static_call(emu, call)? {
             return Ok(Some(value));
         }
-        if let Some(value) = base64::call(emu, call)? {
+        if let Some(value) = base64::call(emu, call, function)? {
             return Ok(Some(value));
         }
         return boxing::static_call(emu, call, false);
@@ -134,8 +158,15 @@ fn dispatch_inner(
     {
         return Ok(match call.name {
             "UTF_8" | "US_ASCII" | "ISO_8859_1" | "UTF_16LE" | "UTF_16BE" => {
-                Charset::parse(call.name)
-                    .map(|charset| emu.insert_object(Object::Charset(charset)).into())
+                Charset::parse(call.name).map(|charset| {
+                    let object = emu
+                        .jni
+                        .charsets
+                        .entry(charset.name())
+                        .or_insert_with(|| Rc::new(RefCell::new(Object::Charset(charset))))
+                        .clone();
+                    return_ref(emu, Some(object))
+                })
             }
             _ => None,
         });
@@ -151,7 +182,7 @@ fn dispatch_inner(
         return Ok(Some(value));
     }
     match &*receiver.borrow() {
-        Object::String(value) => return strings::call(emu, call, value),
+        Object::String(value) => return strings::call(emu, call, value, function),
         Object::Boxed(value) => return Ok(boxing::call(call, *value)),
         Object::Charset(charset)
             if call.name == "name" && call.signature == "()Ljava/lang/String;" =>
@@ -167,7 +198,7 @@ fn dispatch_inner(
         return builder::call(emu, call, &receiver);
     }
     if matches!(&*receiver.borrow(), Object::Digest(_)) {
-        return digest::call(emu, call, &receiver);
+        return digest::call(emu, call, &receiver, function);
     }
     if matches!(&*receiver.borrow(), Object::Map(_)) {
         return maps::call(emu, call, &receiver);
@@ -185,6 +216,13 @@ fn reference(emu: &Emulator, handle: Handle) -> Result<ObjectRef> {
     } else {
         emu.jni_object(handle).map(Some)
     }
+}
+fn array(emu: &Emulator, handle: Handle, function: &str) -> Result<Vec<u8>> {
+    if handle.0 == 0 {
+        return Err(exception("java/lang/NullPointerException", None));
+    }
+    emu.validate_ref(function, handle.0, 3)?;
+    emu.primitive_array(handle)
 }
 pub(super) fn units(emu: &Emulator, handle: Handle) -> Result<Vec<u16>> {
     let object =

@@ -48,12 +48,12 @@ impl Emulator {
         // NewStringUTF, NewDirectByteBuffer and GetObjectRefType take a
         // pointer or any value there, so they are not checked.
         let kind = match index {
-            21..=25 | 226 | 227 => Some(6),
+            21..=25 | 32 | 226 | 227 => Some(6),
             164..=166 | 168..=170 | 220 | 221 | 224 | 225 => Some(2),
             171 => Some(5),
             183..=214 | 222 | 223 => Some(3),
             10 | 27..=30 | 33 | 94 | 113..=162 | 215 | 216 => Some(1),
-            31 | 32 | 34..=93 | 95..=112 | 230 | 231 => Some(0),
+            31 | 34..=93 | 95..=112 | 230 | 231 => Some(0),
             _ => None,
         };
         if let Some(kind) = kind {
@@ -119,8 +119,13 @@ impl Emulator {
                 Ok(self.find_class(&superclass, self.jni.scope).0)
             }
             12 => Err(self.unsupported_jni("ToReflectedField")),
+            32 if a == 0 => Ok(1),
             11 | 32 => {
-                let from = self.class_name(Handle(a))?;
+                let from = if index == 32 {
+                    self.jni_object(Handle(a))?.borrow().java_type()
+                } else {
+                    self.class_name(Handle(a))?
+                };
                 let to = self.class_name(Handle(b))?;
                 Ok(
                     if to == "java/lang/Object" || self.class_chain(&from).contains(&to.as_str()) {
@@ -137,7 +142,8 @@ impl Emulator {
             }
             13 => {
                 if self.jni.objects.contains_key(&Handle(a)) {
-                    self.jni.pending = Some(self.alias(Handle(a), 0)?);
+                    let handle = self.alias(Handle(a), 0)?;
+                    self.set_pending_exception(handle);
                     Ok(0)
                 } else {
                     Err(self.reference_error(&function, a))
@@ -151,13 +157,15 @@ impl Emulator {
             15 => Ok(self
                 .jni
                 .pending
+                .as_ref()
+                .map(|pending| pending.handle)
                 .map(|handle| self.alias(handle, self.jni.scope))
                 .transpose()?
                 .map_or(0, |handle| handle.0)),
             16 => Ok(0),
             17 => {
-                if let Some(handle) = self.jni.pending.take() {
-                    self.release(handle);
+                if let Some(pending) = self.jni.pending.take() {
+                    self.release(pending.handle);
                 }
                 Ok(0)
             }

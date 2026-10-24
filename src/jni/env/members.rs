@@ -86,11 +86,14 @@ impl Emulator {
                         from: self.location(self.lr()?),
                     });
                 }
-                let result = match crate::jni::java::dispatch(self, &call, operation, &function)? {
-                    Some(value) => Some(value),
-                    None if constructor => handler.new_object(self, &call).map(JniValue::Object),
-                    None => dispatch(handler, self, &call, operation, kind),
-                };
+                let result =
+                    match crate::jni::java::dispatch(self, &call, operation, &function, handler)? {
+                        Some(value) => Some(value),
+                        None if constructor => {
+                            handler.new_object(self, &call).map(JniValue::Object)
+                        }
+                        None => dispatch(handler, self, &call, operation, kind),
+                    };
                 let value = result.ok_or_else(|| {
                     self.jni_error(&function, &member.class, &member.name, &member.signature)
                 })?;

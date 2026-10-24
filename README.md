@@ -335,7 +335,7 @@ Policy values use the call's type letter:
 | `L` | `null`, a string (creates a new `java/lang/String`), `{"object":"class/Name"}`, or `{"array":"B","base64":"AQID"}` |
 | `L` (collections) | `{"map":"java/util/HashMap","entries":[["key","value"]]}` or `{"list":"java/util/ArrayList","items":["value",null]}`; keys, values and items are recursive `L` values |
 
-Collection answers create fresh built-in maps and lists; supported classes and snapshot behavior are described in [ENVIRONMENT.md](ENVIRONMENT.md). Arrays accept `Z B C S I J F D` and use the same little-endian bytes as serve's `new_array`. Object, string and array answers create fresh handles each time. A constructor (`new`) needs an `L` answer even though its signature ends in `V`.
+Collection answers create fresh built-in maps and lists; supported classes and snapshot behavior are described in [ENVIRONMENT.md](ENVIRONMENT.md). If building a collection answer fails, every handle created for that answer is released. Arrays accept `Z B C S I J F D` and use the same little-endian bytes as serve's `new_array`. Object, string and array answers create fresh handles each time. A constructor (`new`) needs an `L` answer even though its signature ends in `V`.
 
 In Rust, load a file with `Policy::load(path)` or JSON text with `Policy::parse(text)`, then wrap your existing handler:
 

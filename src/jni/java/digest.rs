@@ -48,17 +48,18 @@ pub(super) fn call(
     emu: &mut Emulator,
     call: &JniCall<'_>,
     receiver: &Rc<RefCell<Object>>,
+    function: &str,
 ) -> Result<Option<JniValue>> {
     let a = call.args;
     let bytes = match (call.name, call.signature) {
         ("update", "([B)V" | "([BII)V") | ("digest", "([B)[B") => {
-            if a[0].object().0 == 0 {
+            if call.signature == "([BII)V" && a[0].object().0 == 0 {
                 return Err(exception(
                     "java/lang/IllegalArgumentException",
                     Some("No input buffer given".into()),
                 ));
             }
-            let bytes = emu.byte_array(a[0].object())?;
+            let bytes = array(emu, a[0].object(), function)?;
             if a.len() == 3 {
                 let (start, length) = (a[1].int(), a[2].int());
                 if start as i64 + length as i64 > bytes.len() as i64 {

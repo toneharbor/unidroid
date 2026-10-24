@@ -84,6 +84,18 @@ enum Object {
     Exception(String, Option<String>),
 }
 impl Object {
+    fn is_container(&self) -> bool {
+        matches!(
+            self,
+            Self::Map(_)
+                | Self::Set(_)
+                | Self::List(..)
+                | Self::View(..)
+                | Self::Entry(..)
+                | Self::Iterator(..)
+                | Self::ObjectArray(..)
+        )
+    }
     fn references(&mut self, mut visit: impl FnMut(&mut java::ObjectRef)) {
         match self {
             Self::ObjectArray(items, _)
@@ -130,9 +142,17 @@ struct Member {
     name: String,
     signature: String,
 }
+#[derive(Clone)]
+struct PendingException {
+    handle: Handle,
+    from: String,
+}
 #[derive(Default)]
 pub(crate) struct JniState {
     application: java::ObjectRef,
+    boxed: HashMap<(u8, u64), Rc<RefCell<Object>>>,
+    charsets: HashMap<&'static str, Rc<RefCell<Object>>>,
+    containers: Vec<Weak<RefCell<Object>>>,
     objects: HashMap<Handle, Reference>,
     classes: HashMap<String, (Handle, Rc<RefCell<Object>>)>,
     superclasses: HashMap<String, String>,
@@ -146,7 +166,7 @@ pub(crate) struct JniState {
     env: u64,
     vm: u64,
     weak: HashSet<Handle>,
-    pending: Option<Handle>,
+    pending: Option<PendingException>,
     history: env::history::History,
 }
 

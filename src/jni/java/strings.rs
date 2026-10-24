@@ -13,22 +13,17 @@ pub(super) fn construct(
     let value = match call.signature {
         "()V" => Vec::new(),
         "(Ljava/lang/String;)V" => units(emu, a[0].object())?,
-        "([C)V" => {
-            emu.validate_ref(function, a[0].object().0, 3)?;
-            emu.primitive_array(a[0].object())?
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|&b| u16::from_le_bytes(b))
-                .collect()
-        }
+        "([C)V" => array(emu, a[0].object(), function)?
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&b| u16::from_le_bytes(b))
+            .collect(),
         "([B)V" | "([BLjava/lang/String;)V" | "([BII)V" | "([BIILjava/lang/String;)V" => {
-            emu.validate_ref(function, a[0].object().0, 3)?;
-            let bytes = emu.byte_array(a[0].object())?;
+            let bytes = array(emu, a[0].object(), function)?;
             let charset = if call.signature.contains("Ljava/lang/String;") {
-                let handle = a.last().unwrap().object();
-                emu.validate_ref(function, handle.0, 2)?;
-                let Some(charset) = Charset::parse(&emu.string(handle)?) else {
+                let Some(charset) = named_charset(emu, a.last().unwrap().object(), function)?
+                else {
                     return Ok(None);
                 };
                 charset
@@ -46,6 +41,14 @@ pub(super) fn construct(
     };
     Ok(Some(string(emu, value)))
 }
+fn named_charset(emu: &Emulator, handle: Handle, function: &str) -> Result<Option<Charset>> {
+    if handle.0 != 0 {
+        emu.validate_ref(function, handle.0, 2)?;
+    }
+    Ok(Charset::parse(&String::from_utf16_lossy(&units(
+        emu, handle,
+    )?)))
+}
 fn range<T>(value: &[T], start: i32, end: i64) -> Result<&[T]> {
     if start < 0 || end < start as i64 || end > value.len() as i64 {
         return Err(exception("java/lang/StringIndexOutOfBoundsException", None));
@@ -56,6 +59,7 @@ pub(super) fn call(
     emu: &mut Emulator,
     call: &JniCall<'_>,
     value: &[u16],
+    function: &str,
 ) -> Result<Option<JniValue>> {
     let a = call.args;
     let answer = match (call.name, call.signature) {
@@ -76,9 +80,7 @@ pub(super) fn call(
             let charset = if a.is_empty() {
                 Charset::Utf8
             } else {
-                let Some(charset) =
-                    Charset::parse(&String::from_utf16_lossy(&units(emu, a[0].object())?))
-                else {
+                let Some(charset) = named_charset(emu, a[0].object(), function)? else {
                     return Ok(None);
                 };
                 charset

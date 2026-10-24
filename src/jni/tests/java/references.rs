@@ -1,6 +1,59 @@
 use super::*;
 
 #[test]
+fn null_is_an_instance_of_any_valid_class_but_invalid_references_still_fail() -> Result<()> {
+    for arch in ARCHES {
+        let mut emu = emulator(arch)?;
+        for name in [
+            "java/lang/Object",
+            "java/lang/String",
+            "java/lang/Class",
+            "app/Unknown",
+            "[B",
+        ] {
+            let class = emu.class(name);
+            assert_eq!(jni_call(&mut emu, 32, &[0, class.0])?, 1, "{name}");
+        }
+        let wrong_kind = emu.new_string("java/lang/String");
+        let released = emu.class("app/Released");
+        emu.release(released);
+        for invalid in [0, 0x123456, wrong_kind.0, released.0] {
+            assert_eq!(
+                jni_call(&mut emu, 32, &[0, invalid])
+                    .unwrap_err()
+                    .to_string(),
+                format!("invalid JNI reference 0x{invalid:x} in IsInstanceOf from 0x20000")
+            );
+        }
+        let class = emu.class("java/lang/Object");
+        assert_eq!(
+            jni_call(&mut emu, 32, &[0x123456, class.0])
+                .unwrap_err()
+                .to_string(),
+            "invalid JNI reference 0x123456 in IsInstanceOf from 0x20000"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn class_instances_use_runtime_type_but_assignability_uses_represented_type() -> Result<()> {
+    for arch in ARCHES {
+        let mut emu = emulator(arch)?;
+        let string = emu.class("java/lang/String");
+        let class = emu.class("java/lang/Class");
+        let object = emu.class("java/lang/Object");
+        assert_eq!(jni_call(&mut emu, 32, &[string.0, class.0])?, 1);
+        assert_eq!(jni_call(&mut emu, 32, &[string.0, string.0])?, 0);
+        assert_eq!(jni_call(&mut emu, 32, &[string.0, object.0])?, 1);
+        assert_eq!(jni_call(&mut emu, 11, &[string.0, class.0])?, 0);
+        assert_eq!(jni_call(&mut emu, 11, &[string.0, string.0])?, 1);
+        assert_eq!(jni_call(&mut emu, 11, &[string.0, object.0])?, 1);
+    }
+    Ok(())
+}
+
+#[test]
 fn get_class_returns_a_new_local_reference_to_the_cached_class() -> Result<()> {
     for arch in ARCHES {
         let mut emu = emulator(arch)?;

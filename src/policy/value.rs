@@ -50,7 +50,17 @@ pub(super) fn decode(
 }
 impl Object {
     fn create(self, emu: &mut Emulator) -> Result<Handle> {
-        Ok(match self {
+        let mut created = Vec::new();
+        let result = self.create_inner(emu, &mut created);
+        for handle in created {
+            if result.as_ref().ok() != Some(&handle) {
+                emu.release(handle);
+            }
+        }
+        result
+    }
+    fn create_inner(self, emu: &mut Emulator, created: &mut Vec<Handle>) -> Result<Handle> {
+        let handle = match self {
             Self::Null => Handle(0),
             Self::String(value) => emu.new_string(&value),
             Self::Instance { object } => emu.new_object(&object, ()),
@@ -58,27 +68,25 @@ impl Object {
             Self::Map { map, entries } => {
                 let entries = entries
                     .into_iter()
-                    .map(|[key, value]| Ok((key.create(emu)?, value.create(emu)?)))
+                    .map(|[key, value]| {
+                        Ok((
+                            key.create_inner(emu, created)?,
+                            value.create_inner(emu, created)?,
+                        ))
+                    })
                     .collect::<Result<Vec<_>>>()?;
-                let result = emu.new_java_map(&map, &entries);
-                for (key, value) in entries {
-                    emu.release(key);
-                    emu.release(value);
-                }
-                result?
+                emu.new_java_map(&map, &entries)?
             }
             Self::List { list, items } => {
                 let items = items
                     .into_iter()
-                    .map(|item| item.create(emu))
+                    .map(|item| item.create_inner(emu, created))
                     .collect::<Result<Vec<_>>>()?;
-                let result = emu.new_java_list(&list, &items);
-                for item in items {
-                    emu.release(item);
-                }
-                result?
+                emu.new_java_list(&list, &items)?
             }
-        })
+        };
+        created.push(handle);
+        Ok(handle)
     }
 }
 

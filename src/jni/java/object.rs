@@ -8,6 +8,7 @@ pub(super) fn hash(emu: &mut Emulator, object: &ObjectRef) -> i32 {
     match &*object.borrow() {
         Object::String(value) => hash_string(value),
         Object::Boxed(value) => boxing::hash(*value),
+        Object::Charset(value) => hash_string(&value.name().encode_utf16().collect::<Vec<_>>()),
         Object::Android(Android::Signature(bytes)) => bytes.iter().fold(1i32, |hash, &byte| {
             hash.wrapping_mul(31).wrapping_add(byte as i8 as i32)
         }),
@@ -22,6 +23,7 @@ pub(super) fn equal(a: &ObjectRef, b: &ObjectRef) -> bool {
                 || match (&*a.borrow(), &*b.borrow()) {
                     (Object::String(a), Object::String(b)) => a == b,
                     (Object::Boxed(a), Object::Boxed(b)) => boxing::equal(*a, *b),
+                    (Object::Charset(a), Object::Charset(b)) => a.name() == b.name(),
                     (
                         Object::Android(Android::Signature(a)),
                         Object::Android(Android::Signature(b)),
