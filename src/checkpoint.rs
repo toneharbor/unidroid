@@ -37,8 +37,7 @@ pub struct Checkpoint {
     dlerror_buf: u64,
     dlerror_pending: bool,
     dlerror_capacity: usize,
-    files: HashMap<u64, crate::syscalls::FileState>,
-    next_fd: u64,
+    vfs: crate::vfs::Vfs,
     source: crate::source::State,
     jni: crate::jni::JniState,
     threads: crate::threads::Threads,
@@ -73,12 +72,7 @@ impl Emulator {
             dlerror_buf: self.dlerror_buf,
             dlerror_pending: self.dlerror_pending,
             dlerror_capacity: self.dlerror_capacity,
-            files: self
-                .files
-                .iter_mut()
-                .map(|(&fd, file)| Ok((fd, file.checkpoint()?)))
-                .collect::<Result<_>>()?,
-            next_fd: self.next_fd,
+            vfs: self.vfs.copy(false)?,
             source: self.source.shared.borrow().state.clone(),
             jni: self.jni.clone(),
             threads: self.threads.copy(self.uc.as_mut().unwrap())?,
@@ -135,12 +129,7 @@ impl Emulator {
         self.dlerror_buf = checkpoint.dlerror_buf;
         self.dlerror_pending = checkpoint.dlerror_pending;
         self.dlerror_capacity = checkpoint.dlerror_capacity;
-        self.files = checkpoint
-            .files
-            .iter()
-            .map(|(&fd, file)| Ok((fd, file.reopen(self)?)))
-            .collect::<Result<_>>()?;
-        self.next_fd = checkpoint.next_fd;
+        self.vfs = checkpoint.vfs.copy(true)?;
         self.jni.rewind(&checkpoint.jni);
         let mut threads = checkpoint.threads.copy(self.cpu_mut()?)?;
         threads.slice_hook_installed = self.threads.slice_hook_installed;

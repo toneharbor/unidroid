@@ -199,7 +199,7 @@ fn malformed_import_answers_keep_original_suspended() {
 #[test]
 fn hooks_without_a_driver_pass_through_in_batch() {
     let options = serde_json::from_value(json!({
-        "rootfs":"rootfs", "process_name":"unidroid", "prop":[], "alias":[], "superclass":[],
+        "rootfs":"rootfs", "process_name":"unidroid", "prop":[], "alias":[], "file":[], "superclass":[],
         "fixed_clock":1700000000, "random_seed":42, "translation_cache_mb":8
     }))
     .unwrap();

@@ -1,6 +1,6 @@
 use super::*;
 use crate::Architecture;
-use std::os::unix::fs::MetadataExt;
+use std::{fs::File, io::SeekFrom, os::unix::fs::MetadataExt};
 
 #[test]
 fn huge_random_counts_are_short_reads_with_a_linux_limit() -> Result<()> {
@@ -227,35 +227,40 @@ fn brk_can_shrink_and_anonymous_mappings_start_zeroed() -> Result<()> {
 }
 
 #[test]
-fn rootfs_files_are_read_only_and_fstat_uses_the_android_layout() -> Result<()> {
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join(format!("target/syscall-rootfs-{}", std::process::id()));
-    std::fs::create_dir_all(&root)?;
-    std::fs::write(root.join("file"), b"abcdef")?;
-    let mut emu = Emulator::builder().rootfs(&root).build()?;
-    emu.setup_cpu(Architecture::Arm64)?;
-    let path = emu.new_cstring("/file")?;
-    let fd = emu.syscall(56, [(-100i64) as u64, path, 0, 0, 0, 0], 0)?;
-    let buffer = emu.malloc(128)?;
-    assert_eq!(emu.syscall(63, [fd, buffer, 3, 0, 0, 0], 0)?, 3);
-    assert_eq!(emu.read_bytes(buffer, 3)?, b"abc");
-    assert_eq!(emu.syscall(80, [fd, buffer, 0, 0, 0, 0], 0)?, 0);
-    assert_eq!(emu.read_u64(buffer + 48)?, 6);
-    assert_eq!(
-        emu.syscall(56, [(-100i64) as u64, path, 2, 0, 0, 0], 0)? as i64,
-        -13
-    );
-    assert_eq!(emu.syscall(57, [fd, 0, 0, 0, 0, 0], 0)?, 0);
-    let missing = emu.new_cstring("/missing")?;
-    assert_eq!(
-        emu.syscall(56, [(-100i64) as u64, missing, 0, 0, 0, 0], 0)? as i64,
-        -2
-    );
-    let random = emu.new_cstring("/dev/urandom")?;
-    let fd = emu.syscall(56, [(-100i64) as u64, random, 0, 0, 0, 0], 0)?;
-    assert_eq!(emu.syscall(63, [fd, buffer, 16, 0, 0, 0], 0)?, 16);
-    drop(emu);
-    std::fs::remove_dir_all(root)?;
+fn rootfs_writes_are_private_and_fstat_uses_the_android_layout() -> Result<()> {
+    fn call(emu: &mut Emulator, libc: crate::Module, name: &str, args: &[u64]) -> Result<u64> {
+        let function = emu.find_symbol(libc, name)?;
+        emu.call_function(function, args)
+    }
+    for dir in ["lib64", "lib"] {
+        let original = std::fs::read(format!("rootfs/{dir}/libdl.so"))?;
+        let mut emu = Emulator::builder().build()?;
+        let libc = emu.load_library(format!("rootfs/{dir}/libc.so"))?;
+        let path = emu.new_cstring(&format!("/{dir}/libdl.so"))?;
+        let fd = call(&mut emu, libc, "open", &[path, 0])?;
+        let buffer = emu.malloc(128)?;
+        assert_eq!(call(&mut emu, libc, "read", &[fd, buffer, 3])?, 3);
+        assert_eq!(emu.read_bytes(buffer, 3)?, original[..3]);
+        assert_eq!(call(&mut emu, libc, "fstat", &[fd, buffer])?, 0);
+        assert_eq!(emu.read_u64(buffer + 48)?, original.len() as u64);
+        let writer = call(&mut emu, libc, "open", &[path, 2])?;
+        assert!(writer < u32::MAX as u64);
+        emu.write_bytes(buffer, b"new")?;
+        assert_eq!(call(&mut emu, libc, "write", &[writer, buffer, 3])?, 3);
+        assert_eq!(&emu.file(&format!("/{dir}/libdl.so"))?[..3], b"new");
+        assert_eq!(std::fs::read(format!("rootfs/{dir}/libdl.so"))?, original);
+        assert_eq!(call(&mut emu, libc, "close", &[fd])?, 0);
+        let missing = emu.new_cstring("/missing")?;
+        assert_eq!(
+            call(&mut emu, libc, "open", &[missing, 0])? as u32,
+            u32::MAX
+        );
+        let errno = call(&mut emu, libc, "__errno", &[])?;
+        assert_eq!(emu.read_bytes(errno, 4)?, 2u32.to_le_bytes());
+        let random = emu.new_cstring("/dev/urandom")?;
+        let fd = call(&mut emu, libc, "open", &[random, 0])?;
+        assert_eq!(call(&mut emu, libc, "read", &[fd, buffer, 16])?, 16);
+    }
     Ok(())
 }
 

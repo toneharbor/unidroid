@@ -62,9 +62,44 @@ Serve has the same six command names; see the command table and recursive map/li
 
 ## Files and system calls
 
-Guest `write` and `writev` to fd 1 (stdout) and fd 2 (stderr) emit `Event::Output { fd, text }` even with tracing off. Each call emits one event, with `writev` buffers concatenated in order before lossy UTF-8 decoding, and returns the number of bytes accepted. Both calls accept at most 33554431 bytes, the same limit as `getrandom` and random-device reads; `writev` shares this limit across entries and can stop partway through an entry. The default event printer writes to host stderr; the builder's `on_event` can capture the output. Text events use `stdout: TEXT` or `stderr: TEXT` and drop one trailing newline; JSON uses `{"event":"output","fd":1,"text":"hello\n"}` and preserves the text. See [DEBUGGING.md](DEBUGGING.md) for events.
+Guest paths resolve through three layers: an in-memory overlay, generated files, then read-only `rootfs`. The overlay holds added files, guest changes, directories and whiteouts. Removing a path hides its lower-layer entry and descendants. Recreating an overlay directory there does not bring its old lower-layer children back. Guest writes never create, change or remove host files.
 
-Other fds, including stdin and rootfs files, return `-EBADF`. Unreadable buffers or iovec arrays return `-EFAULT`. `writev` accepts at most 1024 entries (`-EINVAL` above that), each a pointer and length: 16 bytes on arm64, 8 on arm32. Zero-length entries are allowed. Syscalls return negative Linux errno values; libc converts them to `-1` and sets errno.
+The Rust file API works before loading a library, without a CPU:
+
+```rust
+pub fn add_file(&mut self, path: &str, bytes: &[u8]) -> Result<()>;
+pub fn add_host_file(&mut self, path: &str, host_path: impl AsRef<Path>) -> Result<()>;
+pub fn remove_file(&mut self, path: &str) -> Result<()>;
+pub fn file(&self, path: &str) -> Result<Vec<u8>>;
+```
+
+`add_file` creates or replaces an overlay file with mode `0o100644`. Both add methods create missing parent directories with mode `0o040755`. `add_host_file` requires an existing regular host file, stores its resolved host path and opens it on demand; it does not read the contents into memory. `remove_file` removes overlay entries and whiteouts the path, including a path that exists only in rootfs. `file` reads the current regular-file contents through all three layers and errors for missing paths and directories. Host API paths must be absolute; errors name the guest path and errno, and host-side failures from `add_host_file` also name the host path and host error.
+
+Serve exposes `add_file` (`path`, `base64`), `add_host_file` (`path`, `host_path`), `remove_file` (`path`) and `file` (`path`). The first three return `null`; `file` returns base64. Repeatable `--file GUEST=HOST` calls `add_host_file` before loading. It is part of shared `serve::Options`, including recordings and replay. See [README.md](README.md) for command rows.
+
+Paths are normalized lexically: repeated slashes and `.` disappear; `..` removes one component and stops at `/`. Relative paths use working directory `/`, or the directory fd for `openat`, `newfstatat`, `faccessat`, `mkdirat`, `unlinkat`, `renameat` and `readlinkat`. Invalid relative-path dirfds return `EBADF`; non-directory fds return `ENOTDIR`. Absolute paths ignore dirfd. `faccessat` checks existence through the layers and still ignores permission modes and flags.
+
+`openat` accepts read and write access. A write open of a rootfs or host-linked file copies it into memory; `O_TRUNC` skips reading its old contents. `O_CREAT` creates a file only when its parent exists, with `(mode & 0o7777) | 0o100000`. `O_CREAT|O_EXCL` rejects an existing path with `EEXIST`; directories reject write opens with `EISDIR`; generated files reject them with `EACCES`. `O_APPEND` writes at the end, and writes past the end zero-fill the gap. Separate opens share file contents but keep separate offsets. `write`, `writev` and `pwrite64` accept at most 33554431 bytes per call; read-only fds reject writes with `EBADF`. `pwrite64` keeps the fd offset unchanged. As on Linux, append mode also places positional writes at the end. `ftruncate` changes the length; `fsync` and `fdatasync` return zero for any open fd, without writing to the host.
+
+Overlay files have a 1 GiB maximum: writes starting at or beyond it and `ftruncate` beyond it return `EFBIG`, while writes crossing it return the shorter count that fits.
+
+`mkdirat` creates overlay directories with `(mode & 0o7777) | 0o040000`. `unlinkat` removes files, or empty directories with `AT_REMOVEDIR`; nonempty directories return `ENOTEMPTY`. `renameat` moves files and directory trees and replaces a compatible target, copying rootfs sources into the overlay and hiding their old paths. Arm64 also supports `renameat2` with flags zero.
+
+Opening a directory, with or without `O_DIRECTORY`, takes a snapshot of its merged entries; `O_DIRECTORY` on a regular file returns `ENOTDIR`. `read` returns `EISDIR`; `getdents64` returns `.` and `..`, then entries sorted by name bytes, excluding whiteouts. Records use the Linux 64-bit layout and eight-byte alignment, with the next entry index as `d_off`. Calls walk the snapshot; zero means end of directory; a buffer too small for the next record returns `EINVAL` if nothing fit. `lseek(fd, 0, SEEK_SET)` restarts it. Directory enumeration works through libc's `opendir`, `readdir` and `closedir`; `/proc/self/fd` contents need not be enumerated.
+
+`fcntl` supports `F_DUPFD`, `F_DUPFD_CLOEXEC`, `F_GETFD`, `F_SETFD`, `F_GETFL` and `F_SETFL`. Status flags hold access mode, `O_APPEND` and `O_NONBLOCK`; `F_SETFL` changes only the latter two. Duplicates share offsets and status flags, but each fd has its own close-on-exec flag. `dup` and `dup3` work, including libc's `dup2`; equal fds passed to `dup3` return `EINVAL`. Descriptors 0–2 start open and can be duplicated or closed. New descriptors use the lowest free number. Duplicated stdout/stderr descriptors emit the original stream's `Output` event; closing and reusing an fd changes what it refers to.
+
+`/proc/self/cmdline` and `/proc/1234/cmdline` snapshot the process name followed by one NUL byte when opened. `1234` is the guest process ID. `readlinkat` on `/proc/self/fd/N` or `/proc/1234/fd/N` returns the normalized path used to open that fd, or `ENOENT` if closed. Initial standard streams use `/dev/stdin`, `/dev/stdout` and `/dev/stderr`. `/proc/self/exe` returns `/system/bin/app_process64` or `/system/bin/app_process32`; a rootfs symlink returns its host target, including for a dangling link. Existing non-links return `EINVAL`, missing paths `ENOENT`. Results contain at most `bufsiz` bytes, without a terminating NUL, and return the byte count.
+
+The intentional departures from unidbg match Android and Linux: `/proc/self/exe` returns a real Android device's executable path, `readlink` returns the byte count without a terminating NUL, and `faccessat` resolves relative paths against `dirfd`; sorted directory listings make runs deterministic.
+
+Overlay `stat`/`fstat` use the stored mode, content length, one link, device/uid/gid zero, block size 4096 and size rounded up to 512-byte blocks. The inode is the 64-bit FNV-1a hash of the normalized guest path. All timestamps use the fixed-clock seconds when set, otherwise the last change time. Host-linked files use host metadata like rootfs until copied into memory. Generated maps metadata remains as described below; cmdline uses the same generated-file metadata layout.
+
+Checkpoints save the overlay, whiteouts, directory snapshots and open descriptors, including shared offsets, flags and close-on-exec. Unchanged file contents are shared through `Rc` until a write. Rootfs and host-linked files reopen from their saved host paths on rewind; keep those host files available and unchanged. See [DEBUGGING.md](DEBUGGING.md).
+
+Guest `write` and `writev` to stdout/stderr descriptors (initially fd 1 and fd 2) emit `Event::Output { fd, text }` even with tracing off. Each call emits one event, with `writev` buffers concatenated in order before lossy UTF-8 decoding, and returns the number of bytes accepted. Both calls accept at most 33554431 bytes, the same limit as `getrandom` and random-device reads; `writev` shares this limit across entries and can stop partway through an entry. The default event printer writes to host stderr; the builder's `on_event` can capture the output. Text events use `stdout: TEXT` or `stderr: TEXT` and drop one trailing newline; JSON uses `{"event":"output","fd":1,"text":"hello\n"}` and preserves the text. See [DEBUGGING.md](DEBUGGING.md) for events.
+
+Closed or read-only fds, including the initial stdin, reject writes with `-EBADF`; writable file descriptors update the overlay. Unreadable buffers or iovec arrays return `-EFAULT`. `writev` accepts at most 1024 entries (`-EINVAL` above that), each a pointer and length: 16 bytes on arm64, 8 on arm32. Zero-length entries are allowed. Syscalls return negative Linux errno values; libc converts them to `-1` and sets errno.
 
 `uname` writes all 390 bytes of `struct utsname`: six 65-byte fields, each string followed by zero padding. It returns 0, or `-EFAULT` if the buffer cannot be written. Values match unidbg 0.9.9:
 
@@ -77,7 +112,7 @@ Other fds, including stdin and rootfs files, return `-EBADF`. Unreadable buffers
 | machine | `armv8l` on arm64, `armv7l` on arm32 |
 | domainname | `localdomain` |
 
-`faccessat` (used by libc's `access`) uses the same path resolution as `openat`: a file that opens read-only returns 0, otherwise `-ENOENT`. It ignores `dirfd`, `mode` and `flags`, as unidbg does. Rootfs paths, random devices and the generated maps files all use this resolver.
+`faccessat` (used by libc's `access`) uses the same path resolution as `openat`: existing files and directories return 0; failures return the resolver's errno, including `-ENOENT` for missing paths, `-EBADF` for invalid relative-path dirfds and `-ENOTDIR` for non-directory dirfds or path components. It resolves relative paths against `dirfd` (or `/` for `AT_FDCWD`) and ignores permission modes and flags. Overlay entries, rootfs paths, random devices and generated files all use this resolver.
 
 Opening `/proc/self/maps`, `/proc/1234/maps` or `/proc/self/task/1234/maps` generates an in-memory snapshot of `Emulator::maps()`. `1234` is the main thread ID and the value returned by `getpid`. Each mapping has one line, sorted by start address, with an exclusive end address. The line format is:
 

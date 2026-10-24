@@ -16,7 +16,7 @@ fn recording_header_uses_effective_builder_clock_and_seed() -> unidroid::Result<
                     std::process::id()
                 ));
                 let options: unidroid::serve::Options = serde_json::from_value(json!({
-                    "rootfs":"rootfs", "process_name":"unidroid", "prop":[], "alias":[], "superclass":[],
+                    "rootfs":"rootfs", "process_name":"unidroid", "prop":[], "alias":[], "file":[], "superclass":[],
                     "fixed_clock":override_options.then_some(456), "random_seed":override_options.then_some(7), "translation_cache_mb":8,
                 }))?;
                 let words: [u32; 2] = if arm64 {
@@ -81,7 +81,7 @@ fn arm64_counter_reads_are_recorded_and_replayed_across_rewind() -> unidroid::Re
         std::process::id()
     ));
     let options: unidroid::serve::Options = serde_json::from_value(json!({
-        "rootfs":"rootfs", "process_name":"unidroid", "prop":[], "alias":[], "superclass":[],
+        "rootfs":"rootfs", "process_name":"unidroid", "prop":[], "alias":[], "file":[], "superclass":[],
         "fixed_clock":123, "random_seed":null, "translation_cache_mb":8,
     }))?;
     let code: Vec<_> = [0xd53be040u32, 0xd65f03c0, 0xd53be020, 0xd65f03c0]

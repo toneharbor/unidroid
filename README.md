@@ -226,6 +226,7 @@ Options, the same for `inspect` and `serve`:
 | `--random-seed N` | seed the shared guest random byte stream with SplitMix64 |
 | `--prop KEY=VALUE` | a system property, repeatable |
 | `--alias NAME=TARGET` | same as `symbol_alias`, repeatable |
+| `--file GUEST=HOST` | add a host file at an absolute guest path; writes stay in memory; repeatable |
 | `--superclass CLASS=SUPERCLASS` | same as `superclass`, repeatable |
 | `--policy FILE` | answer matching Java calls from a JSON file before the driver or Probe |
 | `--verbose` | print every JNI call on stderr (`inspect` always does) |
@@ -267,6 +268,10 @@ Commands:
 | `malloc` / `free` | `size` / `address` | address / `null` |
 | `new_cstring` | `value` | address |
 | `read` / `write` | `address`, `size` / `address`, `base64` | base64 / `null` |
+| `add_file` | `path`, `base64` | `null` |
+| `add_host_file` | `path`, `host_path` | `null` |
+| `remove_file` | `path` | `null` |
+| `file` | `path` | base64 |
 | `crypto` | | list of `{name, address, location}` constants; address is a decimal string |
 | `new_string` / `string` | `value` / `handle` | handle / the string |
 | `new_array` / `array` | `type` (`Z B C S I J F D`), `base64` / `handle` | handle / base64 |
@@ -374,7 +379,7 @@ Anywhere inside a command, an object containing only `{"$ref":N}` uses the `ok` 
 | `coverage` | list of coverage specs added to the current trace settings; returns this attempt's block counts in serve's `coverage` JSON format |
 | `diff` | `true` captures memory and registers before and after the job, including a failed job |
 
-Batch accepts `--rootfs`, `--process-name`, repeatable `--prop`, `--alias` and `--superclass`, `--policy`, `--translation-cache-mb`, `--fixed-clock` and `--random-seed` as described above, plus:
+Batch accepts `--rootfs`, `--process-name`, repeatable `--prop`, `--alias`, `--file` and `--superclass`, `--policy`, `--translation-cache-mb`, `--fixed-clock` and `--random-seed` as described above, plus:
 
 | option | meaning |
 |---|---|
@@ -471,7 +476,7 @@ Not supported:
 
 - iOS
 - Signals and `fork`
-- File access outside `rootfs`. `/dev/urandom`, `/dev/random` and the [generated maps files](ENVIRONMENT.md#files-and-system-calls) are allowed. Every other path is "not found".
+- Writing to the host file system. Guest files resolve through an in-memory overlay, generated files and read-only `rootfs`; all writes stay in memory and host files are never changed. Added files, writable files, directories and links are covered in [ENVIRONMENT.md](ENVIRONMENT.md).
 
 A library's dependencies are looked for first in the folders of the libraries you loaded, then in rootfs. That's how an app's own `lib/arm64-v8a` folder works on a phone, so copy an app's libraries together and load the one you need. `dlopen` from the library searches the same way.
 

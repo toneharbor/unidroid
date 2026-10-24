@@ -337,6 +337,19 @@ impl<R: BufRead, W: Write> Session<R, W> {
                 emu.write_bytes(address.0, &BASE64_STANDARD.decode(base64)?)?;
                 Value::Null
             }
+            Command::AddFile { path, base64 } => {
+                emu.add_file(&path, &BASE64_STANDARD.decode(base64)?)?;
+                Value::Null
+            }
+            Command::AddHostFile { path, host_path } => {
+                emu.add_host_file(&path, host_path)?;
+                Value::Null
+            }
+            Command::RemoveFile { path } => {
+                emu.remove_file(&path)?;
+                Value::Null
+            }
+            Command::File { path } => json!(BASE64_STANDARD.encode(emu.file(&path)?)),
             Command::NewString { value } => json!(emu.new_string(&value).0),
             Command::String { handle } => json!(emu.string(Handle(handle))?),
             Command::NewArray { r#type, base64 } => {

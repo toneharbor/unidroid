@@ -145,7 +145,7 @@ fn getrandom_without_a_seed_returns_the_requested_count() -> Result<()> {
 }
 
 #[test]
-fn stat_and_fstat_fix_metadata_and_hash_the_original_guest_path() -> Result<()> {
+fn stat_and_fstat_fix_metadata_and_hash_the_normalized_guest_path() -> Result<()> {
     use std::os::unix::fs::MetadataExt;
     for arm64 in [true, false] {
         let mut emu = emulator(Emulator::builder().fixed_clock(-123), arm64)?;
@@ -153,14 +153,14 @@ fn stat_and_fstat_fix_metadata_and_hash_the_original_guest_path() -> Result<()> 
         let out = emu.malloc(144)?;
         for (path, inode) in [
             ("/lib/libc.so", 0x834e0abd3c3c269e),
-            ("lib/./libc.so", 0xf8082b640c10ed26),
+            ("lib/./libc.so", 0x834e0abd3c3c269e),
         ] {
             let path = emu.new_cstring(path)?;
-            let fd = syscall(&mut emu, arm64, (56, 322), &[0, path, 0])?;
+            let fd = syscall(&mut emu, arm64, (56, 322), &[(-100i64) as u64, path, 0])?;
             for stat in [true, false] {
                 emu.write_bytes(out, &[0xa5; 144])?;
                 let (numbers, args) = if stat {
-                    ((79, 327), vec![0, path, out, 0])
+                    ((79, 327), vec![(-100i64) as u64, path, out, 0])
                 } else {
                     // fstat must retain the open path, not the guest's mutable buffer.
                     emu.write_bytes(path, b"/missing\0")?;

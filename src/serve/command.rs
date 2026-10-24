@@ -163,6 +163,20 @@ pub(super) enum Command {
         address: Address,
         base64: String,
     },
+    AddFile {
+        path: String,
+        base64: String,
+    },
+    AddHostFile {
+        path: String,
+        host_path: String,
+    },
+    RemoveFile {
+        path: String,
+    },
+    File {
+        path: String,
+    },
     NewString {
         value: String,
     },

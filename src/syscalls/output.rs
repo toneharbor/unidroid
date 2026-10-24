@@ -1,20 +1,23 @@
-use super::files::IO_LIMIT;
-use crate::{Emulator, Event};
+use crate::{
+    Emulator,
+    vfs::{Error, IO_LIMIT},
+};
 
 impl Emulator {
-    pub(super) fn write_output(&self, fd: u64, address: u64, length: u64) -> u64 {
-        if !matches!(fd, 1 | 2) {
-            return (-9i64) as u64;
+    pub(super) fn write_output(&mut self, fd: u64, address: u64, length: u64) -> u64 {
+        if let Err(error) = self.vfs.writable(fd) {
+            return error.result();
         }
         let Ok(bytes) = self.read_bytes(address, length.min(IO_LIMIT) as usize) else {
             return (-14i64) as u64;
         };
-        self.emit_output(fd, &bytes)
+        self.write_file_bytes(fd, &bytes, None)
+            .unwrap_or_else(Error::result)
     }
 
-    pub(super) fn writev_output(&self, fd: u64, address: u64, count: u64) -> u64 {
-        if !matches!(fd, 1 | 2) {
-            return (-9i64) as u64;
+    pub(super) fn writev_output(&mut self, fd: u64, address: u64, count: u64) -> u64 {
+        if let Err(error) = self.vfs.writable(fd) {
+            return error.result();
         }
         if count > 1024 {
             return (-22i64) as u64;
@@ -42,14 +45,7 @@ impl Emulator {
                 break;
             }
         }
-        self.emit_output(fd, &bytes)
-    }
-
-    fn emit_output(&self, fd: u64, bytes: &[u8]) -> u64 {
-        self.events.borrow_mut().emit(Event::Output {
-            fd,
-            text: String::from_utf8_lossy(bytes).into_owned(),
-        });
-        bytes.len() as u64
+        self.write_file_bytes(fd, &bytes, None)
+            .unwrap_or_else(Error::result)
     }
 }

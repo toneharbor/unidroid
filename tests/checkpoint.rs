@@ -76,10 +76,13 @@ fn rewind_reopens_files_and_repeats_clock_and_random() -> Result<()> {
         let first = run(&mut emu)?;
         for _ in 0..3 {
             syscall(&mut emu, arm64, (57, 6), &[fd])?;
-            let next_fd = syscall(&mut emu, arm64, (56, 322), &[0, path, 0])?;
+            assert_eq!(syscall(&mut emu, arm64, (56, 322), &[0, path, 0])?, fd);
             emu.rewind(&checkpoint)?;
             assert_eq!(run(&mut emu)?, first);
-            assert_eq!(syscall(&mut emu, arm64, (56, 322), &[0, path, 0])?, next_fd);
+            assert_eq!(
+                syscall(&mut emu, arm64, (56, 322), &[0, path, 0])?,
+                random + 1
+            );
             emu.rewind(&checkpoint)?;
         }
         let mut copy = Emulator::builder().build()?;

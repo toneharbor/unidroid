@@ -2,7 +2,7 @@ use crate::{Emulator, Result};
 use std::fmt::Write;
 
 impl Emulator {
-    pub(super) fn proc_maps(&self) -> Result<Vec<u8>> {
+    pub(crate) fn proc_maps(&self) -> Result<Vec<u8>> {
         let mut text = String::new();
         for mapping in self.maps()? {
             let (dev, label) = if self

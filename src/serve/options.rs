@@ -22,6 +22,9 @@ pub struct Options {
     /// Resolve a symbol under another name.
     #[arg(long, value_name = "NAME=TARGET", value_parser = pair)]
     pub alias: Vec<(String, String)>,
+    /// Make a host file available at an absolute guest path, with writes kept in memory.
+    #[arg(long, value_name = "GUEST=HOST", value_parser = pair)]
+    pub file: Vec<(String, String)>,
     /// Declare that CLASS extends SUPERCLASS.
     #[arg(long, value_name = "CLASS=SUPERCLASS", value_parser = pair)]
     pub superclass: Vec<(String, String)>,
@@ -65,6 +68,9 @@ impl Options {
         let mut emu = builder.build()?;
         for (name, target) in &self.alias {
             emu.symbol_alias(name, target);
+        }
+        for (path, host_path) in &self.file {
+            emu.add_host_file(path, host_path)?;
         }
         for (class, superclass) in &self.superclass {
             emu.superclass(class, superclass);

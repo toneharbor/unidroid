@@ -10,6 +10,13 @@ fn access_resolves_rootfs_paths_and_ignores_permission_modes() -> Result<()> {
         for mode in [0, 1, 2, 4, 7] {
             assert_eq!(emu.call_function(access, &[path, mode])?, 0);
         }
+        for normalized in [
+            format!("/{dir}/../{dir}/./libc.so"),
+            format!("/../../{dir}//libc.so"),
+        ] {
+            let path = emu.new_cstring(&normalized)?;
+            assert_eq!(emu.call_function(access, &[path, 0])?, 0);
+        }
         for missing in ["/system/bin/su", "/../Cargo.toml"] {
             let path = emu.new_cstring(missing)?;
             assert_eq!(emu.call_function(access, &[path, 0])? as u32, u32::MAX);

@@ -2,16 +2,28 @@ use crate::{Emulator, Event, arch::Architecture};
 
 fn description(number: u64) -> Option<(&'static str, usize)> {
     Some(match number {
+        23 => ("dup", 1),
+        24 => ("dup3", 3),
+        25 => ("fcntl", 3),
+        34 => ("mkdirat", 3),
+        35 => ("unlinkat", 3),
+        38 => ("renameat", 4),
+        46 => ("ftruncate", 2),
         48 => ("faccessat", 4),
         56 => ("openat", 4),
         57 => ("close", 1),
+        61 => ("getdents64", 3),
         62 => ("lseek", 3),
         63 => ("read", 3),
         64 => ("write", 3),
         66 => ("writev", 3),
         67 => ("pread64", 4),
+        68 => ("pwrite64", 4),
+        78 => ("readlinkat", 4),
         79 => ("newfstatat", 4),
         80 => ("fstat", 2),
+        82 => ("fsync", 1),
+        83 => ("fdatasync", 1),
         93 => ("exit", 1),
         94 => ("exit_group", 1),
         96 => ("set_tid_address", 1),
@@ -38,44 +50,48 @@ fn description(number: u64) -> Option<(&'static str, usize)> {
         222 => ("mmap", 6),
         226 => ("mprotect", 3),
         233 => ("madvise", 3),
+        276 => ("renameat2", 5),
         _ => return None,
     })
 }
 
-// Linux guest errno values, independent of the host OS.
-fn errno(result: i64) -> Option<String> {
-    if !(-4095..=-1).contains(&result) {
-        return None;
-    }
-    let name = match -result {
-        1 => "EPERM",
-        2 => "ENOENT",
-        3 => "ESRCH",
-        4 => "EINTR",
-        5 => "EIO",
-        9 => "EBADF",
-        11 => "EAGAIN",
-        12 => "ENOMEM",
-        13 => "EACCES",
-        14 => "EFAULT",
-        16 => "EBUSY",
-        17 => "EEXIST",
-        19 => "ENODEV",
-        20 => "ENOTDIR",
-        21 => "EISDIR",
-        22 => "EINVAL",
-        24 => "EMFILE",
-        28 => "ENOSPC",
-        30 => "EROFS",
-        32 => "EPIPE",
-        38 => "ENOSYS",
-        110 => "ETIMEDOUT",
-        _ => return None,
-    };
-    Some(name.into())
-}
-
 impl Emulator {
+    // Linux guest errno values, independent of the host OS.
+    pub(crate) fn errno(result: i64) -> Option<&'static str> {
+        if !(-4095..=-1).contains(&result) {
+            return None;
+        }
+        let name = match -result {
+            1 => "EPERM",
+            2 => "ENOENT",
+            3 => "ESRCH",
+            4 => "EINTR",
+            5 => "EIO",
+            9 => "EBADF",
+            11 => "EAGAIN",
+            12 => "ENOMEM",
+            13 => "EACCES",
+            14 => "EFAULT",
+            16 => "EBUSY",
+            17 => "EEXIST",
+            19 => "ENODEV",
+            20 => "ENOTDIR",
+            21 => "EISDIR",
+            22 => "EINVAL",
+            24 => "EMFILE",
+            27 => "EFBIG",
+            28 => "ENOSPC",
+            29 => "ESPIPE",
+            30 => "EROFS",
+            32 => "EPIPE",
+            38 => "ENOSYS",
+            39 => "ENOTEMPTY",
+            110 => "ETIMEDOUT",
+            _ => return None,
+        };
+        Some(name)
+    }
+
     pub(crate) fn syscall_event(
         &self,
         guest: u64,
@@ -92,7 +108,9 @@ impl Emulator {
             .iter()
             .enumerate()
             .map(|(i, &value)| {
-                if matches!(number, 56 | 79) && i == 1 {
+                if (matches!(number, 34 | 35 | 38 | 56 | 78 | 79 | 276) && i == 1)
+                    || (matches!(number, 38 | 276) && i == 3)
+                {
                     self.cstring(value)
                         .map(|s| format!("{s:?}"))
                         .unwrap_or_else(|_| format!("0x{value:x}"))
@@ -124,7 +142,7 @@ impl Emulator {
         } = &mut event
         {
             *result = signed;
-            *error = signed.and_then(errno);
+            *error = signed.and_then(Self::errno).map(str::to_owned);
         }
         self.events.borrow_mut().emit(event);
     }

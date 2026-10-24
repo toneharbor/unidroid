@@ -20,6 +20,7 @@ pub mod serve;
 mod source;
 mod syscalls;
 mod threads;
+mod vfs;
 pub use debug::{
     Crash, Frame,
     control::{Resume, Stop, StopReason},
@@ -155,9 +156,8 @@ pub struct Emulator {
     dlerror_buf: u64,
     dlerror_pending: bool,
     dlerror_capacity: usize,
-    files: HashMap<u64, syscalls::GuestFile>,
+    vfs: vfs::Vfs,
     source: source::Source,
-    next_fd: u64,
     jni: jni::JniState,
     threads: threads::Threads,
     imports: debug::imports::Imports,
