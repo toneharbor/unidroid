@@ -30,6 +30,9 @@ impl Emulator {
         Ok(match nr {
             23 | 24 | 25 | 34 | 35 | 38 | 46 | 48 | 56 | 57 | 61 | 62 | 63 | 67 | 68 | 78 | 79
             | 80 | 82 | 83 | 276 => self.file_syscall(nr, a)?,
+            140 if self.architecture() == crate::arch::Architecture::Arm32 => {
+                self.file_syscall(nr, a)?
+            }
             64 => self.write_output(a[0], a[1], a[2]),
             66 => self.writev_output(a[0], a[1], a[2]),
             160 => self.uname(a[0]),

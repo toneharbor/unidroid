@@ -1,5 +1,95 @@
 use super::{TestRoot, call, errno};
-use unidroid::{Emulator, Result};
+use unidroid::{Emulator, Module, Result};
+
+fn seek64(
+    emu: &mut Emulator,
+    libc: Module,
+    fd: u64,
+    offset: i64,
+    whence: u64,
+    arm32: bool,
+) -> Result<i64> {
+    let bits = offset as u64;
+    if arm32 {
+        // AAPCS aligns the 64-bit offset to r2:r3; whence is on the stack.
+        let low = call(
+            emu,
+            libc,
+            "lseek64",
+            &[fd, 0, bits as u32 as u64, bits >> 32, whence],
+        )?;
+        Ok((low | (emu.register("r1")? << 32)) as i64)
+    } else {
+        Ok(call(emu, libc, "lseek64", &[fd, bits, whence])? as i64)
+    }
+}
+
+#[test]
+fn lseek64_seeks_past_four_gib_with_set_cur_and_end() -> Result<()> {
+    for dir in ["lib64", "lib"] {
+        let arm32 = dir == "lib";
+        let mut emu = Emulator::builder().build()?;
+        emu.add_file("/value", b"abc")?;
+        let libc = emu.load_library(format!("rootfs/{dir}/libc.so"))?;
+        let path = emu.new_cstring("/value")?;
+        let fd = call(&mut emu, libc, "open", &[path, 0])?;
+        let buffer = emu.malloc(1)?;
+        for (offset, whence, expected) in [
+            (0x1_8000_0001, 0, 0x1_8000_0001),
+            (0x1_0000_0002, 1, 0x2_8000_0003),
+            (-0x1_0000_0001, 1, 0x1_8000_0002),
+            (0x3_0000_0004, 2, 0x3_0000_0007),
+        ] {
+            assert_eq!(seek64(&mut emu, libc, fd, offset, whence, arm32)?, expected);
+            assert_eq!(seek64(&mut emu, libc, fd, 0, 1, arm32)?, expected);
+            assert_eq!(call(&mut emu, libc, "read", &[fd, buffer, 1])?, 0);
+            assert_eq!(seek64(&mut emu, libc, fd, 0, 1, arm32)?, expected);
+        }
+        assert_eq!(emu.file("/value")?, b"abc");
+    }
+    Ok(())
+}
+
+#[test]
+fn lseek64_preserves_host_generated_and_directory_seek_rules() -> Result<()> {
+    for dir in ["lib64", "lib"] {
+        let arm32 = dir == "lib";
+        let mut emu = Emulator::builder().process_name("test").build()?;
+        emu.add_file("/directory/value", b"x")?;
+        let host = format!("rootfs/{dir}/libdl.so");
+        emu.add_host_file("/linked", &host)?;
+        let libc = emu.load_library(format!("rootfs/{dir}/libc.so"))?;
+        for (name, length) in [
+            ("/linked", std::fs::metadata(&host)?.len() as i64),
+            ("/proc/self/cmdline", 5),
+        ] {
+            let path = emu.new_cstring(name)?;
+            let fd = call(&mut emu, libc, "open", &[path, 0])?;
+            assert_eq!(seek64(&mut emu, libc, fd, -1, 2, arm32)?, length - 1);
+            assert_eq!(
+                seek64(&mut emu, libc, fd, 0x1_0000_0000, 2, arm32)?,
+                length + 0x1_0000_0000
+            );
+            assert_eq!(call(&mut emu, libc, "close", &[fd])?, 0);
+        }
+        let path = emu.new_cstring("/directory")?;
+        let fd = call(&mut emu, libc, "open", &[path, 0])?;
+        let buffer = emu.malloc(24)?;
+        let getdents64 = if arm32 { 217 } else { 61 };
+        assert_eq!(
+            call(&mut emu, libc, "syscall", &[getdents64, fd, buffer, 24])?,
+            24
+        );
+        let first = emu.read_bytes(buffer, 24)?;
+        assert_eq!(seek64(&mut emu, libc, fd, 0, 0, arm32)?, 0);
+        assert_eq!(
+            call(&mut emu, libc, "syscall", &[getdents64, fd, buffer, 24])?,
+            24
+        );
+        assert_eq!(emu.read_bytes(buffer, 24)?, first);
+    }
+    Ok(())
+}
 
 #[test]
 fn host_copies_reject_large_files_but_truncation_skips_the_copy() -> Result<()> {
@@ -42,31 +132,81 @@ fn seeks_past_signed_range_preserve_the_offset() -> Result<()> {
         let libc = emu.load_library(format!("rootfs/{dir}/libc.so"))?;
         let path = emu.new_cstring("/value")?;
         let fd = call(&mut emu, libc, "open", &[path, 0])?;
+        // Keep the narrow lseek sign-extension check on both architectures.
         assert_eq!(call(&mut emu, libc, "lseek", &[fd, 1, 0])?, 1);
         let result = call(&mut emu, libc, "lseek", &[fd, u64::MAX, 0])?;
         errno(&mut emu, libc, result, 22)?;
         assert_eq!(call(&mut emu, libc, "lseek", &[fd, 0, 1])?, 1);
-        // ARM32 currently exposes only 32-bit lseek, not _llseek.
-        if dir == "lib" {
-            continue;
+        let arm32 = dir == "lib";
+        for (offset, whence) in [
+            (0, 3),
+            (-1, 0),
+            (-2, 1),
+            (-2, 2),
+            (i64::MIN, 1),
+            (i64::MAX, 1),
+            (i64::MAX, 2),
+        ] {
+            let result = seek64(&mut emu, libc, fd, offset, whence, arm32)?;
+            assert_eq!(result, -1);
+            errno(&mut emu, libc, result as u64, 22)?;
+            assert_eq!(seek64(&mut emu, libc, fd, 0, 1, arm32)?, 1);
         }
-        for whence in [1, 2] {
-            let result = call(&mut emu, libc, "lseek", &[fd, i64::MAX as u64, whence])?;
-            errno(&mut emu, libc, result, 22)?;
-            assert_eq!(call(&mut emu, libc, "lseek", &[fd, 0, 1])?, 1);
-        }
-        assert_eq!(
-            call(&mut emu, libc, "lseek", &[fd, i64::MAX as u64, 0])?,
-            i64::MAX as u64
-        );
-        let result = call(&mut emu, libc, "lseek", &[fd, 1, 1])?;
-        errno(&mut emu, libc, result, 22)?;
+        assert_eq!(seek64(&mut emu, libc, fd, i64::MAX, 0, arm32)?, i64::MAX);
+        let result = seek64(&mut emu, libc, fd, 1, 1, arm32)?;
+        assert_eq!(result, -1);
+        errno(&mut emu, libc, result as u64, 22)?;
         // The failed seek left INT64_MAX intact.
-        assert_eq!(
-            call(&mut emu, libc, "lseek", &[fd, (-i64::MAX) as u64, 1])?,
-            0
-        );
+        assert_eq!(seek64(&mut emu, libc, fd, 0, 1, arm32)?, i64::MAX);
+        assert_eq!(seek64(&mut emu, libc, fd, -i64::MAX, 1, arm32)?, 0);
     }
+    Ok(())
+}
+
+#[test]
+fn arm32_llseek_bad_result_pointer_moves_the_offset() -> Result<()> {
+    let mut emu = Emulator::builder().build()?;
+    emu.add_file("/value", b"abc")?;
+    let libc = emu.load_library("rootfs/lib/libc.so")?;
+    let path = emu.new_cstring("/value")?;
+    let fd = call(&mut emu, libc, "open", &[path, 0])?;
+    // mov r7, #140; ldr r4, [sp]; svc #0; bx lr
+    emu.write_bytes(
+        0x20100,
+        &[0xe3a0708cu32, 0xe59d4000, 0xef000000, 0xe12fff1e]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>(),
+    )?;
+    assert!(emu.read_bytes(1, 8).is_err());
+    assert_eq!(emu.call_function(0x20100, &[fd, 1, 7, 1, 0])? as i32, -14);
+    assert_eq!(seek64(&mut emu, libc, fd, 0, 1, true)?, 0x1_0000_0007);
+    Ok(())
+}
+
+#[test]
+fn arm32_lseek_overflow_moves_the_offset() -> Result<()> {
+    let mut emu = Emulator::builder().build()?;
+    emu.add_file("/value", b"abc")?;
+    let libc = emu.load_library("rootfs/lib/libc.so")?;
+    let path = emu.new_cstring("/value")?;
+    let fd = call(&mut emu, libc, "open", &[path, 0])?;
+    assert_eq!(
+        call(&mut emu, libc, "lseek", &[fd, 0x7fff_ffff, 0])?,
+        0x7fff_ffff
+    );
+    let result = call(&mut emu, libc, "lseek", &[fd, 1, 1])?;
+    errno(&mut emu, libc, result, 75)?;
+    assert_eq!(seek64(&mut emu, libc, fd, 0, 1, true)?, 0x8000_0000);
+    let result = call(&mut emu, libc, "lseek", &[fd, 0x7fff_ffff, 2])?;
+    errno(&mut emu, libc, result, 75)?;
+    assert_eq!(seek64(&mut emu, libc, fd, 0, 1, true)?, 0x8000_0002);
+    // The narrow argument remains signed, even while the position is wide.
+    assert_eq!(
+        call(&mut emu, libc, "lseek", &[fd, (-3i32) as u32 as u64, 1])?,
+        0x7fff_ffff
+    );
+    assert_eq!(seek64(&mut emu, libc, fd, 0, 1, true)?, 0x7fff_ffff);
     Ok(())
 }
 

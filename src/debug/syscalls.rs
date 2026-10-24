@@ -1,6 +1,6 @@
 use crate::{Emulator, Event, arch::Architecture};
 
-fn description(number: u64) -> Option<(&'static str, usize)> {
+fn description(arch: Architecture, number: u64) -> Option<(&'static str, usize)> {
     Some(match number {
         23 => ("dup", 1),
         24 => ("dup3", 3),
@@ -35,6 +35,7 @@ fn description(number: u64) -> Option<(&'static str, usize)> {
         124 => ("sched_yield", 0),
         132 => ("sigaltstack", 2),
         135 => ("rt_sigprocmask", 4),
+        140 if arch == Architecture::Arm32 => ("_llseek", 5),
         160 => ("uname", 1),
         167 => ("prctl", 5),
         169 => ("gettimeofday", 2),
@@ -87,6 +88,7 @@ impl Emulator {
             38 => "ENOSYS",
             39 => "ENOTEMPTY",
             40 => "ELOOP",
+            75 => "EOVERFLOW",
             110 => "ETIMEDOUT",
             _ => return None,
         };
@@ -101,7 +103,7 @@ impl Emulator {
         pc: u64,
         lr: u64,
     ) -> Event {
-        let (name, count) = description(number).map_or_else(
+        let (name, count) = description(self.architecture(), number).map_or_else(
             || (format!("syscall_{guest}"), 6),
             |(name, count)| (name.into(), count),
         );

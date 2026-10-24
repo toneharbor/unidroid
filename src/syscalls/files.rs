@@ -1,4 +1,4 @@
-use crate::{Emulator, Result, vfs::Error};
+use crate::{Emulator, Result, arch::Architecture, vfs::Error};
 
 impl Emulator {
     fn path_argument(&self, address: u64) -> crate::vfs::FsResult<String> {
@@ -48,7 +48,13 @@ impl Emulator {
             }
             57 => self.vfs.close(a[0])?,
             61 => self.getdents(a[0], a[1], a[2])?,
-            62 => self.vfs.seek(a[0], a[1], a[2])?,
+            62 => {
+                let position = self.vfs.seek(a[0], a[1], a[2])?;
+                if self.architecture() == Architecture::Arm32 && position > i32::MAX as u64 {
+                    return Err(Error(75).into());
+                }
+                position
+            }
             63 | 67 => {
                 let position = (nr == 67).then_some(a[3]);
                 if position.is_some_and(|offset| (offset as i64) < 0) {
@@ -96,6 +102,12 @@ impl Emulator {
                 0
             }
             82 | 83 => self.vfs.sync(a[0])?,
+            140 => {
+                let offset = ((a[1] as u32 as u64) << 32) | a[2] as u32 as u64;
+                let position = self.vfs.seek(a[0], offset, a[4])?;
+                self.write_u64(a[3], position).map_err(|_| Error(14))?;
+                0
+            }
             _ => unreachable!(),
         })
     }

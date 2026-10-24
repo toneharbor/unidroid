@@ -196,6 +196,7 @@ impl Architecture {
                 a[1] = a[1] as i32 as i64 as u64;
                 62
             }
+            140 => 140, // ARM32-only _llseek; keep all five arguments.
             3 => 63,
             4 => 64,
             146 => 66,

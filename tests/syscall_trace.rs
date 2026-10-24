@@ -67,6 +67,99 @@ fn output_and_environment_syscalls_have_names_and_argument_counts() -> Result<()
 }
 
 #[test]
+fn arm32_llseek_traces_five_arguments_results_and_errno() -> Result<()> {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let sink = events.clone();
+    let mut emu = Emulator::builder()
+        .on_event(move |event| sink.borrow_mut().push(serde_json::to_value(event).unwrap()))
+        .build()?;
+    emu.add_file("/value", b"abc")?;
+    let libc = emu.load_library("rootfs/lib/libc.so")?;
+    let path = emu.new_cstring("/value")?;
+    let open = emu.find_symbol(libc, "open")?;
+    let fd = emu.call_function(open, &[path, 0])?;
+    let output = emu.malloc(8)?;
+    // mov r7, #140; ldr r4, [sp]; svc #0; bx lr
+    emu.write_bytes(
+        0x20100,
+        &[0xe3a0708cu32, 0xe59d4000, 0xef000000, 0xe12fff1e]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>(),
+    )?;
+    emu.set_trace(Trace {
+        syscalls: true,
+        ..Trace::default()
+    })?;
+    for (args, result, errno) in [
+        ([fd, 1, 0x89ab_cdef, output, 0], 0, None),
+        ([fd, 2, 7, 1, 0], -14, Some("EFAULT")),
+        ([fd, 0, 0, output, 3], -22, Some("EINVAL")),
+        ([99, 0, 0, output, 0], -9, Some("EBADF")),
+    ] {
+        events.borrow_mut().clear();
+        assert_eq!(emu.call_function(0x20100, &args)? as i32, result);
+        let captured = events.borrow();
+        assert_eq!(captured.len(), 1);
+        let mut expected = serde_json::json!({
+            "event": "syscall", "name": "_llseek", "number": 140,
+            "args": args.map(|arg| format!("0x{arg:x}")), "result": result,
+            "at": "0x20108", "from": "0x20000"
+        });
+        if let Some(errno) = errno {
+            expected["errno"] = errno.into();
+        }
+        assert_eq!(captured[0], expected);
+        assert_eq!(
+            emu.read_bytes(output, 8)?,
+            [0xef, 0xcd, 0xab, 0x89, 1, 0, 0, 0]
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn arm32_lseek_traces_overflow_errno() -> Result<()> {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let sink = events.clone();
+    let mut emu = Emulator::builder()
+        .on_event(move |event| sink.borrow_mut().push(serde_json::to_value(event).unwrap()))
+        .build()?;
+    emu.add_file("/value", b"abc")?;
+    let libc = emu.load_library("rootfs/lib/libc.so")?;
+    let path = emu.new_cstring("/value")?;
+    let open = emu.find_symbol(libc, "open")?;
+    let fd = emu.call_function(open, &[path, 0])?;
+    // mov r7, #19; svc #0; bx lr
+    emu.write_bytes(
+        0x20100,
+        &[0xe3a07013u32, 0xef000000, 0xe12fff1e]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>(),
+    )?;
+    emu.set_trace(Trace {
+        syscalls: true,
+        ..Trace::default()
+    })?;
+    assert_eq!(
+        emu.call_function(0x20100, &[fd, 0x7fff_ffff, 2])? as i32,
+        -75
+    );
+    let captured = events.borrow();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(
+        captured[0],
+        serde_json::json!({
+            "event": "syscall", "name": "lseek", "number": 19,
+            "args": [format!("0x{fd:x}"), "0x7fffffff", "0x2"],
+            "result": -75, "errno": "EOVERFLOW", "at": "0x20104", "from": "0x20000"
+        })
+    );
+    Ok(())
+}
+
+#[test]
 fn nonreturning_syscalls_emit_before_the_crash() -> Result<()> {
     for (dir, exit_nr, exit_group_nr, svc, ret) in [
         ("lib64", 93, 94, 0xd4000001u32, 0xd65f03c0),
