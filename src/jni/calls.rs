@@ -34,13 +34,14 @@ impl Emulator {
         id.checked_sub(MEMBER_ID_BASE)
             .and_then(|index| self.jni.members.get(index as usize))
             .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "invalid JNI id 0x{id:x} in {function} from {}",
-                    self.location(self.lr().unwrap_or(0))
-                )
-                .into()
-            })
+            .ok_or_else(|| self.member_error(function, id))
+    }
+    pub(super) fn member_error(&self, function: &str, id: u64) -> Box<dyn std::error::Error> {
+        format!(
+            "invalid JNI id 0x{id:x} in {function} from {}",
+            self.location(self.lr().unwrap_or(0))
+        )
+        .into()
     }
     pub(crate) fn setup_jni(&mut self) -> Result<()> {
         let p = self.pointer_size();

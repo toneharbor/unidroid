@@ -9,7 +9,7 @@ impl Emulator {
             let key = reference(self, key)?;
             let value = reference(self, value)?;
             let hash = object::hash(self, &key);
-            map.put(key, value, hash)
+            map.put(self, key, value, hash)
                 .ok_or("expected comparable TreeMap keys")?;
         }
         Ok(self.insert_api_object(Object::Map(map)))

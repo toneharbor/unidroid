@@ -89,7 +89,7 @@ pub(super) fn call(
         let key = reference(emu, a[0].object())?;
         let hash = object::hash(emu, &key);
         let index = match &*receiver.borrow() {
-            Object::Set(map) => map.position(&key).unwrap(),
+            Object::Set(map) => map.position(emu, &key).unwrap(),
             _ => unreachable!(),
         };
         let Object::Set(map) = &mut *receiver.borrow_mut() else {
@@ -139,7 +139,7 @@ pub(super) fn call(
             if call.name == "contains" || list =>
         {
             let value = reference(emu, a[0].object())?;
-            let found = items.iter().position(|v| object::equal(v, &value));
+            let found = items.iter().position(|v| object::equal(emu, v, &value));
             if call.name == "contains" {
                 JniValue::Boolean(found.is_some())
             } else {

@@ -38,6 +38,11 @@ fn owned_class(class: &str) -> bool {
         class,
         "java/lang/String"
             | "java/lang/Class"
+            | "java/lang/reflect/Method"
+            | "java/lang/reflect/Constructor"
+            | "java/lang/reflect/Field"
+            | "java/lang/reflect/Executable"
+            | "java/lang/reflect/AccessibleObject"
             | "java/lang/StringBuilder"
             | "java/lang/Boolean"
             | "java/lang/Byte"
@@ -99,6 +104,13 @@ fn parents(class: &str) -> &'static [&'static str] {
             "java/lang/invoke/TypeDescriptor$OfField",
             "java/lang/constant/Constable",
         ],
+        "java/lang/reflect/Method" | "java/lang/reflect/Constructor" => {
+            &["java/lang/reflect/Executable"]
+        }
+        "java/lang/reflect/Executable" | "java/lang/reflect/Field" => {
+            &["java/lang/reflect/AccessibleObject"]
+        }
+        "java/lang/reflect/AccessibleObject" => &["java/lang/Object"],
         "java/lang/reflect/GenericDeclaration" => &["java/lang/reflect/AnnotatedElement"],
         "java/lang/invoke/TypeDescriptor$OfField" => &["java/lang/invoke/TypeDescriptor"],
         "java/lang/Boolean" | "java/lang/Character" => &[

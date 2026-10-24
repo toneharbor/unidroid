@@ -163,6 +163,7 @@ Common Java calls are answered before `JniHandler`, policy rules, `Probe` and th
 |---|---|
 | `java/lang/Object` | `getClass`, `hashCode`, `equals` on built-in objects and strings; `toString` on strings, boxes, StringBuilder, maps and lists when their elements have built-in text |
 | `java/lang/Class` | `getName` on class objects, using dots, such as `java.lang.String` |
+| `java/lang/reflect/Method`, `Constructor`, `Field` | `getName`, `getDeclaringClass`, `getClass`, `equals`, `hashCode`; constructor names use the declaring class name with dots |
 | `java/lang/String` | empty, byte-array (with optional range and charset name), string-copy and char-array constructors; `getBytes`, `length`, `isEmpty`, `charAt`, `toCharArray`, `equals`, `equalsIgnoreCase`, `hashCode`, `compareTo`, `toString`, `startsWith`, `endsWith`, `contains`, both `indexOf` forms, both `substring` forms, `toLowerCase`, `toUpperCase`, `trim`, `concat`, `replace`; static `valueOf` for int, long, boolean, char and Object |
 | `java/lang/CharSequence` | `length` and `toString` on strings and StringBuilders |
 | `java/nio/charset/Charset`, `StandardCharsets` | `Charset.forName`, `name`, `equals`, `hashCode`; static fields `UTF_8`, `US_ASCII`, `ISO_8859_1`, `UTF_16LE`, `UTF_16BE` |
@@ -175,11 +176,54 @@ Common Java calls are answered before `JniHandler`, policy rules, `Probe` and th
 | `java/security/MessageDigest` | static `getInstance`; `update(byte[])`, `update(byte[], offset, length)`, `update(byte)`; `digest()`, `digest(byte[])`, `reset`, `getAlgorithm` |
 | `android/util/Base64` | static `encodeToString(byte[], flags)`, `encode(byte[], flags)`, `decode(String, flags)`, `decode(byte[], flags)` |
 
+JNI `ToReflectedMethod` and `ToReflectedField` create built-in reflected objects with fresh local references; `FromReflectedMethod` and `FromReflectedField` return their original member IDs without a handler. A method named `<init>` becomes a Constructor. IDs are shared with `GetMethodID`, `GetStaticMethodID`, `GetFieldID` and `GetStaticFieldID`, keyed by declaring class, name, signature, static flag and method/field kind. `ToReflected*` uses the ID's declaring class and stores the supplied `isStatic` flag. Method and Constructor extend `java/lang/reflect/Executable`, which extends `java/lang/reflect/AccessibleObject`; Field extends AccessibleObject, which extends Object. Checkpoints preserve reflected members and object identity.
+
+A wrong-kind or unknown member ID stops the guest with an error naming the JNI function and caller location; an invalid `cls` stays a reference error. `FromReflected*` rejects null, invalid references, wrong reflected kinds and other objects, including host `new_object("java/lang/reflect/Method", ...)`. Its errors name the function, the object's Java class (or `null` / `invalid reference` when no object exists) and caller location. The built-in Java answers in the table run before the handler. Other methods reach the handler with `JniCall.class` equal to the class the method ID was looked up on, as for other built-in objects; for example, `java/lang/reflect/AccessibleObject` for a `setAccessible` lookup on that class. A handler can inspect the reflected member with `emu.reflected_member(call.receiver)`.
+
+Reflected members compare equal when both are built-in reflected objects with the same kind, declaring class, name and signature; the static flag does not affect equality. Separate objects can be equal while `IsSameObject` remains false. Method and Field hashes are the Java `String.hashCode` of the dotted declaring class name XOR the member name's hash. Constructor hashes use only the dotted declaring class name's hash. Built-in collections use these same equality and hash rules.
+
+Rust can create and inspect these built-ins:
+
+```rust
+pub fn new_reflected_method(&mut self, class: &str, name: &str, signature: &str, is_static: bool) -> Handle;
+pub fn new_reflected_field(&mut self, class: &str, name: &str, signature: &str, is_static: bool) -> Handle;
+pub fn reflected_member(&self, handle: Handle) -> Result<ReflectedMember>;
+```
+
+The constructors create or reuse the same member IDs as the corresponding `Get*ID` calls, in either order. Their handles are API-owned like `new_string`; release them when done. `ReflectedMember` and `ReflectedMemberKind` are exported from the crate root. The member has public `class`, `name` and `signature` strings, `is_static: bool` and `kind: ReflectedMemberKind` (`Method`, `Constructor`, `Field`). Its `name` retains `<init>` for constructors. `reflected_member` rejects any other object, following `java_map`, `java_list` and `unboxed` errors. There is no reflection serve command or policy value.
+
+For example, a handler can model `Class.getDeclaredMethod` for a known no-argument app method and return an object accepted by `FromReflectedMethod`:
+
+```rust
+use unidroid::{Emulator, Handle, JniCall, JniHandler};
+
+struct Reflection;
+impl JniHandler for Reflection {
+    fn call_object_method(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<Handle> {
+        if call.class == "java/lang/Class"
+            && call.name == "getDeclaredMethod"
+            && call.signature == "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;"
+            && emu.string(call.args[0].object()).ok()? == "run"
+        {
+            let parameters = emu.object_array(call.args[1].object()).ok()?;
+            let no_parameters = parameters.is_empty();
+            for parameter in parameters {
+                emu.release(parameter);
+            }
+            if no_parameters {
+                return Some(emu.new_reflected_method("com/example/Signer", "run", "()V", false));
+            }
+        }
+        None
+    }
+}
+```
+
 String lengths and indexes count UTF-16 units, including each half of a surrogate pair. Supported charsets are UTF-8 (the default), US-ASCII, ISO-8859-1, UTF-16LE and UTF-16BE; names ignore case, hyphens and underscores. `String.valueOf(Object)` returns the object's `toString()` result, including the same object for a String; uncovered `toString` calls reach your handler. StringBuilder `append(Object)` uses built-in text. Both use `"null"` for null. Unknown element text falls through to your handler. Map and list text uses Java's `{key=value, ...}` and `[item, ...]` forms.
 
 `Integer`, `Short`, `Byte` and `Long` cache `valueOf` results for `-128..=127`; `Character` caches `0..=127`, and `Boolean` caches both values. Constructors and host `new_boxed` still create new objects. Each `StandardCharsets` field also returns the same object on every read. These caches belong to JNI state, survive released handles and preserve identity across checkpoints. Returned references are fresh local references. Charset equality compares canonical names, and its hash is the canonical name's Java `String.hashCode`; for example `Charset.forName("utf-8")` equals `StandardCharsets.UTF_8`.
 
-String keys compare by UTF-16 content; boxed keys compare by primitive type and Java value, including Java's NaN and signed-zero rules. Signature keys compare certificate bytes; Charset keys compare canonical names; other keys compare by object identity, including across different handles to the same object. HashMap and HashSet use Java string and box hashes, a power-of-two table starting at 16 by default, a 0.75 load factor and bucket order. Entries within each bucket keep insertion order, including through resizing; removal and reinsertion moves a key to the end of its bucket. Long buckets are not converted to trees. LinkedHashMap keeps insertion order. TreeMap sorts strings by UTF-16 and comparable boxed keys by value; unsupported comparisons fall through to the handler, or return an error from `new_java_map`.
+String keys compare by UTF-16 content; boxed keys compare by primitive type and Java value, including Java's NaN and signed-zero rules. Signature keys compare certificate bytes; Charset keys compare canonical names; reflected keys use the member equality and hash rules above; other keys compare by object identity, including across different handles to the same object. HashMap and HashSet use Java string and box hashes, a power-of-two table starting at 16 by default, a 0.75 load factor and bucket order. Entries within each bucket keep insertion order, including through resizing; removal and reinsertion moves a key to the end of its bucket. Long buckets are not converted to trees. LinkedHashMap keeps insertion order. TreeMap sorts strings by UTF-16 and comparable boxed keys by value; unsupported comparisons fall through to the handler, or return an error from `new_java_map`.
 
 Map views (`keySet`, `values`, `entrySet`) and iterators are **snapshots taken when created**. This differs from Java's live views. They keep references to their elements. Releasing an element's host handle does not remove it from a collection. All built-in object state is copied by checkpoints, preserving aliases and cycles; rewind restores collection contents, iterator positions, StringBuilder contents and digest state. Dropping or rewinding JNI state frees container cycles even after their last handles were released.
 

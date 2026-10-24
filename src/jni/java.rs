@@ -182,6 +182,7 @@ fn dispatch_inner(
         return Ok(Some(value));
     }
     match &*receiver.borrow() {
+        Object::Reflected { id, .. } => return emu.reflected_call(call, *id),
         Object::String(value) => return strings::call(emu, call, value, function),
         Object::Boxed(value) => return Ok(boxing::call(call, *value)),
         Object::Charset(charset)

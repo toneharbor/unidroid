@@ -1,6 +1,8 @@
 use crate::jni::handler::dispatch;
 use crate::jni::value::decode;
-use crate::jni::{Handle, JniCall, JniHandler, JniValue, MEMBER_ID_BASE, Member};
+use crate::jni::{
+    Handle, JniCall, JniHandler, JniValue, MEMBER_ID_BASE, Member, ReflectedMemberKind,
+};
 use crate::{Emulator, Result};
 
 pub(super) fn member_id(index: usize, b: u64, c: u64) -> Option<u64> {
@@ -12,6 +14,41 @@ pub(super) fn member_id(index: usize, b: u64, c: u64) -> Option<u64> {
 }
 
 impl Emulator {
+    pub(in crate::jni) fn intern_member(
+        &mut self,
+        class: &str,
+        name: &str,
+        signature: &str,
+        is_static: bool,
+        is_field: bool,
+    ) -> u64 {
+        let key = (
+            class.into(),
+            name.into(),
+            signature.into(),
+            is_static,
+            is_field,
+        );
+        if let Some(id) = self.jni.member_ids.get(&key) {
+            return *id;
+        }
+        let id = self.jni.members.len() as u64 + MEMBER_ID_BASE;
+        self.jni.members.push(Member {
+            class: class.into(),
+            name: name.into(),
+            signature: signature.into(),
+            kind: if is_field {
+                ReflectedMemberKind::Field
+            } else if name == "<init>" {
+                ReflectedMemberKind::Constructor
+            } else {
+                ReflectedMemberKind::Method
+            },
+        });
+        self.jni.member_ids.insert(key, id);
+        id
+    }
+
     pub(super) fn jni_members_function(
         &mut self,
         index: usize,
@@ -26,24 +63,13 @@ impl Emulator {
                 let class = self.class_name(Handle(a))?;
                 let name = self.cstring(b)?;
                 let signature = self.cstring(c)?;
-                let key = (
-                    class.clone(),
-                    name.clone(),
-                    signature.clone(),
+                Ok(self.intern_member(
+                    &class,
+                    &name,
+                    &signature,
                     index >= 113,
                     index == 94 || index == 144,
-                );
-                if let Some(id) = self.jni.member_ids.get(&key) {
-                    return Ok(*id);
-                }
-                let id = self.jni.members.len() as u64 + MEMBER_ID_BASE;
-                self.jni.members.push(Member {
-                    class,
-                    name,
-                    signature,
-                });
-                self.jni.member_ids.insert(key, id);
-                Ok(id)
+                ))
             }
             28..=30 | 34..=93 | 95..=112 | 114..=143 | 145..=162 => {
                 let constructor = (28..=30).contains(&index);

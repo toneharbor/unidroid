@@ -54,7 +54,7 @@ impl Map {
             capacity: (capacity as u32).max(1).next_power_of_two().min(1 << 30),
         }
     }
-    pub(super) fn position(&self, key: &ObjectRef) -> Option<Option<usize>> {
+    pub(super) fn position(&self, emu: &Emulator, key: &ObjectRef) -> Option<Option<usize>> {
         if self.kind == MapKind::Tree {
             compare(key, key)?;
             for (i, (other, _, _)) in self.entries.iter().enumerate() {
@@ -67,12 +67,18 @@ impl Map {
             Some(
                 self.entries
                     .iter()
-                    .position(|(k, _, _)| object::equal(k, key)),
+                    .position(|(k, _, _)| object::equal(emu, k, key)),
             )
         }
     }
-    pub(super) fn put(&mut self, key: ObjectRef, value: ObjectRef, hash: i32) -> Option<ObjectRef> {
-        let index = self.position(&key)?;
+    pub(super) fn put(
+        &mut self,
+        emu: &Emulator,
+        key: ObjectRef,
+        value: ObjectRef,
+        hash: i32,
+    ) -> Option<ObjectRef> {
+        let index = self.position(emu, &key)?;
         Some(self.put_at(key, value, hash, index))
     }
     pub(super) fn put_at(
@@ -182,7 +188,7 @@ pub(super) fn call(
             let value = reference(emu, a[1].object())?;
             let hash = object::hash(emu, &key);
             let index = match &*receiver.borrow() {
-                Object::Map(map) => map.position(&key),
+                Object::Map(map) => map.position(emu, &key),
                 _ => return Ok(None),
             };
             let Some(index) = index else {
@@ -199,7 +205,7 @@ pub(super) fn call(
         | ("containsKey", "(Ljava/lang/Object;)Z") => {
             let key = reference(emu, a[0].object())?;
             let index = match &*receiver.borrow() {
-                Object::Map(map) => map.position(&key),
+                Object::Map(map) => map.position(emu, &key),
                 _ => return Ok(None),
             };
             let Some(index) = index else {

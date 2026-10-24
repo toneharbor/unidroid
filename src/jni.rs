@@ -5,9 +5,11 @@ mod handler;
 mod java;
 mod names;
 mod objects;
+mod reflection;
 mod value;
 
 pub use handler::{JniCall, JniHandler};
+pub use reflection::{ReflectedMember, ReflectedMemberKind};
 pub use value::{Handle, JniValue};
 
 use std::{
@@ -66,6 +68,11 @@ const ARRAY_TYPES: [PrimitiveType; 8] = [
 enum Object {
     Android(android::Android),
     Class(String),
+    Reflected {
+        id: u64,
+        is_static: bool,
+        kind: ReflectedMemberKind,
+    },
     String(Vec<u16>),
     Boxed(JniValue),
     StringBuilder(Vec<u16>),
@@ -114,6 +121,7 @@ impl Object {
         match self {
             Self::Android(value) => value.class().into(),
             Self::Class(_) => "java/lang/Class".into(),
+            Self::Reflected { kind, .. } => kind.class().into(),
             Self::String(_) => "java/lang/String".into(),
             Self::Boxed(value) => java::boxed_class(*value).unwrap().into(),
             Self::StringBuilder(_) => "java/lang/StringBuilder".into(),
@@ -141,6 +149,7 @@ struct Member {
     class: String,
     name: String,
     signature: String,
+    kind: ReflectedMemberKind,
 }
 #[derive(Clone)]
 struct PendingException {

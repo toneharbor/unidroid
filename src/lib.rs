@@ -37,7 +37,9 @@ pub use debug::{
     tracepoint::Tracepoint,
     watch::{Watch, WatchAction, WatchHit},
 };
-pub use jni::{Handle, JniCall, JniHandler, JniValue, PrimitiveType};
+pub use jni::{
+    Handle, JniCall, JniHandler, JniValue, PrimitiveType, ReflectedMember, ReflectedMemberKind,
+};
 
 use arch::Architecture;
 use elf::Image;

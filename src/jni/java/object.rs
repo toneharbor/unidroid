@@ -1,5 +1,5 @@
 use super::*;
-use crate::jni::android::Android;
+use crate::jni::{MEMBER_ID_BASE, ReflectedMemberKind, android::Android};
 
 pub(super) fn hash(emu: &mut Emulator, object: &ObjectRef) -> i32 {
     let Some(object) = object else {
@@ -12,10 +12,25 @@ pub(super) fn hash(emu: &mut Emulator, object: &ObjectRef) -> i32 {
         Object::Android(Android::Signature(bytes)) => bytes.iter().fold(1i32, |hash, &byte| {
             hash.wrapping_mul(31).wrapping_add(byte as i8 as i32)
         }),
+        Object::Reflected { id, .. } => {
+            let member = &emu.jni.members[(id - MEMBER_ID_BASE) as usize];
+            let class_hash = hash_string(
+                &member
+                    .class
+                    .replace('/', ".")
+                    .encode_utf16()
+                    .collect::<Vec<_>>(),
+            );
+            if member.kind == ReflectedMemberKind::Constructor {
+                class_hash
+            } else {
+                class_hash ^ hash_string(&member.name.encode_utf16().collect::<Vec<_>>())
+            }
+        }
         _ => emu.identity_hash(object),
     }
 }
-pub(super) fn equal(a: &ObjectRef, b: &ObjectRef) -> bool {
+pub(super) fn equal(emu: &Emulator, a: &ObjectRef, b: &ObjectRef) -> bool {
     match (a, b) {
         (None, None) => true,
         (Some(a), Some(b)) => {
@@ -28,6 +43,14 @@ pub(super) fn equal(a: &ObjectRef, b: &ObjectRef) -> bool {
                         Object::Android(Android::Signature(a)),
                         Object::Android(Android::Signature(b)),
                     ) => a == b,
+                    (Object::Reflected { id: a, .. }, Object::Reflected { id: b, .. }) => {
+                        let a = &emu.jni.members[(a - MEMBER_ID_BASE) as usize];
+                        let b = &emu.jni.members[(b - MEMBER_ID_BASE) as usize];
+                        a.kind == b.kind
+                            && a.class == b.class
+                            && a.name == b.name
+                            && a.signature == b.signature
+                    }
                     _ => false,
                 }
         }
@@ -105,6 +128,7 @@ pub(super) fn call(
         }
         ("hashCode", "()I") => JniValue::Int(hash(emu, &Some(receiver.clone()))),
         ("equals", "(Ljava/lang/Object;)Z") => JniValue::Boolean(equal(
+            emu,
             &Some(receiver.clone()),
             &reference(emu, call.args[0].object())?,
         )),

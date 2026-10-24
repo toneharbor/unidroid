@@ -52,7 +52,7 @@ impl Emulator {
             164..=166 | 168..=170 | 220 | 221 | 224 | 225 => Some(2),
             171 => Some(5),
             183..=214 | 222 | 223 => Some(3),
-            10 | 27..=30 | 33 | 94 | 113..=162 | 215 | 216 => Some(1),
+            9 | 10 | 12 | 27..=30 | 33 | 94 | 113..=162 | 215 | 216 => Some(1),
             31 | 34..=93 | 95..=112 | 230 | 231 => Some(0),
             _ => None,
         };
@@ -102,9 +102,8 @@ impl Emulator {
         }
         match index {
             5 => Err(self.unsupported_jni("DefineClass")),
-            7 => Err(self.unsupported_jni("FromReflectedMethod")),
-            8 => Err(self.unsupported_jni("FromReflectedField")),
-            9 => Err(self.unsupported_jni("ToReflectedMethod")),
+            7 | 8 => self.jni_from_reflected(&function, a),
+            9 | 12 => self.jni_to_reflected(&function, b, c != 0),
             10 => {
                 let class = self.class_name(Handle(a))?;
                 if class == "java/lang/Object" {
@@ -118,7 +117,6 @@ impl Emulator {
                 };
                 Ok(self.find_class(&superclass, self.jni.scope).0)
             }
-            12 => Err(self.unsupported_jni("ToReflectedField")),
             32 if a == 0 => Ok(1),
             11 | 32 => {
                 let from = if index == 32 {
