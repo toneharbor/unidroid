@@ -27,6 +27,7 @@ pub struct Checkpoint {
     library_dirs: Vec<PathBuf>,
     rootfs: PathBuf,
     apk: Option<std::rc::Rc<crate::Apk>>,
+    assets: crate::apk::assets::Assets,
     properties: HashMap<String, String>,
     process_name: String,
     heap: u64,
@@ -63,6 +64,7 @@ impl Emulator {
             library_dirs: self.library_dirs.clone(),
             rootfs: self.rootfs.clone(),
             apk: self.apk.clone(),
+            assets: self.assets.clone(),
             properties: self.properties.clone(),
             process_name: self.process_name.clone(),
             heap: self.heap,
@@ -121,6 +123,7 @@ impl Emulator {
         self.library_dirs = checkpoint.library_dirs.clone();
         self.rootfs = checkpoint.rootfs.clone();
         self.apk = checkpoint.apk.clone();
+        self.assets = checkpoint.assets.clone();
         self.properties = checkpoint.properties.clone();
         self.process_name = checkpoint.process_name.clone();
         self.heap = checkpoint.heap;

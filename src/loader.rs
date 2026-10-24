@@ -146,8 +146,13 @@ impl Emulator {
                 let dep = self.load_image(library)?;
                 self.modules[id.0].dependencies.push(dep);
             } else {
+                let symbols = if self.apk().is_some() && needed == "libandroid.so" {
+                    "its asset functions are built in; the rest stay unresolved"
+                } else {
+                    "its symbols stay unresolved"
+                };
                 self.events.borrow_mut().emit(crate::Event::Warning { message: format!(
-                    "{needed} needed by {name} not found in the APK, next to the loaded libraries or in rootfs; its symbols stay unresolved"
+                    "{needed} needed by {name} not found in the APK, next to the loaded libraries or in rootfs; {symbols}"
                 ) });
             }
         }

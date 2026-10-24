@@ -49,6 +49,27 @@ impl TestApk {
         Ok(())
     }
 
+    pub fn assets(entries: &[(&str, &[u8], CompressionMethod)]) -> Result<Self> {
+        let xml = manifest::xml(true, &[manifest::package()]);
+        let names: Vec<_> = entries
+            .iter()
+            .map(|(name, ..)| format!("assets/{name}"))
+            .collect();
+        let mut files = vec![(
+            "AndroidManifest.xml",
+            xml.as_slice(),
+            CompressionMethod::Stored,
+            1,
+        )];
+        files.extend(
+            entries
+                .iter()
+                .zip(&names)
+                .map(|((_, bytes, method), name)| (name.as_str(), *bytes, *method, 1)),
+        );
+        Self::new(&files)
+    }
+
     pub fn manifest(bytes: &[u8]) -> Result<Self> {
         Self::new(&[("AndroidManifest.xml", bytes, CompressionMethod::Stored, 1)])
     }

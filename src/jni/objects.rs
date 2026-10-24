@@ -27,6 +27,10 @@ impl Clone for JniState {
         let mut seen = HashMap::new();
         let mut pending = Vec::new();
         let mut copied = Self {
+            application: self
+                .application
+                .as_ref()
+                .map(|object| copy(object, &mut seen, &mut pending)),
             objects: self
                 .objects
                 .iter()
@@ -97,6 +101,7 @@ impl Drop for JniState {
             .values()
             .map(|r| r.object.clone())
             .chain(self.classes.values().map(|(_, object)| object.clone()))
+            .chain(self.application.iter().cloned())
             .collect();
         let mut seen = HashSet::new();
         while let Some(object) = pending.pop() {

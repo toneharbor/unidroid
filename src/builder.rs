@@ -98,6 +98,7 @@ impl Emulator {
             symbol_aliases: HashMap::new(),
             rootfs: builder.rootfs,
             apk: apk.map(std::rc::Rc::new),
+            assets: crate::apk::assets::Assets::default(),
             library_dirs: Vec::new(),
             properties: builder.properties,
             trace: builder.trace,

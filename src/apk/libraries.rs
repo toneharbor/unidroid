@@ -65,11 +65,9 @@ impl Emulator {
                 None => &[Architecture::Arm64, Architecture::Arm32],
             };
             for &arch in arches {
-                let (abis, split, guest): (&[&str], &str, &str) = match arch {
-                    Architecture::Arm64 => (&["arm64-v8a"], "config.arm64_v8a.apk", "arm64"),
-                    Architecture::Arm32 => {
-                        (&["armeabi-v7a", "armeabi"], "config.armeabi_v7a.apk", "arm")
-                    }
+                let (abis, split): (&[&str], &str) = match arch {
+                    Architecture::Arm64 => (&["arm64-v8a"], "config.arm64_v8a.apk"),
+                    Architecture::Arm32 => (&["armeabi-v7a", "armeabi"], "config.armeabi_v7a.apk"),
                 };
                 let split = apk.path.with_file_name(split);
                 for path in [&apk.path, &split] {
@@ -86,7 +84,7 @@ impl Emulator {
                             return Ok(Some(Library::Apk {
                                 archive,
                                 entry,
-                                guest: format!("/data/app/{}-1/lib/{guest}/{name}", apk.package),
+                                guest: format!("{}/{name}", apk.native_library_dir(arch)),
                             }));
                         }
                     }

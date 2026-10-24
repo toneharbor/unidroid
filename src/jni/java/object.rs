@@ -1,4 +1,5 @@
 use super::*;
+use crate::jni::android::Android;
 
 pub(super) fn hash(emu: &mut Emulator, object: &ObjectRef) -> i32 {
     let Some(object) = object else {
@@ -7,6 +8,9 @@ pub(super) fn hash(emu: &mut Emulator, object: &ObjectRef) -> i32 {
     match &*object.borrow() {
         Object::String(value) => hash_string(value),
         Object::Boxed(value) => boxing::hash(*value),
+        Object::Android(Android::Signature(bytes)) => bytes.iter().fold(1i32, |hash, &byte| {
+            hash.wrapping_mul(31).wrapping_add(byte as i8 as i32)
+        }),
         _ => emu.identity_hash(object),
     }
 }
@@ -18,6 +22,10 @@ pub(super) fn equal(a: &ObjectRef, b: &ObjectRef) -> bool {
                 || match (&*a.borrow(), &*b.borrow()) {
                     (Object::String(a), Object::String(b)) => a == b,
                     (Object::Boxed(a), Object::Boxed(b)) => boxing::equal(*a, *b),
+                    (
+                        Object::Android(Android::Signature(a)),
+                        Object::Android(Android::Signature(b)),
+                    ) => a == b,
                     _ => false,
                 }
         }
@@ -99,6 +107,15 @@ pub(super) fn call(
             &reference(emu, call.args[0].object())?,
         )),
         ("toString", "()Ljava/lang/String;") => {
+            if matches!(&*receiver.borrow(), Object::Android(_)) {
+                let hash = hash(emu, &Some(receiver.clone()));
+                let value = format!(
+                    "{}@{:x}",
+                    receiver.borrow().java_type().replace('/', "."),
+                    hash as u32
+                );
+                return Ok(Some(string(emu, value.encode_utf16().collect::<Vec<_>>())));
+            }
             let Some(value) = text(&Some(receiver.clone())) else {
                 return Ok(None);
             };

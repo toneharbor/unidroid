@@ -288,6 +288,7 @@ impl Emulator {
             )
             .into()),
             HostFunction::Dl(name) => self.dl_function(name, handler),
+            HostFunction::Asset(name) => self.asset_function(name),
         };
         result.map(HostResult::Return)
     }

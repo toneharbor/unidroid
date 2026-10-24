@@ -29,7 +29,10 @@ impl std::fmt::Display for Exception {
     }
 }
 impl std::error::Error for Exception {}
-fn exception(class: &'static str, message: Option<String>) -> Box<dyn std::error::Error> {
+pub(super) fn exception(
+    class: &'static str,
+    message: Option<String>,
+) -> Box<dyn std::error::Error> {
     Box::new(Exception(class, message))
 }
 
@@ -73,6 +76,11 @@ fn dispatch_inner(
     op: u8,
     function: &str,
 ) -> Result<Option<JniValue>> {
+    if emu.apk().is_some()
+        && let Some(value) = super::android::dispatch(emu, call, op)?
+    {
+        return Ok(Some(value));
+    }
     if op == 6 {
         if let Some(value) = strings::construct(emu, call, function)? {
             return Ok(Some(value));
@@ -166,7 +174,7 @@ fn dispatch_inner(
     }
     collections::call(emu, call, &receiver)
 }
-fn return_ref(emu: &mut Emulator, object: ObjectRef) -> JniValue {
+pub(super) fn return_ref(emu: &mut Emulator, object: ObjectRef) -> JniValue {
     object
         .map_or(Handle(0), |object| emu.insert_ref(object, emu.jni.scope))
         .into()
@@ -178,7 +186,7 @@ fn reference(emu: &Emulator, handle: Handle) -> Result<ObjectRef> {
         emu.jni_object(handle).map(Some)
     }
 }
-fn units(emu: &Emulator, handle: Handle) -> Result<Vec<u16>> {
+pub(super) fn units(emu: &Emulator, handle: Handle) -> Result<Vec<u16>> {
     let object =
         reference(emu, handle)?.ok_or_else(|| exception("java/lang/NullPointerException", None))?;
     match &*object.borrow() {
@@ -186,7 +194,7 @@ fn units(emu: &Emulator, handle: Handle) -> Result<Vec<u16>> {
         object => Err(format!("expected a string, got {}", object.java_type()).into()),
     }
 }
-fn string(emu: &mut Emulator, value: impl Into<Vec<u16>>) -> JniValue {
+pub(super) fn string(emu: &mut Emulator, value: impl Into<Vec<u16>>) -> JniValue {
     emu.insert_object(Object::String(value.into())).into()
 }
 fn hash_string(value: &[u16]) -> i32 {

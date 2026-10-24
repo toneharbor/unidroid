@@ -1,16 +1,15 @@
+use crate::test_apk as support;
 use crate::{Emulator, Result};
 use std::{
     cell::RefCell,
     collections::HashMap,
     path::{Path, PathBuf},
 };
-use zip::CompressionMethod::{Deflated, Stored};
-#[path = "../../tests/support/apk.rs"]
-mod support;
 use support::{
     TestApk,
     manifest::{self, package},
 };
+use zip::CompressionMethod::{Deflated, Stored};
 
 thread_local! {
     static PARSES: RefCell<HashMap<PathBuf, usize>> = RefCell::default();

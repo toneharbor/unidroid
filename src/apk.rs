@@ -5,6 +5,7 @@ use std::{
 };
 
 mod archive;
+pub(crate) mod assets;
 pub(crate) mod libraries;
 mod manifest;
 mod signatures;
@@ -25,6 +26,26 @@ pub struct Apk {
 }
 
 impl Apk {
+    pub(crate) fn source_dir(&self) -> String {
+        format!("{}/base.apk", self.install_dir())
+    }
+
+    fn install_dir(&self) -> String {
+        format!("/data/app/{}-1", self.package)
+    }
+
+    pub(crate) fn native_library_dir(&self, arch: crate::Architecture) -> String {
+        let abi = match arch {
+            crate::Architecture::Arm64 => "arm64",
+            crate::Architecture::Arm32 => "arm",
+        };
+        format!("{}/lib/{abi}", self.install_dir())
+    }
+
+    pub(crate) fn data_dir(&self) -> String {
+        format!("/data/data/{}", self.package)
+    }
+
     pub(crate) fn open(path: &Path) -> Result<Self> {
         let parse = || -> Result<Self> {
             let path = path.canonicalize()?;

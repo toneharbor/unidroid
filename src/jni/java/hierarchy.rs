@@ -1,21 +1,37 @@
 use crate::Emulator;
 
 pub(in crate::jni) fn assignable(emu: &Emulator, from: &str, to: &str) -> Option<bool> {
-    if !to.starts_with("java/") && !to.starts_with("javax/") {
+    let android = emu.apk().is_some();
+    if !to.starts_with("java/")
+        && !to.starts_with("javax/")
+        && !(android && to.starts_with("android/"))
+    {
         return None;
     }
     let chain = emu.class_chain(from);
     let builtins: Vec<_> = chain
         .into_iter()
-        .filter(|class| owned_class(class))
+        .filter(|class| {
+            owned_class(class) || (android && super::super::android::parent(class).is_some())
+        })
         .collect();
     if builtins.is_empty() {
         return None;
     }
-    Some(builtins.into_iter().any(|class| reaches(class, to)))
+    Some(
+        builtins
+            .into_iter()
+            .any(|class| reaches(class, to, android)),
+    )
 }
-fn reaches(from: &str, to: &str) -> bool {
-    from == to || parents(from).iter().any(|parent| reaches(parent, to))
+fn reaches(from: &str, to: &str, android: bool) -> bool {
+    from == to
+        || parents(from)
+            .iter()
+            .any(|parent| reaches(parent, to, android))
+        || (android
+            && super::super::android::parent(from)
+                .is_some_and(|parent| reaches(parent, to, android)))
 }
 fn owned_class(class: &str) -> bool {
     matches!(

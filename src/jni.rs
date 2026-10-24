@@ -1,3 +1,4 @@
+mod android;
 mod calls;
 mod env;
 mod handler;
@@ -63,6 +64,7 @@ const ARRAY_TYPES: [PrimitiveType; 8] = [
 #[allow(clippy::enum_variant_names)]
 #[derive(Clone)]
 enum Object {
+    Android(android::Android),
     Class(String),
     String(Vec<u16>),
     Boxed(JniValue),
@@ -98,6 +100,7 @@ impl Object {
     }
     fn java_type(&self) -> String {
         match self {
+            Self::Android(value) => value.class().into(),
             Self::Class(_) => "java/lang/Class".into(),
             Self::String(_) => "java/lang/String".into(),
             Self::Boxed(value) => java::boxed_class(*value).unwrap().into(),
@@ -129,6 +132,7 @@ struct Member {
 }
 #[derive(Default)]
 pub(crate) struct JniState {
+    application: java::ObjectRef,
     objects: HashMap<Handle, Reference>,
     classes: HashMap<String, (Handle, Rc<RefCell<Object>>)>,
     superclasses: HashMap<String, String>,

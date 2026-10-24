@@ -484,7 +484,7 @@ Not supported:
 
 A library's dependencies are looked for first in the APK's ABI folders (base, then the neighboring architecture split), then in the folders of loaded host libraries, then in rootfs. `load_apk_library("libfoo.so")` and guest `dlopen` use that same name search; `dlopen` first honors an existing explicit rootfs path without `..`. Without an APK, host folders and rootfs work as before. See [ENVIRONMENT.md](ENVIRONMENT.md) for ABI selection, metadata and guest paths.
 
-A dependency found in none of these locations (such as `libEGL.so`) only prints a warning. If its function is actually called, it stops and names the function.
+A dependency found in none of these locations (such as `libEGL.so`) only prints a warning. Calling an unresolved function stops and names it; with an APK, built-in asset functions work even without `libandroid.so`.
 
 ## Directories
 

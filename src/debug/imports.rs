@@ -94,6 +94,7 @@ impl Emulator {
         }
         for (i, host) in self.host.iter().enumerate() {
             let (function, module) = match host {
+                HostFunction::Asset(name) => ((*name).to_owned(), "libandroid.so".to_owned()),
                 HostFunction::Dl(name) => ((*name).to_owned(), "libdl.so".to_owned()),
                 HostFunction::Property => ("__system_property_get".into(), "libc.so".into()),
                 HostFunction::Import { name, .. } => (name.clone(), "<hook>".into()),

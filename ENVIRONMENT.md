@@ -52,11 +52,112 @@ The base APK's central directory is read once at build; each split's is read onc
 
 A stored entry whose data begins at a 4096-aligned APK offset maps directly from the APK. Other stored entries and deflated entries are read into memory. All APK library images use the process-wide image cache keyed by canonical APK path and entry name, so batch workers share the read-only code. Keep the APK and any split APKs available and unchanged while images are cached or checkpoints are in use.
 
-`--apk FILE` is shared by `inspect`, `serve`, `batch` and `fields`. With it, `inspect` takes a library name instead of a host path. Serve adds `load_apk_library` (`name`, optional `constructors`, default true) returning the module index; `apk` returning metadata with base64 certificates or `null`; and `set_apk` with any of `package`, `version_name`, `version_code`, `signatures`, `signers` and `signing_history` (base64 lists), returning `null`. Omitted fields stay unchanged; `version_name: null` clears the name. Setting metadata without an APK errors. Recording keeps the APK argument and effective process name for replay. Package JNI answers and `AAsset` functions are not included.
+`--apk FILE` is shared by `inspect`, `serve`, `batch` and `fields`. With it, `inspect` takes a library name instead of a host path. Serve adds `load_apk_library` (`name`, optional `constructors`, default true) returning the module index; `apk` returning metadata with base64 certificates or `null`; and `set_apk` with any of `package`, `version_name`, `version_code`, `signatures`, `signers` and `signing_history` (base64 lists), returning `null`. Omitted fields stay unchanged; `version_name: null` clears the name. Setting metadata without an APK errors. Recording keeps the APK argument and effective process name for replay. Package JNI answers and `AAsset` functions are covered in “APK Java answers and assets” below.
+
+## APK Java answers and assets
+
+With an APK, these Android answers run before `JniHandler`, policy rules, `Probe` and the serve driver. They cover the entry points below and objects created by these built-ins. Other methods and fields still reach your handler. Without an APK, these answers, the Android hierarchy and the asset function bindings are disabled.
+
+Change answers through `emu.apk_mut()` or serve `set_apk`, for example to supply the original certificate of a re-signed APK. PackageInfo, ApplicationInfo and SigningInfo read current metadata when called; a Signature holds a copy of its certificate bytes. Changing `package` changes subsequent Java package names and computed paths, but does not move files already installed or change the process name. Returned objects, arrays and strings have fresh local references. Null package names, null Signature constructor arrays and null asset-list paths raise pending `java/lang/NullPointerException` and return null.
+
+A receiver is a Context when either its object's class or the call's declared class is assignable to `android/content/Context`. This uses the hierarchy below together with explicit `superclass` declarations. It also applies to host `new_object` receivers, preserving their Rust payload. For example:
+
+```rust
+emu.superclass("com/example/MyContext", "android/app/Application");
+let context = emu.new_object("com/example/MyContext", ());
+```
+
+Context entry points:
+
+| method | answer |
+|---|---|
+| `getPackageName()Ljava/lang/String;` | APK `package` |
+| `getPackageManager()Landroid/content/pm/PackageManager;` | a built-in PackageManager |
+| `getApplicationInfo()Landroid/content/pm/ApplicationInfo;` | a built-in ApplicationInfo |
+| `getPackageCodePath()Ljava/lang/String;` | `/data/app/<package>-1/base.apk` |
+| `getPackageResourcePath()Ljava/lang/String;` | `/data/app/<package>-1/base.apk` |
+| `getAssets()Landroid/content/res/AssetManager;` | a built-in AssetManager |
+| `getApplicationContext()Landroid/content/Context;` | the emulator's Application |
+
+Static entry points:
+
+| class | member | answer |
+|---|---|---|
+| `android/app/ActivityThread` | `currentPackageName()Ljava/lang/String;` | APK `package` |
+| `android/app/ActivityThread` | `currentProcessName()Ljava/lang/String;` | the effective process name |
+| `android/app/ActivityThread` | `currentApplication()Landroid/app/Application;` | the emulator's Application |
+| `android/content/pm/PackageManager` | `GET_SIGNATURES:I` | `0x40` |
+| `android/content/pm/PackageManager` | `GET_SIGNING_CERTIFICATES:I` | `0x08000000` |
+
+There is one `android/app/Application` object per emulator. `currentApplication` and `getApplicationContext` return fresh references to that same object, even after earlier references are released. Checkpoints preserve its identity.
+
+The PackageManager object's class is `android/app/ApplicationPackageManager`. It answers `getPackageInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;` and `getApplicationInfo(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;` for the APK's own package. Other package names reach the handler, which can model other installed apps. PackageInfo remembers the requested flags.
+
+`android/content/pm/PackageInfo` members:
+
+| member | answer |
+|---|---|
+| `packageName:Ljava/lang/String;` | APK `package` |
+| `versionName:Ljava/lang/String;` | `version_name`, or null when absent |
+| `versionCode:I` | the low 32 bits of `version_code` |
+| `getLongVersionCode()J` | the full `version_code` |
+| `signatures:[Landroid/content/pm/Signature;` | a Signature array from `signatures` when flags include `0x40`, otherwise null |
+| `signingInfo:Landroid/content/pm/SigningInfo;` | a SigningInfo when flags include `0x08000000`, otherwise null |
+| `applicationInfo:Landroid/content/pm/ApplicationInfo;` | a built-in ApplicationInfo |
+
+`android/content/pm/Signature` answers `<init>([B)V`, copying the supplied bytes; `toByteArray()[B`, returning a new copy; `toCharsString()Ljava/lang/String;`, returning lowercase hex; `hashCode()I`, using `java.util.Arrays.hashCode(byte[])` with signed bytes; and `equals(Ljava/lang/Object;)Z`, comparing certificate bytes with another built-in Signature. Signature keys in built-in collections use this hash and equality too.
+
+`android/content/pm/SigningInfo` members:
+
+| method | answer |
+|---|---|
+| `getApkContentsSigners()[Landroid/content/pm/Signature;` | APK `signers` |
+| `hasMultipleSigners()Z` | more than one signer |
+| `hasPastSigningCertificates()Z` | `signing_history` is nonempty |
+| `getSigningCertificateHistory()[Landroid/content/pm/Signature;` | null for multiple signers; otherwise nonempty `signing_history`, or `signers` when there is no history |
+
+`android/content/pm/ApplicationInfo` fields all have signature `Ljava/lang/String;`: `packageName` is APK `package`; `sourceDir` and `publicSourceDir` are `/data/app/<package>-1/base.apk`; `nativeLibraryDir` is `/data/app/<package>-1/lib/arm64` on arm64 or `/data/app/<package>-1/lib/arm` on arm32; `dataDir` is `/data/data/<package>`; `processName` is the effective process name. These paths use the same helpers as APK file installation and library loading. Other fields reach the handler.
+
+`android/content/res/AssetManager` answers `list(Ljava/lang/String;)[Ljava/lang/String;`. It returns sorted names of files and folders directly under `assets/<path>` in the base APK. `""` names the assets root; missing or empty directories return an empty array. It can be passed to `AAssetManager_fromJava`.
+
+All these objects answer `getClass()Ljava/lang/Class;`, `toString()Ljava/lang/String;`, `hashCode()I` and `equals(Ljava/lang/Object;)Z`. Hash and equality use identity except for Signature. The default text is the dotted class name, `@` and the hash in lowercase hex.
+
+`IsInstanceOf`, `IsAssignableFrom` and the Context test share these built-in parent chains:
+
+- `android/app/Application` → `android/content/ContextWrapper` → `android/content/Context` → `java/lang/Object`.
+- `android/app/Activity` → `android/view/ContextThemeWrapper` → `android/content/ContextWrapper`.
+- `android/app/Service` → `android/content/ContextWrapper`.
+- `android/app/ApplicationPackageManager` → `android/content/pm/PackageManager` → `java/lang/Object`.
+- PackageInfo, Signature, SigningInfo, ApplicationInfo and AssetManager → `java/lang/Object`.
+
+Declared app superclasses extend these chains. Unrelated Android and Java targets return false for known built-in sources; app-specific targets still reach `is_assignable`. `GetSuperclass` retains its explicit-declaration rule.
+
+With an APK, these C imports bind to host functions even though rootfs has no `libandroid.so`. `find_symbol` and `dlsym` resolve them, `hook_import` wraps them with the built-in as `original`, and import traces identify the built-ins as `libandroid.so`.
+
+| function | behavior |
+|---|---|
+| `AAssetManager_fromJava(JNIEnv*, jobject)` | returns the same non-null guest manager address on every call |
+| `AAssetManager_open(mgr, name, mode)` | opens `assets/<name>` in any mode; missing files return NULL; stored or deflated contents are copied into a guest allocation |
+| `AAsset_read(asset, buf, count)` | copies up to `count` bytes, advances the position and returns the byte count; returns 0 at EOF |
+| `AAsset_seek(asset, offset, whence)`, `AAsset_seek64(asset, offset, whence)` | SEEK_SET/CUR/END accept a new position in `0..=length`, including exactly EOF; an out-of-range result, signed overflow or bad whence returns -1 without moving |
+| `AAsset_getLength(asset)`, `AAsset_getLength64(asset)` | total byte length |
+| `AAsset_getRemainingLength(asset)`, `AAsset_getRemainingLength64(asset)` | length minus position, never negative |
+| `AAsset_getBuffer(asset)` | guest pointer to the whole contents, valid until close |
+| `AAsset_close(asset)` | frees the contents and forgets the asset |
+| `AAssetManager_openDir(mgr, dir)` | opens a sorted snapshot of direct files, excluding subfolders; non-null even when empty |
+| `AAssetDir_getNextFileName(dir)` | next file's name as a guest C string, valid until the next call or close; NULL at the end |
+| `AAssetDir_rewind(dir)` | restarts directory iteration |
+| `AAssetDir_close(dir)` | frees the directory and its name buffer |
+
+On arm32, `off_t` is 32-bit and `off64_t` is 64-bit. `AAsset_seek64` takes the asset in r0, skips r1, takes the offset in r2:r3 and reads `whence` at `[sp]`; 64-bit results use r0:r1. On arm64 the seek arguments use x0–x2 and results use x0. Rust `call_function` still returns only r0 on arm32, as described in [README.md](README.md).
+
+Assets use the APK's retained Archive index and reader. A compressed asset is inflated once per open; reads, seeks and buffer access use guest memory. Checkpoints restore the manager address, open assets and their positions, contents, directory snapshots, current name buffers and directory positions, including into a fresh emulator; see [DEBUGGING.md](DEBUGGING.md).
+
+Three deliberate departures from unidbg 0.9.9: package flags are honored (unidbg ignores `GET_SIGNATURES` and `GET_SIGNING_CERTIFICATES`); the returned PackageManager class is `android/app/ApplicationPackageManager` (unidbg uses `android/content/pm/PackageManager`); and requests for other packages reach the handler (unidbg answers any name).
 
 ## Built-in Java classes
 
-Common Java calls are answered before `JniHandler`, policy rules, `Probe` and the serve driver. Instance calls use the receiver's built-in kind plus the method name and JNI signature, so looking up `get` on `java/util/Map` works on a built-in HashMap. Constructors, static methods and static fields use the class name. Uncovered methods, charsets and digest algorithms still reach your handler. Objects created with `new_object(class, value)` remain opaque, even when their class is `java/util/HashMap`; their calls still reach your handler.
+Common Java calls are answered before `JniHandler`, policy rules, `Probe` and the serve driver. Instance calls use the receiver's built-in kind plus the method name and JNI signature, so looking up `get` on `java/util/Map` works on a built-in HashMap. Constructors, static methods and static fields use the class name. Uncovered methods, charsets and digest algorithms still reach your handler. Objects created with `new_object(class, value)` remain opaque, even when their class is `java/util/HashMap`; with an APK, the Context entry points above are the exception. Other calls still reach your handler.
 
 | class | built-in calls |
 |---|---|
@@ -76,7 +177,7 @@ Common Java calls are answered before `JniHandler`, policy rules, `Probe` and th
 
 String lengths and indexes count UTF-16 units, including each half of a surrogate pair. Supported charsets are UTF-8 (the default), US-ASCII, ISO-8859-1, UTF-16LE and UTF-16BE; names ignore case, hyphens and underscores. Object forms of String `valueOf` and StringBuilder `append` use built-in `toString`, with `"null"` for null. Unknown element text falls through to your handler. Map and list text uses Java's `{key=value, ...}` and `[item, ...]` forms.
 
-String keys compare by UTF-16 content; boxed keys compare by primitive type and Java value, including Java's NaN and signed-zero rules. Other keys compare by object identity, including across different handles to the same object. HashMap and HashSet use Java string and box hashes, a power-of-two table starting at 16 by default, a 0.75 load factor and bucket order. Entries within each bucket keep insertion order, including through resizing; removal and reinsertion moves a key to the end of its bucket. Long buckets are not converted to trees. LinkedHashMap keeps insertion order. TreeMap sorts strings by UTF-16 and comparable boxed keys by value; unsupported comparisons fall through to the handler, or return an error from `new_java_map`.
+String keys compare by UTF-16 content; boxed keys compare by primitive type and Java value, including Java's NaN and signed-zero rules. Signature keys compare certificate bytes; other keys compare by object identity, including across different handles to the same object. HashMap and HashSet use Java string and box hashes, a power-of-two table starting at 16 by default, a 0.75 load factor and bucket order. Entries within each bucket keep insertion order, including through resizing; removal and reinsertion moves a key to the end of its bucket. Long buckets are not converted to trees. LinkedHashMap keeps insertion order. TreeMap sorts strings by UTF-16 and comparable boxed keys by value; unsupported comparisons fall through to the handler, or return an error from `new_java_map`.
 
 Map views (`keySet`, `values`, `entrySet`) and iterators are **snapshots taken when created**. This differs from Java's live views. They keep references to their elements. Releasing an element's host handle does not remove it from a collection. All built-in object state is copied by checkpoints, preserving aliases and cycles; rewind restores collection contents, iterator positions, StringBuilder contents and digest state.
 

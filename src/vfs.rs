@@ -139,9 +139,9 @@ impl Default for Vfs {
 }
 impl Emulator {
     pub(crate) fn install_apk_files(&mut self, apk: &crate::Apk) -> Result<()> {
-        self.add_host_file(&format!("/data/app/{}-1/base.apk", apk.package), &apk.path)?;
+        self.add_host_file(&apk.source_dir(), &apk.path)?;
         for suffix in ["", "/files", "/cache"] {
-            let path = format!("/data/data/{}{suffix}", apk.package);
+            let path = format!("{}{suffix}", apk.data_dir());
             self.add_parents(&path)
                 .map_err(|error| format!("APK {} directory {path}: {error}", apk.path.display()))?;
             self.vfs

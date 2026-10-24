@@ -108,6 +108,7 @@ enum HostFunction {
     Vm(usize),
     Property,
     Dl(&'static str),
+    Asset(&'static str),
     Import { name: String, original: Option<u64> },
     Unresolved { symbol: String, module: String },
 }
@@ -145,6 +146,7 @@ pub struct Emulator {
     symbol_aliases: HashMap<String, String>,
     rootfs: PathBuf,
     apk: Option<std::rc::Rc<Apk>>,
+    assets: apk::assets::Assets,
     library_dirs: Vec<PathBuf>,
     properties: HashMap<String, String>,
     trace: Trace,
@@ -273,6 +275,7 @@ impl Emulator {
             let address = self.stub(HostFunction::Dl(name))?;
             self.overrides.insert(name.into(), address);
         }
+        self.setup_assets()?;
         self.install_pending_imports(pending_imports)?;
         self.setup_jni()?;
         self.dlerror_buf = self.malloc(self.dlerror_capacity)?;
@@ -340,6 +343,10 @@ impl Emulator {
         Ok(address)
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/apk.rs"]
+mod test_apk;
 
 #[cfg(test)]
 #[path = "../tests/support/elf.rs"]
