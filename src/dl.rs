@@ -44,21 +44,26 @@ impl Emulator {
                     self.modules[i].dl_references += 1;
                     return Ok(i as u64 + 1);
                 }
+                let from = self.location(self.lr()?);
                 let full = self.rootfs.join(path.trim_start_matches('/'));
-                let path = if !path.contains("..") && full.is_file() {
-                    Some(full)
+                let library = if !path.contains("..") && full.is_file() {
+                    Some(crate::apk::libraries::Library::Host(full))
                 } else {
-                    self.library_file(&name)
+                    self.find_library(&name)
+                        .map_err(|error| format!("{error} from {from}"))?
                 };
-                let Some(path) = path else {
+                let Some(library) = library else {
                     self.set_dlerror(&format!("dlopen failed: library \"{name}\" not found"))?;
                     return Ok(0);
                 };
                 let context = self.cpu()?.context_init()?;
-                let result = self.load_library_internal(&path).and_then(|module| {
-                    self.run_constructors(module, handler)?;
-                    Ok(module)
-                });
+                let result: Result<Module> = self
+                    .load_library_internal(library)
+                    .map_err(|error| format!("{error} from {from}").into())
+                    .and_then(|module| {
+                        self.run_constructors(module, handler)?;
+                        Ok(module)
+                    });
                 self.cpu_mut()?.context_restore(&context)?;
                 let module = result?;
                 self.modules[module.0].dl_references += 1;

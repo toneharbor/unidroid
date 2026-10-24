@@ -149,7 +149,7 @@ fn cli_json_tracepoint_events_go_only_to_stderr() -> Result<()> {
 #[test]
 fn batch_refuses_tracepoint_changes_but_allows_count_queries() -> Result<()> {
     let options = serde_json::from_value(json!({
-        "rootfs":"rootfs", "process_name":"unidroid", "prop":[], "alias":[], "file":[],
+        "rootfs":"rootfs", "apk":null, "process_name":null, "prop":[], "alias":[], "file":[],
         "superclass":[], "translation_cache_mb":8
     }))?;
     let batch = serve::BatchOptions {

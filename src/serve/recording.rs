@@ -11,8 +11,10 @@ pub fn record(
     output: impl Write,
 ) -> Result<()> {
     let policy = options.load_policy()?;
-    let mut emu = options.build(builder)?;
     let mut effective = options.clone();
+    effective.apk = options.apk.clone().or_else(|| builder.apk.clone());
+    let mut emu = options.build(builder)?;
+    effective.process_name = Some(emu.process_name.clone());
     {
         let source = emu.source.shared.borrow();
         effective.fixed_clock = source.state.fixed_clock;

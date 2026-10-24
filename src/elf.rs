@@ -84,15 +84,26 @@ impl Image {
     }
 
     pub fn open(path: &Path) -> Result<Arc<Self>> {
-        static IMAGES: OnceLock<Mutex<HashMap<PathBuf, Arc<Image>>>> = OnceLock::new();
-        let path = path.canonicalize()?;
+        Self::cached(path, None, || {
+            let file = File::open(path)?;
+            // Library files must remain unchanged for the lifetime of the process.
+            Ok(unsafe { MmapOptions::new().map(&file)? })
+        })
+    }
+
+    pub(crate) fn cached(
+        path: &Path,
+        entry: Option<&str>,
+        bytes: impl FnOnce() -> Result<Mmap>,
+    ) -> Result<Arc<Self>> {
+        type ImageCache = HashMap<(PathBuf, Option<String>), Arc<Image>>;
+        static IMAGES: OnceLock<Mutex<ImageCache>> = OnceLock::new();
+        let key = (path.canonicalize()?, entry.map(str::to_owned));
         let mut cache = IMAGES.get_or_init(Default::default).lock().unwrap();
-        if let Some(image) = cache.get(&path) {
+        if let Some(image) = cache.get(&key) {
             return Ok(image.clone());
         }
-        let file = File::open(&path)?;
-        // Library files must remain unchanged for the lifetime of the process.
-        let bytes = unsafe { MmapOptions::new().map(&file)? };
+        let bytes = bytes()?;
         let elf = Elf::parse(&bytes)?;
         let arch = match (elf.header.e_machine, elf.is_64) {
             (183, true) => Architecture::Arm64,
@@ -190,7 +201,7 @@ impl Image {
             bytes,
         };
         let image = Arc::new(image);
-        cache.insert(path, image.clone());
+        cache.insert(key, image.clone());
         Ok(image)
     }
 }

@@ -20,6 +20,14 @@ pub(crate) fn module_location<'a>(
 }
 
 impl Emulator {
+    /// Original ELF bytes, before relocation and guest writes, borrowed from the image cache.
+    pub fn module_bytes(&self, module: Module) -> Result<&[u8]> {
+        self.modules
+            .get(module.0)
+            .map(|loaded| loaded.image.bytes.as_ref())
+            .ok_or_else(|| format!("no module {} is loaded", module.0).into())
+    }
+
     pub fn modules(&self) -> Vec<ModuleInfo> {
         self.modules
             .iter()

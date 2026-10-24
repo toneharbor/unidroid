@@ -1,11 +1,9 @@
+use crate::apk::libraries::Library;
 use crate::{
     Emulator, HostFunction, Image, JniHandler, Loaded, Module, Region, Result, SharedMapping,
     page_down, page_up,
 };
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, path::Path};
 use unicorn_engine::unicorn_const::Prot;
 
 impl Emulator {
@@ -25,21 +23,10 @@ impl Emulator {
         {
             self.library_dirs.push(directory.to_owned());
         }
-        self.load_library_internal(path)
+        self.load_library_internal(Library::Host(path.to_owned()))
     }
-    pub(super) fn library_file(&self, name: &str) -> Option<PathBuf> {
-        self.library_dirs
-            .iter()
-            .map(|directory| directory.join(name))
-            .chain(std::iter::once(
-                self.rootfs
-                    .join(self.architecture().library_dir())
-                    .join(name),
-            ))
-            .find(|path| path.is_file())
-    }
-    pub(super) fn load_library_internal(&mut self, path: &Path) -> Result<Module> {
-        let module = self.load_image(path)?;
+    pub(super) fn load_library_internal(&mut self, library: Library) -> Result<Module> {
+        let module = self.load_image(library)?;
         for i in 0..self.modules.len() {
             self.relocate(Module(i), None)?;
         }
@@ -58,13 +45,14 @@ impl Emulator {
         self.trace_heap(self.trace.heap)?;
         Ok(module)
     }
-    fn load_image(&mut self, path: &Path) -> Result<Module> {
+    fn load_image(&mut self, library: Library) -> Result<Module> {
+        let path = library.path();
         let name = path
             .file_name()
             .ok_or_else(|| format!("cannot load {}: not a file path", path.display()))?
             .to_string_lossy()
             .into_owned();
-        let image = Image::open(path)?;
+        let image = library.image()?;
         if self.uc.is_none() {
             self.setup_cpu(image.arch)?;
         }
@@ -76,9 +64,10 @@ impl Emulator {
             )
             .into());
         }
-        let app = path
-            .parent()
-            .is_some_and(|parent| self.library_dirs.iter().any(|dir| dir == parent));
+        let app = matches!(library, Library::Apk { .. })
+            || path
+                .parent()
+                .is_some_and(|parent| self.library_dirs.iter().any(|dir| dir == parent));
         if let Some(i) = self.modules.iter().position(|m| m.name == name) {
             self.modules[i].app |= app;
             return Ok(Module(i));
@@ -126,7 +115,8 @@ impl Emulator {
             });
         }
         let id = Module(self.modules.len());
-        let path_ptr = self.new_cstring(&path.to_string_lossy())?;
+        let guest_path = library.guest_path();
+        let path_ptr = self.new_cstring(&guest_path)?;
         let p = self.pointer_size();
         let info_ptr = self.malloc((4 * p) as usize)?;
         let first = &image.segments[0];
@@ -139,7 +129,8 @@ impl Emulator {
         self.write_bytes(info_ptr + 3 * p, &image.phnum.to_le_bytes())?;
         self.modules.push(Loaded {
             app,
-            path: path.to_owned(),
+            path,
+            guest_path: matches!(library, Library::Apk { .. }).then_some(guest_path),
             name: name.clone(),
             image: image.clone(),
             base,
@@ -151,12 +142,12 @@ impl Emulator {
             dl_references: 0,
         });
         for needed in &image.needed {
-            if let Some(path) = self.library_file(needed) {
-                let dep = self.load_image(&path)?;
+            if let Some(library) = self.find_library(needed)? {
+                let dep = self.load_image(library)?;
                 self.modules[id.0].dependencies.push(dep);
             } else {
                 self.events.borrow_mut().emit(crate::Event::Warning { message: format!(
-                    "{needed} needed by {name} not found next to the loaded libraries or in rootfs; its symbols stay unresolved"
+                    "{needed} needed by {name} not found in the APK, next to the loaded libraries or in rootfs; its symbols stay unresolved"
                 ) });
             }
         }

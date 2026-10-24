@@ -110,6 +110,16 @@ pub(super) enum Command {
         #[serde(default = "default_true")]
         constructors: bool,
     },
+    LoadApkLibrary {
+        name: String,
+        #[serde(default = "default_true")]
+        constructors: bool,
+    },
+    Apk,
+    SetApk {
+        #[serde(flatten)]
+        values: ApkUpdate,
+    },
     RunConstructors {
         module: usize,
     },
@@ -232,4 +242,73 @@ pub(super) enum Command {
         value: Value,
     },
     Unhandled,
+}
+
+use crate::{Emulator, Result};
+use base64::{Engine, prelude::BASE64_STANDARD};
+
+pub(super) fn apk_value(emu: &Emulator) -> Value {
+    emu.apk().map_or(Value::Null, |apk| serde_json::json!({
+        "path": apk.path, "package": apk.package,
+        "version_name": apk.version_name, "version_code": apk.version_code,
+        "signatures": apk.signatures.iter().map(|cert| BASE64_STANDARD.encode(cert)).collect::<Vec<_>>(),
+        "signers": apk.signers.iter().map(|cert| BASE64_STANDARD.encode(cert)).collect::<Vec<_>>(),
+        "signing_history": apk.signing_history.iter().map(|cert| BASE64_STANDARD.encode(cert)).collect::<Vec<_>>(),
+    }))
+}
+
+#[derive(Deserialize)]
+pub(super) struct ApkUpdate {
+    package: Option<String>,
+    #[serde(default, deserialize_with = "nullable_name")]
+    version_name: Option<Option<String>>,
+    version_code: Option<i64>,
+    signatures: Option<Vec<String>>,
+    signers: Option<Vec<String>>,
+    signing_history: Option<Vec<String>>,
+}
+
+fn nullable_name<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
+impl ApkUpdate {
+    pub(super) fn apply(self, emu: &mut Emulator) -> Result<()> {
+        let apk = emu.apk_mut().ok_or("set_apk: no APK configured")?;
+        let decode = |values: Option<Vec<String>>, field: &str| -> Result<Option<Vec<Vec<u8>>>> {
+            values
+                .map(|values| {
+                    values
+                        .iter()
+                        .map(|value| BASE64_STANDARD.decode(value))
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                })
+                .transpose()
+                .map_err(|error| format!("set_apk {} {field}: {error}", apk.path.display()).into())
+        };
+        let signatures = decode(self.signatures, "signatures")?;
+        let signers = decode(self.signers, "signers")?;
+        let signing_history = decode(self.signing_history, "signing_history")?;
+        if let Some(package) = self.package {
+            apk.package = package;
+        }
+        if let Some(version_name) = self.version_name {
+            apk.version_name = version_name;
+        }
+        if let Some(version_code) = self.version_code {
+            apk.version_code = version_code;
+        }
+        if let Some(signatures) = signatures {
+            apk.signatures = signatures;
+        }
+        if let Some(signers) = signers {
+            apk.signers = signers;
+        }
+        if let Some(signing_history) = signing_history {
+            apk.signing_history = signing_history;
+        }
+        Ok(())
+    }
 }

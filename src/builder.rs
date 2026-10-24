@@ -5,7 +5,8 @@ use std::{collections::HashMap, path::PathBuf};
 
 pub struct EmulatorBuilder {
     rootfs: PathBuf,
-    process_name: String,
+    pub(crate) apk: Option<PathBuf>,
+    process_name: Option<String>,
     properties: HashMap<String, String>,
     trace: Trace,
     on_event: Option<debug::events::EventHandler>,
@@ -18,8 +19,12 @@ impl EmulatorBuilder {
         self.rootfs = path.into();
         self
     }
+    pub fn apk(mut self, path: impl Into<PathBuf>) -> Self {
+        self.apk = Some(path.into());
+        self
+    }
     pub fn process_name(mut self, name: impl Into<String>) -> Self {
-        self.process_name = name.into();
+        self.process_name = Some(name.into());
         self
     }
     pub fn system_property(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
@@ -57,7 +62,8 @@ impl Emulator {
     pub fn builder() -> EmulatorBuilder {
         EmulatorBuilder {
             rootfs: "rootfs".into(),
-            process_name: "unidroid".into(),
+            apk: None,
+            process_name: None,
             properties: HashMap::from([("ro.build.version.sdk".into(), "23".into())]),
             trace: Trace::default(),
             on_event: None,
@@ -76,7 +82,12 @@ impl Emulator {
         {
             debug::code::Spec::parse(spec)?;
         }
-        Ok(Self {
+        let apk = builder.apk.as_deref().map(crate::Apk::open).transpose()?;
+        let process_name = builder.process_name.unwrap_or_else(|| {
+            apk.as_ref()
+                .map_or_else(|| "unidroid".into(), |apk| apk.package.clone())
+        });
+        let mut emu = Self {
             uc: None,
             arch: None,
             cache_size: builder.cache_size,
@@ -86,6 +97,7 @@ impl Emulator {
             overrides: HashMap::new(),
             symbol_aliases: HashMap::new(),
             rootfs: builder.rootfs,
+            apk: apk.map(std::rc::Rc::new),
             library_dirs: Vec::new(),
             properties: builder.properties,
             trace: builder.trace,
@@ -99,7 +111,7 @@ impl Emulator {
             free_blocks: Vec::new(),
             allocations: HashMap::new(),
             heap_high_water: HOST_MALLOC_START,
-            process_name: builder.process_name.clone(),
+            process_name,
             dlerror_buf: 0,
             dlerror_pending: false,
             dlerror_capacity: 256,
@@ -115,6 +127,10 @@ impl Emulator {
             breakpoints: HashMap::new(),
             watchpoints: debug::watch::Watchpoints::default(),
             tracepoints: debug::tracepoint::Tracepoints::default(),
-        })
+        };
+        if let Some(apk) = emu.apk.clone() {
+            emu.install_apk_files(&apk)?;
+        }
+        Ok(emu)
     }
 }

@@ -128,8 +128,20 @@ impl LogFormat {
 }
 
 fn inspect(options: Options, lib: PathBuf, probe: bool) -> Result<ExitCode> {
-    let bytes = fs::read(&lib)?;
-    let elf = Elf::parse(&bytes)?;
+    let mut emu = options.emulator.build(options.diagnostics.builder(true))?;
+    let module = if options.emulator.apk.is_some() {
+        Some(emu.load_apk_library_without_constructors(&lib.to_string_lossy())?)
+    } else {
+        None
+    };
+    let host_bytes;
+    let bytes = if let Some(module) = module {
+        emu.module_bytes(module)?
+    } else {
+        host_bytes = fs::read(&lib)?;
+        &host_bytes
+    };
+    let elf = Elf::parse(bytes)?;
     let name = lib.file_name().unwrap().to_string_lossy();
     let architecture = match (elf.header.e_machine, elf.is_64) {
         (183, true) => "64-bit ARM (arm64-v8a)",
@@ -165,8 +177,12 @@ fn inspect(options: Options, lib: PathBuf, probe: bool) -> Result<ExitCode> {
     let onload = exports.contains(&"JNI_OnLoad");
     println!("JNI_OnLoad: {}", if onload { "yes" } else { "no" });
     let mut policy = options.emulator.load_policy()?;
-    let mut emu = options.emulator.build(options.diagnostics.builder(true))?;
-    let module = emu.load_library(lib)?;
+    let module = if let Some(module) = module {
+        emu.run_constructors(module, &mut ())?;
+        module
+    } else {
+        emu.load_library(lib)?
+    };
     let mut status = ExitCode::SUCCESS;
     let mut answers = Probe::default();
     if onload {

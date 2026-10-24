@@ -30,7 +30,7 @@ It's also about 3x faster. Telegram's PBKDF2 at 100,000 iterations: unidbg about
 Why it's smaller:
 
 - No Java VM.
-- A library's read-only parts (code, constants) are never copied. They're mapped straight from the file. Code that never runs never uses memory.
+- A library's read-only parts (code, constants) are mapped straight from host files or aligned stored APK entries. Compressed and unaligned APK entries are read into shared memory; see [ENVIRONMENT.md](ENVIRONMENT.md).
 - Several instances in one process share a single copy of that read-only code. Each instance keeps only its own writable data.
 
 Re-measure: `bench/compare.sh 1 4`. It runs unidbg and unidroid side by side and checks that their outputs match. It needs Java 21 and Maven.
@@ -144,7 +144,7 @@ It lands at `target/release/unidroid`. It has six subcommands.
 target/release/unidroid inspect --rootfs rootfs libfoo.so
 ```
 
-No code needed. It prints what the library is, which libraries it needs, its `Java_` functions, and whether it has `JNI_OnLoad`. Then it runs `JNI_OnLoad` and prints each Java call it makes (on stderr). It stops at the first call the built-ins do not answer. Last, it lists the methods registered through `RegisterNatives` and the crypto constants found in mapped memory. Now you know what to call, which Java calls you'll have to answer and which algorithm tables to inspect.
+No code needed. With `inspect --apk app.apk libfoo.so`, the library name is looked up in the APK and its split APK, then loaded host-library folders and rootfs (see [ENVIRONMENT.md](ENVIRONMENT.md)). It prints what the library is, which libraries it needs, its `Java_` functions, and whether it has `JNI_OnLoad`. Then it runs `JNI_OnLoad` and prints each Java call it makes (on stderr). It stops at the first call the built-ins do not answer. Last, it lists the methods registered through `RegisterNatives` and the crypto constants found in mapped memory. Now you know what to call, which Java calls you'll have to answer and which algorithm tables to inspect.
 
 For the SignUtil sample:
 
@@ -221,7 +221,8 @@ Options, the same for `inspect` and `serve`:
 | option | what it does |
 |---|---|
 | `--rootfs DIR` | Android system libraries (default `rootfs`) |
-| `--process-name NAME` | process name the library sees |
+| `--apk FILE` | parse the app's APK and load its native libraries; see [ENVIRONMENT.md](ENVIRONMENT.md) |
+| `--process-name NAME` | process name the library sees (default: APK package name, otherwise `unidroid`) |
 | `--fixed-clock SECONDS` | start guest realtime at these Unix seconds; guest clock syscalls and arm64 counter reads advance time by one microsecond per read; also fix file metadata |
 | `--random-seed N` | seed the shared guest random byte stream with SplitMix64 |
 | `--prop KEY=VALUE` | a system property, repeatable |
@@ -256,6 +257,9 @@ Commands:
 |---|---|---|
 | `load` | `path` | module number |
 | `load` (optional field) | `constructors` (boolean, default `true`; `false` defers constructors) | module number |
+| `load_apk_library` | `name`, optional `constructors` (boolean, default `true`) | module number |
+| `apk` | | `{path, package, version_name, version_code, signatures, signers, signing_history}`; certificate lists are base64; `null` without an APK |
+| `set_apk` | optional `package`, `version_name` (string or `null`), `version_code`, `signatures`, `signers`, `signing_history` (base64 lists); omitted fields stay | `null`; error without an APK |
 | `hook_import` | `name` | `null` |
 | `run_constructors` | `module` | `null` |
 | `alias` | `name`, `target` | `null` |
@@ -465,7 +469,7 @@ See [the `diff` command](DEBUGGING.md#diff-compare-two-memory-snapshots) to comp
 Supported:
 
 - Android arm64 (`arm64-v8a`) and 32-bit ARM (`armeabi-v7a`, both ARM and Thumb code), using Android 6.0 (API 23) system libraries
-- Loading a `.so` and its dependencies, relocation (including Android packed relocations), running constructors
+- Loading a `.so` from the host or an APK and its dependencies, relocation (including Android packed relocations), running constructors
 - libdl (`dlopen` / `dlsym` and the rest), system properties, the common syscalls including `write`/`writev` to stdout and stderr, `uname` and `faccessat` (see [files and system calls](ENVIRONMENT.md#files-and-system-calls))
 - JNI: classes, methods, fields, strings, arrays, exceptions, global and local references, `RegisterNatives`. Strings and arrays handed to native code come from libc's own `malloc`, as on a phone, so native code may `free` them.
 - Guest threads (`pthread_create`, `pthread_join`, and the futex waits behind locks). They take turns on one CPU and switch about every 10,000 instructions, like unidbg. Switching keeps the translated code. A thread that is still running when your call returns keeps going during your next call. An instance that never starts a thread pays nothing for this.
@@ -478,9 +482,9 @@ Not supported:
 - Signals and `fork`
 - Writing to the host file system. Guest files resolve through an in-memory overlay, generated files and read-only `rootfs`; all writes stay in memory and host files are never changed. Added files, writable files, directories and links are covered in [ENVIRONMENT.md](ENVIRONMENT.md).
 
-A library's dependencies are looked for first in the folders of the libraries you loaded, then in rootfs. That's how an app's own `lib/arm64-v8a` folder works on a phone, so copy an app's libraries together and load the one you need. `dlopen` from the library searches the same way.
+A library's dependencies are looked for first in the APK's ABI folders (base, then the neighboring architecture split), then in the folders of loaded host libraries, then in rootfs. `load_apk_library("libfoo.so")` and guest `dlopen` use that same name search; `dlopen` first honors an existing explicit rootfs path without `..`. Without an APK, host folders and rootfs work as before. See [ENVIRONMENT.md](ENVIRONMENT.md) for ABI selection, metadata and guest paths.
 
-A dependency found in neither place (such as `libEGL.so`) only prints a warning. If its function is actually called, it stops and names the function.
+A dependency found in none of these locations (such as `libEGL.so`) only prints a warning. If its function is actually called, it stops and names the function.
 
 ## Directories
 

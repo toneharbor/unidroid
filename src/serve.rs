@@ -274,12 +274,21 @@ impl<R: BufRead, W: Write> Session<R, W> {
                 })?;
                 Value::Null
             }
-            Command::Load { path, constructors } => {
-                let module = emu.load_library_without_constructors(path)?;
+            Command::Load { .. } | Command::LoadApkLibrary { .. } => {
+                let (module, constructors) = match command {
+                    Command::Load { path, constructors } => (emu.load_library_without_constructors(path)?, constructors),
+                    Command::LoadApkLibrary { name, constructors } => (emu.load_apk_library_without_constructors(&name)?, constructors),
+                    _ => unreachable!(),
+                };
                 if constructors {
                     emu.run_constructors(module, self)?;
                 }
                 json!(module.0)
+            }
+            Command::Apk => command::apk_value(emu),
+            Command::SetApk { values } => {
+                values.apply(emu)?;
+                Value::Null
             }
             Command::RunConstructors { module } => {
                 emu.run_constructors(Module(module), self)?;

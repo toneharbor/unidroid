@@ -1,3 +1,5 @@
+mod apk;
+pub use apk::Apk;
 mod arch;
 mod builder;
 pub use builder::EmulatorBuilder;
@@ -72,6 +74,7 @@ pub struct Module(pub usize);
 struct Loaded {
     app: bool,
     path: PathBuf,
+    guest_path: Option<String>,
     name: String,
     image: Arc<Image>,
     base: u64,
@@ -141,6 +144,7 @@ pub struct Emulator {
     overrides: HashMap<String, u64>,
     symbol_aliases: HashMap<String, String>,
     rootfs: PathBuf,
+    apk: Option<std::rc::Rc<Apk>>,
     library_dirs: Vec<PathBuf>,
     properties: HashMap<String, String>,
     trace: Trace,

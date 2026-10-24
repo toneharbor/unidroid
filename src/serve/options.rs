@@ -13,9 +13,12 @@ pub struct Options {
     /// Android system library directory.
     #[arg(long, default_value = "rootfs")]
     pub rootfs: PathBuf,
-    /// Guest process name.
-    #[arg(long, default_value = "unidroid")]
-    pub process_name: String,
+    /// APK containing the app's libraries and metadata.
+    #[arg(long, value_name = "FILE")]
+    pub apk: Option<PathBuf>,
+    /// Guest process name (default: APK package, otherwise unidroid).
+    #[arg(long)]
+    pub process_name: Option<String>,
     /// Set a system property.
     #[arg(long, value_name = "KEY=VALUE", value_parser = pair)]
     pub prop: Vec<(String, String)>,
@@ -54,8 +57,13 @@ impl Options {
     pub fn build(&self, builder: EmulatorBuilder) -> Result<Emulator> {
         let mut builder = builder
             .rootfs(&self.rootfs)
-            .process_name(&self.process_name)
             .translation_cache_size(self.translation_cache_mb * 1024 * 1024);
+        if let Some(path) = &self.apk {
+            builder = builder.apk(path);
+        }
+        if let Some(name) = &self.process_name {
+            builder = builder.process_name(name);
+        }
         if let Some(seconds) = self.fixed_clock {
             builder = builder.fixed_clock(seconds);
         }

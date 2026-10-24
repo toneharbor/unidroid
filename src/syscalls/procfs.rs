@@ -5,17 +5,23 @@ impl Emulator {
     pub(crate) fn proc_maps(&self) -> Result<Vec<u8>> {
         let mut text = String::new();
         for mapping in self.maps()? {
-            let (dev, label) = if self
+            let (dev, label) = if let Some(module) = self
                 .modules
                 .iter()
-                .any(|module| module.name == mapping.name)
+                .find(|module| module.name == mapping.name)
             {
                 let dir = if mapping.name.ends_with(".so") {
                     self.architecture().library_dir()
                 } else {
                     "bin"
                 };
-                ("b3:19", format!("/system/{dir}/{}", mapping.name))
+                (
+                    "b3:19",
+                    module
+                        .guest_path
+                        .clone()
+                        .unwrap_or_else(|| format!("/system/{dir}/{}", mapping.name)),
+                )
             } else if mapping.name == "[stack]" {
                 ("00:00", "[stack]".into())
             } else {

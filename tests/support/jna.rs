@@ -50,6 +50,10 @@ pub struct Output {
 }
 pub fn run(emu: &mut Emulator, directory: &std::path::Path) -> Result<Output> {
     let module = emu.load_library(directory.join("libjnidispatch.so"))?;
+    check(emu, module)
+}
+
+pub fn check(emu: &mut Emulator, module: unidroid::Module) -> Result<Output> {
     let mut handler = JnaHandler;
     emu.call_jni_onload(module, &mut handler)?;
     let property = emu.find_symbol(module, "__system_property_get")?;

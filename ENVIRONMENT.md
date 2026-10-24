@@ -2,6 +2,58 @@
 
 unidroid emulates Android for native libraries; you can replace imported C calls with host logic.
 
+## APK
+
+Open one APK when building the emulator. The builder parses it before any CPU is created; errors name the APK path and the problem.
+
+```rust
+let mut emu = Emulator::builder().apk("app.apk").build()?;
+let module = emu.load_apk_library("libfoo.so")?;
+let apk = emu.apk().unwrap();
+println!("{} {:?} {}", apk.package, apk.version_name, apk.version_code);
+```
+
+`EmulatorBuilder::apk(self, path: impl Into<PathBuf>) -> Self` selects the APK. `Emulator::apk(&self) -> Option<&Apk>` and `apk_mut(&mut self) -> Option<&mut Apk>` expose its data. Without an APK they return `None`. `Apk` is exported from the crate root:
+
+```rust
+pub struct Apk {
+    pub path: PathBuf,             // Canonical host path
+    pub package: String,
+    pub version_name: Option<String>,
+    pub version_code: i64,
+    pub signatures: Vec<Vec<u8>>,      // PackageInfo.signatures
+    pub signers: Vec<Vec<u8>>,         // SigningInfo.getApkContentsSigners()
+    pub signing_history: Vec<Vec<u8>>, // Rotation lineage, oldest first
+    // Private shared archive indexes and readers
+}
+```
+
+Only the root `<manifest>` attributes of binary `AndroidManifest.xml` are parsed. `package` without a namespace is required. Android `versionCode`, `versionCodeMajor` and `versionName` use their resource-map IDs when present, otherwise their names in the Android namespace. UTF-8 and UTF-16 string pools, string values and decimal/hex integer values work. `version_code` is `(versionCodeMajor << 32) | versionCode`, with missing components zero, like `PackageInfo.getLongVersionCode`. A resource-reference `versionName` is left unresolved as `None`; an absent name is also `None`. Parsing follows Android's lenient approach: it ignores unused strings and trailing manifest/signature data, decodes needed strings lossily, and accepts BER indefinite-length v1 containers while still rejecting truncated fields it needs.
+
+The certificate lists have distinct rules:
+
+1. `signers` contains the v3 signer's first certificate (`0xf05368c0`), otherwise each v2 signer's first certificate (`0x7109871a`) in order, otherwise the v1 certificates, otherwise an empty list.
+2. `signing_history` contains the v3 proof-of-rotation lineage (`0x3ba06f8c`), oldest first and current last. It is empty when the attribute is absent. The parser reads its version and each node's signed-data certificate; it does not verify the rotation signatures.
+3. `signatures` contains the v1 certificates when v1 block files exist, matching unidbg 0.9.9's apk-parser. Without v1 it contains only the oldest lineage certificate when there is a lineage, as Android's `GET_SIGNATURES` does; otherwise it equals `signers`. Unidbg returns no certificates for v2/v3-only APKs.
+
+V1 block files are directly in `META-INF/` (`.RSA`, `.DSA` or `.EC`, case-insensitive). Every certificate from each PKCS#7 SignedData certificates field is kept in central-directory file order and certificate order; nested files are ignored.
+
+Certificate bytes are copied exactly, without decoding and re-encoding. These are extracted certificates, not verification of the APK's cryptographic signatures. Through `apk_mut`, a host can replace metadata or certificates, such as the original certificate of a re-signed APK. Changing `path` or `package` does not move the guest files and directories already installed, change the process name, or rename already loaded modules. Checkpoints share unchanged `Apk` data and restore it, including into a fresh emulator; a later mutation makes a private copy.
+
+`load_apk_library(name: &str) -> Result<Module>` accepts a library file name such as `libfoo.so`, maps and relocates it and its dependencies, and runs constructors. `load_apk_library_without_constructors(name: &str) -> Result<Module>` defers those constructors until `run_constructors`; both error without an APK. APK libraries count as app libraries for traces.
+
+Every named load, dependency and guest `dlopen` searches the APK first, then the directories of loaded host libraries, then rootfs. Before that name search, `dlopen` honors an argument naming an existing file under rootfs when the argument contains no `..`; for example `/vendor/lib64/libfoo.so` loads that exact file even if the APK contains another `libfoo.so`. Arm64 searches `lib/arm64-v8a/`; arm32 searches `lib/armeabi-v7a/` then `lib/armeabi/`. Within an architecture, the base APK is searched before the neighboring `config.arm64_v8a.apk` or `config.armeabi_v7a.apk`, if present. Before a CPU exists, lookup tries arm64 first, then arm32; the selected ELF sets the architecture. Explicit `load_library(host_path)` continues to load that host file.
+
+An APK library's guest path, used by `dl_iterate_phdr`, dynamic-loader names and `/proc/self/maps`, is `/data/app/<package>-1/lib/arm64/<name>` on arm64 or `/data/app/<package>-1/lib/arm/<name>` on arm32. `emu.modules()` and serve `modules` report its host source as `<canonical APK path>!/lib/<abi>/<name>`. Host-loaded libraries keep their existing names and maps labels.
+
+The builder exposes the host APK at `/data/app/<package>-1/base.apk` through `add_host_file`, with no copy. It creates overlay directories `/data/data/<package>`, `/data/data/<package>/files` and `/data/data/<package>/cache`. The process name defaults to the package name; explicit `.process_name(...)` or `--process-name` wins. Without an APK it defaults to `unidroid`.
+
+The base APK's central directory is read once at build; each split's is read once at its first lookup. Indexes and retained file readers are shared across checkpoints and metadata copies, including `apk_mut`; subsequent lookups use the indexes without opening the APK, and an image-cache miss seeks to and reads only the requested entry. `Emulator::module_bytes(&self, module: Module) -> Result<&[u8]>` borrows the original ELF bytes from the image cache before relocation or guest writes; `inspect --apk` uses this accessor and does not open or inflate the entry again.
+
+A stored entry whose data begins at a 4096-aligned APK offset maps directly from the APK. Other stored entries and deflated entries are read into memory. All APK library images use the process-wide image cache keyed by canonical APK path and entry name, so batch workers share the read-only code. Keep the APK and any split APKs available and unchanged while images are cached or checkpoints are in use.
+
+`--apk FILE` is shared by `inspect`, `serve`, `batch` and `fields`. With it, `inspect` takes a library name instead of a host path. Serve adds `load_apk_library` (`name`, optional `constructors`, default true) returning the module index; `apk` returning metadata with base64 certificates or `null`; and `set_apk` with any of `package`, `version_name`, `version_code`, `signatures`, `signers` and `signing_history` (base64 lists), returning `null`. Omitted fields stay unchanged; `version_name: null` clears the name. Setting metadata without an APK errors. Recording keeps the APK argument and effective process name for replay. Package JNI answers and `AAsset` functions are not included.
+
 ## Built-in Java classes
 
 Common Java calls are answered before `JniHandler`, policy rules, `Probe` and the serve driver. Instance calls use the receiver's built-in kind plus the method name and JNI signature, so looking up `get` on `java/util/Map` works on a built-in HashMap. Constructors, static methods and static fields use the class name. Uncovered methods, charsets and digest algorithms still reach your handler. Objects created with `new_object(class, value)` remain opaque, even when their class is `java/util/HashMap`; their calls still reach your handler.
@@ -122,7 +174,7 @@ format!("{start:08x}-{end:08x} {perms}p 00000000 {dev} 0          {label}\n")
 
 Addresses are lowercase hex, at least eight digits; `perms` is the three `rwx`/`-` characters. There are ten spaces after inode `0`.
 
-- All loaded modules, including app libraries, use device `b3:19` and label `/system/lib64/NAME` on arm64 or `/system/lib/NAME` on arm32. A module name without a `.so` suffix uses `/system/bin/NAME` on either architecture.
+- Loaded modules use device `b3:19`. APK libraries use `/data/app/<package>-1/lib/arm64/NAME` or `/data/app/<package>-1/lib/arm/NAME`; host-loaded modules use `/system/lib64/NAME` on arm64 or `/system/lib/NAME` on arm32, or `/system/bin/NAME` when their name has no `.so` suffix.
 - The stack uses device `00:00` and label `[stack]`.
 - Every other mapping uses device `00:00` and label `anonymous`.
 

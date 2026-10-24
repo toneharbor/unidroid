@@ -138,6 +138,19 @@ impl Default for Vfs {
     }
 }
 impl Emulator {
+    pub(crate) fn install_apk_files(&mut self, apk: &crate::Apk) -> Result<()> {
+        self.add_host_file(&format!("/data/app/{}-1/base.apk", apk.package), &apk.path)?;
+        for suffix in ["", "/files", "/cache"] {
+            let path = format!("/data/data/{}{suffix}", apk.package);
+            self.add_parents(&path)
+                .map_err(|error| format!("APK {} directory {path}: {error}", apk.path.display()))?;
+            self.vfs
+                .overlay
+                .insert(path, Node::new(Data::Directory, 0o040755));
+        }
+        Ok(())
+    }
+
     /// Add or replace an in-memory guest file, creating missing parent directories.
     pub fn add_file(&mut self, path: &str, bytes: &[u8]) -> Result<()> {
         let path = resolution::absolute(path)?;
