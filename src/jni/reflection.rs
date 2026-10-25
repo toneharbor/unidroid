@@ -115,8 +115,7 @@ impl Emulator {
             }
             ("getDeclaringClass", "()Ljava/lang/Class;") => {
                 let class = member.class.clone();
-                let class = self.find_class(&class, self.jni.scope);
-                self.alias(class, self.jni.scope)?.into()
+                self.find_class(&class).into()
             }
             _ => return Ok(None),
         }))

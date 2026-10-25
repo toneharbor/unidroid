@@ -18,7 +18,7 @@ fn file_stat_times_record_and_replay_without_a_fixed_clock() -> Result<()> {
         for fixed in [None, Some(123)] {
             let options: unidroid::serve::Options = serde_json::from_value(json!({
                 "rootfs":"rootfs", "apk":null, "process_name":null, "prop":[], "alias":[], "file":[], "superclass":[],
-                "fixed_clock":fixed, "random_seed":null, "translation_cache_mb":8,
+                "fixed_clock":fixed, "random_seed":null, "translation_cache_mb":8, "no_threads":false,
             }))?;
             let words: [u32; 2] = if arm64 {
                 [0xd4000001, 0xd65f03c0]

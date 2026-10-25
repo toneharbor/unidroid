@@ -73,6 +73,93 @@ fn flag_worker_and_spin(emu: &mut Emulator) -> Result<(u64, u64)> {
 }
 
 #[test]
+fn disabled_threads_set_pthread_ids_without_running_workers() -> Result<()> {
+    for arch in [Architecture::Arm32, Architecture::Arm64] {
+        for run in [true, false] {
+            let mut emu = Emulator::builder().threads(run).build()?;
+            let libc = emu.load_library(format!("rootfs/{}/libc.so", arch.library_dir()))?;
+            let (worker, spin) = flag_worker_and_spin(&mut emu)?;
+            let flag = emu.malloc(4)?;
+            for tid in [1235u32, 1236] {
+                emu.write_bytes(flag, &[0; 4])?;
+                let thread = spawn(&mut emu, libc, worker, flag)?;
+                assert_ne!(thread, 0);
+                assert_eq!(
+                    emu.read_bytes(thread + 2 * emu.pointer_size(), 4)?,
+                    tid.to_le_bytes()
+                );
+                assert_eq!(emu.read_bytes(flag, 4)?, [0; 4]);
+                assert_eq!(emu.call_function(spin, &[flag])?, u64::from(run));
+                assert_eq!(call(&mut emu, libc, "sched_yield", &[])?, 0);
+                assert_eq!(emu.read_bytes(flag, 4)?, u32::from(run).to_le_bytes());
+                if run {
+                    assert_eq!(call(&mut emu, libc, "pthread_join", &[thread, 0])?, 0);
+                } else {
+                    assert_eq!(
+                        emu.read_bytes(thread + 2 * emu.pointer_size(), 4)?,
+                        tid.to_le_bytes()
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn no_threads_option_reaches_the_emulator_after_json_round_trip() -> Result<()> {
+    use clap::Parser;
+    #[derive(Parser)]
+    struct Args {
+        #[command(flatten)]
+        options: crate::serve::Options,
+    }
+    let args = Args::try_parse_from(["unidroid", "--no-threads"])?;
+    let options: crate::serve::Options =
+        serde_json::from_value(serde_json::to_value(args.options)?)?;
+    for arch in [Architecture::Arm32, Architecture::Arm64] {
+        let mut emu = options.build(Emulator::builder())?;
+        let libc = emu.load_library(format!("rootfs/{}/libc.so", arch.library_dir()))?;
+        let (worker, spin) = flag_worker_and_spin(&mut emu)?;
+        let flag = emu.malloc(4)?;
+        let thread = spawn(&mut emu, libc, worker, flag)?;
+        assert_eq!(
+            emu.read_bytes(thread + 2 * emu.pointer_size(), 4)?,
+            1235u32.to_le_bytes()
+        );
+        assert_eq!(emu.call_function(spin, &[flag])?, 0);
+        assert_eq!(emu.read_bytes(flag, 4)?, [0; 4]);
+    }
+    Ok(())
+}
+
+#[test]
+fn checkpoints_keep_threads_disabled_and_preserve_the_next_tid() -> Result<()> {
+    for arch in [Architecture::Arm32, Architecture::Arm64] {
+        let mut emu = Emulator::builder().threads(false).build()?;
+        let libc = emu.load_library(format!("rootfs/{}/libc.so", arch.library_dir()))?;
+        let (worker, spin) = flag_worker_and_spin(&mut emu)?;
+        let flag = emu.malloc(4)?;
+        spawn(&mut emu, libc, worker, flag)?;
+        let saved = emu.checkpoint()?;
+        let mut copy = Emulator::builder().build()?;
+        copy.rewind(&saved)?;
+        spawn(&mut emu, libc, worker, flag)?;
+        emu.rewind(&saved)?;
+        for current in [&mut emu, &mut copy] {
+            let thread = spawn(current, libc, worker, flag)?;
+            assert_eq!(
+                current.read_bytes(thread + 2 * current.pointer_size(), 4)?,
+                1236u32.to_le_bytes()
+            );
+            assert_eq!(current.call_function(spin, &[flag])?, 0);
+            assert_eq!(current.read_bytes(flag, 4)?, [0; 4]);
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn instruction_slices_run_a_saved_thread_during_the_next_call() -> Result<()> {
     for arch in [Architecture::Arm32, Architecture::Arm64] {
         let (mut emu, libc) = libc_emulator(arch)?;

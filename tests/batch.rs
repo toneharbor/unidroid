@@ -49,7 +49,7 @@ fn options() -> Options {
     serde_json::from_value(json!({
         "rootfs":"rootfs", "apk":null, "process_name":null, "prop":[], "alias":[], "file":[],
         "superclass":[], "fixed_clock":1700000000, "random_seed":42,
-        "translation_cache_mb":8
+        "translation_cache_mb":8, "no_threads":false
     }))
     .unwrap()
 }

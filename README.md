@@ -225,6 +225,7 @@ Options, the same for `inspect` and `serve`:
 | `--process-name NAME` | process name the library sees (default: APK package name, otherwise `unidroid`) |
 | `--fixed-clock SECONDS` | start guest realtime at these Unix seconds; guest clock syscalls and arm64 counter reads advance time by one microsecond per read; also fix file metadata |
 | `--random-seed N` | seed the shared guest random byte stream with SplitMix64 |
+| `--no-threads` | never run guest threads, unidbg's default; same as [`.threads(false)`](src/builder.rs) |
 | `--prop KEY=VALUE` | a system property, repeatable |
 | `--alias NAME=TARGET` | same as `symbol_alias`, repeatable |
 | `--file GUEST=HOST` | add a host file at an absolute guest path; writes stay in memory; repeatable |
@@ -383,7 +384,7 @@ Anywhere inside a command, an object containing only `{"$ref":N}` uses the `ok` 
 | `coverage` | list of coverage specs added to the current trace settings; returns this attempt's block counts in serve's `coverage` JSON format |
 | `diff` | `true` captures memory and registers before and after the job, including a failed job |
 
-Batch accepts `--rootfs`, `--process-name`, repeatable `--prop`, `--alias`, `--file` and `--superclass`, `--policy`, `--translation-cache-mb`, `--fixed-clock` and `--random-seed` as described above, plus:
+Batch accepts `--rootfs`, `--process-name`, repeatable `--prop`, `--alias`, `--file` and `--superclass`, `--policy`, `--translation-cache-mb`, `--fixed-clock`, `--random-seed` and `--no-threads` as described above, plus:
 
 | option | meaning |
 |---|---|
@@ -471,8 +472,8 @@ Supported:
 - Android arm64 (`arm64-v8a`) and 32-bit ARM (`armeabi-v7a`, both ARM and Thumb code), using Android 6.0 (API 23) system libraries
 - Loading a `.so` from the host or an APK and its dependencies, relocation (including Android packed relocations), running constructors
 - libdl (`dlopen` / `dlsym` and the rest), system properties, the common syscalls including `write`/`writev` to stdout and stderr, `uname` and `faccessat` (see [files and system calls](ENVIRONMENT.md#files-and-system-calls))
-- JNI: classes, methods, fields, strings, arrays, exceptions, global and local references, `RegisterNatives`. Strings and arrays handed to native code come from libc's own `malloc`, as on a phone, so native code may `free` them.
-- Guest threads (`pthread_create`, `pthread_join`, and the futex waits behind locks). They take turns on one CPU and switch about every 10,000 instructions, like unidbg. Switching keeps the translated code. A thread that is still running when your call returns keeps going during your next call. An instance that never starts a thread pays nothing for this.
+- JNI: classes, methods, fields, strings, arrays, exceptions, global and local references, `RegisterNatives`. [`FindClass`, `GetObjectClass` and `GetSuperclass`](src/jni/env.rs) return a new local reference each call, while the serve `class` command and [`Emulator::class`](src/jni/objects.rs) keep one handle per class name. Strings and arrays handed to native code come from libc's own `malloc`, as on a phone, so native code may `free` them.
+- Guest threads (`pthread_create`, `pthread_join`, and the futex waits behind locks). They take turns on one CPU and switch about every 10,000 instructions, like unidbg with `setEnableThreadDispatcher(true)`. Switching keeps the translated code. A thread that is still running when your call returns keeps going during your next call. An instance that never starts a thread pays nothing for this. unidbg's default never runs guest threads; `--no-threads` / [`.threads(false)`](src/builder.rs) does the same: `pthread_create` succeeds, the thread never runs, and code that waits for it (such as `pthread_join`) does not finish.
 - The 32-bit ARM kernel helpers at `0xffff0f60`–`0xffff0fff`, which old libraries and Android 6.0's own libc use
 - Several instances in one process
 

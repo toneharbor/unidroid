@@ -49,7 +49,7 @@ Load a library before taking a checkpoint so the CPU architecture is known. `che
 
 Rewind restores:
 
-- All CPU registers, the current thread identity, saved guest threads and their registers, PCs and waits, thread IDs and virtual scheduling time.
+- All CPU registers, the current thread identity, saved guest threads and their registers, PCs and waits, thread IDs, virtual scheduling time and [whether guest threads run](src/threads.rs).
 - Memory mappings, permissions and bytes, including allocations, stacks, TLS and library data. Later mappings and libraries disappear; later host allocations and JNI handles are no longer live, and their addresses and handle numbers can be reused.
 - Loaded modules and loader state, host function stubs, symbol aliases, library directories, rootfs, the `Apk` metadata and library lookup (shared until mutated), properties, process name, host malloc/free state and `dlerror` state.
 - Heap tracking records, including live blocks, freed blocks and release order. They follow the restored memory; `Trace.heap` and its hooks stay with the target emulator.
@@ -393,7 +393,7 @@ target/release/unidroid serve --rootfs rootfs --record session.jsonl
 target/release/unidroid replay session.jsonl --trace-syscalls --trace-code libsignutil.so
 ```
 
-The recording starts with `{"record":1,"version":"<crate version>","options":{...}}`. `options` holds `rootfs`, `apk`, `process_name`, `prop`, `alias`, `file`, `superclass`, `fixed_clock`, `random_seed` and `translation_cache_mb`; the four repeatable settings are arrays of key/value pairs. Defaults are recorded too. `apk` keeps the supplied path; `process_name` records the effective name (the APK package by default). Keep the APK and split APKs unchanged and replay from the same directory when paths are relative. `fixed_clock` and `random_seed` are the built emulator's effective values, including values supplied only through the builder; explicit `Options` values take precedence over builder values. Trace and log options are not in the header. Subsequent entries stay in consumption order:
+The recording starts with `{"record":1,"version":"<crate version>","options":{...}}`. `options` holds `rootfs`, `apk`, `process_name`, `prop`, `alias`, `file`, `superclass`, `fixed_clock`, `random_seed`, `no_threads` and `translation_cache_mb`; the four repeatable settings are arrays of key/value pairs. Defaults are recorded too. `apk` keeps the supplied path; `process_name` records the effective name (the APK package by default). Keep the APK and split APKs unchanged and replay from the same directory when paths are relative. `fixed_clock`, `random_seed` and `no_threads` are the built emulator's effective values, including values supplied only through the builder; explicit clock/random `Options` values take precedence over builder values, while `no_threads: true` disables threads and `false` leaves the builder's setting alone. Trace and log options are not in the header. Subsequent entries stay in consumption order:
 
 With `--policy`, the header also holds `"policy":{"rules":[...]}`: the parsed rules, with their original `values` lists. The policy path is not stored. Replay uses these embedded rules from the first sequence value, even if the original file changed or was deleted. A recording made without a policy has no `policy` entry. See [README.md](README.md) for the policy format and API.
 

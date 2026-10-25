@@ -36,6 +36,7 @@ struct SavedThread {
 }
 
 pub(crate) struct Threads {
+    run: bool,
     saved: VecDeque<SavedThread>,
     current: Identity,
     next_tid: u32,
@@ -46,9 +47,10 @@ pub(crate) struct Threads {
     pub action: Action,
 }
 
-impl Default for Threads {
-    fn default() -> Self {
+impl Threads {
+    pub(crate) fn new(run: bool) -> Self {
         Self {
+            run,
             saved: VecDeque::new(),
             current: Identity {
                 tid: MAIN_TID,
@@ -62,9 +64,7 @@ impl Default for Threads {
             action: Action::Continue,
         }
     }
-}
 
-impl Threads {
     pub(crate) fn copy(&self, cpu: &mut Unicorn<'_, CpuData>) -> Result<Self> {
         let current = cpu.context_init()?;
         let saved = self
@@ -83,6 +83,7 @@ impl Threads {
         // Restore even if copying a context failed.
         cpu.context_restore(&current)?;
         Ok(Self {
+            run: self.run,
             saved: saved?,
             current: self.current,
             next_tid: self.next_tid,
@@ -92,6 +93,10 @@ impl Threads {
             depth: self.depth,
             action: self.action,
         })
+    }
+
+    pub(crate) fn enabled(&self) -> bool {
+        self.run
     }
 
     pub(crate) fn has_saved(&self) -> bool {
@@ -138,15 +143,7 @@ impl Emulator {
         if a[0] & (CLONE_VM | CLONE_THREAD) != CLONE_VM | CLONE_THREAD {
             return Ok((-38i64) as u64);
         }
-        let arch = self.architecture();
         let tid = self.threads.next_tid;
-        let mut context = self.cpu()?.context_init()?;
-        context.reg_write(arch.gp(0), 0)?;
-        context.reg_write(arch.sp(), a[1])?;
-        if a[0] & 0x80000 != 0 {
-            // CLONE_SETTLS
-            context.reg_write(arch.tls(), a[3])?;
-        }
         if a[0] & 0x100000 != 0 {
             // CLONE_PARENT_SETTID
             self.write_bytes(a[2], &tid.to_le_bytes())?;
@@ -155,17 +152,27 @@ impl Emulator {
             // CLONE_CHILD_SETTID
             self.write_bytes(a[4], &tid.to_le_bytes())?;
         }
-        let pc = self.restart_pc()?.0;
-        self.install_thread_slice_hook()?;
-        self.threads.saved.push_back(SavedThread {
-            identity: Identity {
-                tid,
-                clear_tid: if a[0] & 0x200000 != 0 { a[4] } else { 0 },
-            },
-            context,
-            pc,
-            wait: None,
-        });
+        if self.threads.run {
+            let arch = self.architecture();
+            let mut context = self.cpu()?.context_init()?;
+            context.reg_write(arch.gp(0), 0)?;
+            context.reg_write(arch.sp(), a[1])?;
+            if a[0] & 0x80000 != 0 {
+                // CLONE_SETTLS
+                context.reg_write(arch.tls(), a[3])?;
+            }
+            let pc = self.restart_pc()?.0;
+            self.install_thread_slice_hook()?;
+            self.threads.saved.push_back(SavedThread {
+                identity: Identity {
+                    tid,
+                    clear_tid: if a[0] & 0x200000 != 0 { a[4] } else { 0 },
+                },
+                context,
+                pc,
+                wait: None,
+            });
+        }
         self.threads.next_tid += 1;
         Ok(tid as u64)
     }

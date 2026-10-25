@@ -15,6 +15,7 @@ pub fn record(
     effective.apk = options.apk.clone().or_else(|| builder.apk.clone());
     let mut emu = options.build(builder)?;
     effective.process_name = Some(emu.process_name.clone());
+    effective.no_threads = !emu.threads.enabled();
     {
         let source = emu.source.shared.borrow();
         effective.fixed_clock = source.state.fixed_clock;
@@ -39,7 +40,7 @@ pub fn record(
 /// Replay a recording with the builder's diagnostic settings; return the input count.
 pub fn replay(file: impl BufRead, builder: EmulatorBuilder) -> Result<usize> {
     let (options, policy, journal) = Journal::replaying(file)?;
-    let mut emu = options.build(builder)?;
+    let mut emu = options.build(builder.threads(!options.no_threads))?;
     emu.source.shared.borrow_mut().mode = crate::source::Mode::Replaying(Box::new(journal.clone()));
     let mut session = Session {
         input: std::io::empty(),

@@ -13,6 +13,7 @@ pub struct EmulatorBuilder {
     cache_size: u32,
     fixed_clock: Option<i64>,
     random_seed: Option<u64>,
+    threads: bool,
 }
 impl EmulatorBuilder {
     pub fn rootfs(mut self, path: impl Into<PathBuf>) -> Self {
@@ -53,6 +54,11 @@ impl EmulatorBuilder {
         self.random_seed = Some(seed);
         self
     }
+    /// Run guest threads (enabled by default); false lets creation succeed without running them.
+    pub fn threads(mut self, run: bool) -> Self {
+        self.threads = run;
+        self
+    }
     pub fn build(self) -> Result<Emulator> {
         Emulator::build(self)
     }
@@ -70,6 +76,7 @@ impl Emulator {
             cache_size: 8 * 1024 * 1024,
             fixed_clock: None,
             random_seed: None,
+            threads: true,
         }
     }
     fn build(builder: EmulatorBuilder) -> Result<Self> {
@@ -119,7 +126,7 @@ impl Emulator {
             vfs: crate::vfs::Vfs::default(),
             source: source::Source::new(builder.fixed_clock, builder.random_seed),
             jni: jni::JniState::default(),
-            threads: threads::Threads::default(),
+            threads: threads::Threads::new(builder.threads),
             imports: debug::imports::Imports::default(),
             code: debug::code::Code::default(),
             calls: None,

@@ -37,6 +37,9 @@ pub struct Options {
     /// Seed the guest random byte stream with SplitMix64.
     #[arg(long, value_name = "N")]
     pub random_seed: Option<u64>,
+    /// Never run guest threads; thread creation still succeeds, as in unidbg by default.
+    #[arg(long)]
+    pub no_threads: bool,
     /// Translation cache size in MB. Large libraries run faster with a bigger cache.
     #[arg(long, value_name = "MB", default_value = "8", value_parser = clap::value_parser!(u32).range(1..4096))]
     pub translation_cache_mb: u32,
@@ -69,6 +72,9 @@ impl Options {
         }
         if let Some(seed) = self.random_seed {
             builder = builder.random_seed(seed);
+        }
+        if self.no_threads {
+            builder = builder.threads(false);
         }
         for (key, value) in &self.prop {
             builder = builder.system_property(key, value);

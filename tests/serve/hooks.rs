@@ -215,7 +215,7 @@ fn malformed_import_answers_keep_original_suspended() {
 fn hooks_without_a_driver_pass_through_in_batch() {
     let options = serde_json::from_value(json!({
         "rootfs":"rootfs", "apk":null, "process_name":null, "prop":[], "alias":[], "file":[], "superclass":[],
-        "fixed_clock":1700000000, "random_seed":42, "translation_cache_mb":8
+        "fixed_clock":1700000000, "random_seed":42, "translation_cache_mb":8, "no_threads":false
     }))
     .unwrap();
     for directory in ["lib64", "lib"] {

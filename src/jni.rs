@@ -163,7 +163,7 @@ pub(crate) struct JniState {
     charsets: HashMap<&'static str, Rc<RefCell<Object>>>,
     containers: Vec<Weak<RefCell<Object>>>,
     objects: HashMap<Handle, Reference>,
-    classes: HashMap<String, (Handle, Rc<RefCell<Object>>)>,
+    classes: HashMap<String, (Option<Handle>, Rc<RefCell<Object>>)>,
     superclasses: HashMap<String, String>,
     members: Vec<Member>,
     member_ids: HashMap<(String, String, String, bool, bool), u64>,

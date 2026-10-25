@@ -115,7 +115,7 @@ impl Emulator {
                         self.location(self.lr()?)
                     ).into());
                 };
-                Ok(self.find_class(&superclass, self.jni.scope).0)
+                Ok(self.find_class(&superclass).0)
             }
             32 if a == 0 => Ok(1),
             11 | 32 => {
@@ -216,7 +216,7 @@ impl Emulator {
             4 => Ok(0x10006),
             6 => {
                 let name = self.cstring(a)?;
-                Ok(self.find_class(&name, self.jni.scope).0)
+                Ok(self.find_class(&name).0)
             }
             26 => Ok(0),
             19 => {
@@ -269,7 +269,7 @@ impl Emulator {
             25 => Ok(self.alias(Handle(a), self.jni.scope)?.0),
             31 => {
                 let name = self.jni_object(Handle(a))?.borrow().java_type();
-                Ok(self.find_class(&name, self.jni.scope).0)
+                Ok(self.find_class(&name).0)
             }
             28..=30 | 33..=162 => self.jni_members_function(index, function, a, b, c, handler),
             163..=170 | 220 | 221 | 224 | 225 => {

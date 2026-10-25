@@ -142,7 +142,7 @@ fn recording_keeps_builder_apk_and_process_name_when_options_omit_them() -> Resu
     let relative = file.path.strip_prefix(env!("CARGO_MANIFEST_DIR"))?;
     let options = serde_json::from_value(json!({
         "rootfs":"rootfs", "apk":null, "process_name":null,
-        "prop":[], "alias":[], "file":[], "superclass":[], "translation_cache_mb":8
+        "prop":[], "alias":[], "file":[], "superclass":[], "translation_cache_mb":8, "no_threads":false
     }))?;
     let record = file.path.with_file_name("builder.jsonl");
     unidroid::serve::record(

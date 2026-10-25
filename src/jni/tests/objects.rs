@@ -1,6 +1,105 @@
 use super::*;
 
 #[test]
+fn class_lookups_return_independent_local_references() -> Result<()> {
+    for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+        for index in [6, 31, 10] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            let name = "example/Bridge";
+            let argument = match index {
+                6 => emu.new_cstring(name)?,
+                31 => emu.new_object(name, ()).0,
+                _ => {
+                    emu.superclass("example/Child", name);
+                    emu.class("example/Child").0
+                }
+            };
+            jni_call(&mut emu, 19, &[16])?;
+            jni_call(&mut emu, 19, &[16])?;
+            let first = jni_call(&mut emu, index, &[argument])?;
+            let second = jni_call(&mut emu, index, &[argument])?;
+            assert_ne!(first, second, "JNIEnv index {index}, {arch:?}");
+            assert_eq!(jni_call(&mut emu, 24, &[first, second])?, 1);
+            jni_call(&mut emu, 23, &[second])?;
+            assert_eq!(jni_call(&mut emu, 232, &[second])?, 0);
+            let method = emu.new_cstring("call")?;
+            let signature = emu.new_cstring("()V")?;
+            assert_ne!(jni_call(&mut emu, 113, &[first, method, signature])?, 0);
+            let third = jni_call(&mut emu, index, &[argument])?;
+            assert_eq!(jni_call(&mut emu, 24, &[first, third])?, 1);
+            jni_call(&mut emu, 20, &[0])?;
+            assert_eq!(jni_call(&mut emu, 232, &[first])?, 0);
+            assert_eq!(jni_call(&mut emu, 232, &[third])?, 0);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn guest_class_lookups_leave_api_handles_stable() -> Result<()> {
+    for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+        for api_first in [false, true] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+            let name = "example/Bridge";
+            let stable = api_first.then(|| emu.class(name));
+            let text = emu.new_cstring(name)?;
+            jni_call(&mut emu, 19, &[16])?;
+            jni_call(&mut emu, 19, &[16])?;
+            let local = jni_call(&mut emu, 6, &[text])?;
+            let api = emu.class(name);
+            if let Some(stable) = stable {
+                assert_eq!(api, stable);
+            }
+            assert_ne!(api.0, local);
+            assert_eq!(jni_call(&mut emu, 24, &[api.0, local])?, 1);
+            jni_call(&mut emu, 23, &[local])?;
+            assert_eq!(jni_call(&mut emu, 232, &[local])?, 0);
+            emu.release(api);
+            let local = jni_call(&mut emu, 6, &[text])?;
+            assert_eq!(jni_call(&mut emu, 232, &[api.0])?, 0);
+            assert_eq!(emu.class(name), api);
+            assert_eq!(jni_call(&mut emu, 24, &[api.0, local])?, 1);
+            jni_call(&mut emu, 23, &[local])?;
+            jni_call(&mut emu, 20, &[0])?;
+            assert_eq!(jni_call(&mut emu, 232, &[api.0])?, 1);
+            assert_eq!(emu.class(name), api);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn checkpoints_preserve_guest_and_api_class_identity() -> Result<()> {
+    for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
+        let mut emu = Emulator::builder().build()?;
+        emu.setup_cpu(arch)?;
+        let name = emu.new_cstring("example/GuestOnly")?;
+        let guest = jni_call(&mut emu, 6, &[name])?;
+        let api = emu.class("example/Api");
+        let api_name = emu.new_cstring("example/Api")?;
+        let alias = jni_call(&mut emu, 6, &[api_name])?;
+        emu.release(api);
+        let saved = emu.checkpoint()?;
+        let mut copy = Emulator::builder().build()?;
+        copy.rewind(&saved)?;
+        emu.rewind(&saved)?;
+        for current in [&mut emu, &mut copy] {
+            let again = jni_call(current, 6, &[name])?;
+            assert_ne!(again, guest);
+            assert_eq!(jni_call(current, 24, &[guest, again])?, 1);
+            let api_guest = current.class("example/GuestOnly");
+            assert_ne!(api_guest.0, guest);
+            assert_eq!(jni_call(current, 24, &[guest, api_guest.0])?, 1);
+            assert_eq!(current.class("example/Api"), api);
+            assert_eq!(jni_call(current, 24, &[api.0, alias])?, 1);
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn local_frames_and_string_constructors_reject_invalid_guest_references() -> Result<()> {
     for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
         let mut emu = Emulator::builder().build()?;

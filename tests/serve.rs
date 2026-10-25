@@ -206,7 +206,9 @@ fn c_calls_forward_methods_fields_constructors_and_assignability() {
     );
     let parent = client.request(json!({"cmd":"class", "name":"test/Parent"}));
     let get_superclass = read_pointer(&mut client, table + 10 * 8);
-    assert_eq!(client.request(json!({"cmd":"call_function", "address":get_superclass.to_string(), "args":[env, class.to_string()]})), parent.to_string());
+    let superclass = client.request(json!({"cmd":"call_function", "address":get_superclass.to_string(), "args":[env, class.to_string()]}));
+    let is_same = read_pointer(&mut client, table + 24 * 8);
+    assert_eq!(client.request(json!({"cmd":"call_function", "address":is_same.to_string(), "args":[env, superclass, parent.to_string()]})), "1");
     let object = client.request(json!({"cmd":"new_object", "class":"test/Bridge"}));
     let args = client.request(json!({"cmd":"malloc", "size":8}));
 

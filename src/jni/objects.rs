@@ -151,7 +151,7 @@ impl Emulator {
                     .jni
                     .classes
                     .values()
-                    .any(|(remembered, _)| *remembered == handle)
+                    .any(|(remembered, _)| *remembered == Some(handle))
             {
                 break handle;
             }
@@ -189,22 +189,30 @@ impl Emulator {
         self.jni.objects.remove(&handle);
     }
     pub fn class(&mut self, name: &str) -> Handle {
-        self.find_class(name, 0)
-    }
-    pub(super) fn find_class(&mut self, name: &str, scope: usize) -> Handle {
-        if let Some((handle, object)) = self.jni.classes.get(name).cloned() {
-            let reference = self
-                .jni
+        let object = self.class_object(name);
+        if let Some(handle) = self.jni.classes[name].0 {
+            self.jni
                 .objects
                 .entry(handle)
-                .or_insert(Reference { object, scope });
-            reference.scope = reference.scope.min(scope);
+                .or_insert(Reference { object, scope: 0 })
+                .scope = 0;
             return handle;
         }
-        let object = Rc::new(RefCell::new(Object::Class(name.into())));
-        let handle = self.insert_ref(object.clone(), scope);
-        self.jni.classes.insert(name.into(), (handle, object));
+        let handle = self.insert_ref(object, 0);
+        self.jni.classes.get_mut(name).unwrap().0 = Some(handle);
         handle
+    }
+    fn class_object(&mut self, name: &str) -> Rc<RefCell<Object>> {
+        self.jni
+            .classes
+            .entry(name.into())
+            .or_insert_with(|| (None, Rc::new(RefCell::new(Object::Class(name.into())))))
+            .1
+            .clone()
+    }
+    pub(super) fn find_class(&mut self, name: &str) -> Handle {
+        let object = self.class_object(name);
+        self.insert_ref(object, self.jni.scope)
     }
     /// Declare that a class directly extends a superclass.
     pub fn superclass(&mut self, class: impl Into<String>, superclass: impl Into<String>) {

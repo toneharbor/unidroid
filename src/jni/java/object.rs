@@ -123,8 +123,7 @@ pub(super) fn call(
 ) -> Result<Option<JniValue>> {
     let answer = match (call.name, call.signature) {
         ("getClass", "()Ljava/lang/Class;") => {
-            let class = emu.find_class(&receiver.borrow().java_type(), emu.jni.scope);
-            emu.alias(class, emu.jni.scope)?.into()
+            emu.find_class(&receiver.borrow().java_type()).into()
         }
         ("hashCode", "()I") => JniValue::Int(hash(emu, &Some(receiver.clone()))),
         ("equals", "(Ljava/lang/Object;)Z") => JniValue::Boolean(equal(

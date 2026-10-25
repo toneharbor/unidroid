@@ -14,7 +14,8 @@ fn get_superclass_uses_declarations_and_requires_unknown_parents() -> Result<()>
         assert_eq!(jni_call(&mut emu, 10, &[object.0])?, 0);
         emu.superclass("example/Loop", "example/Loop");
         let looping = emu.class("example/Loop");
-        assert_eq!(jni_call(&mut emu, 10, &[looping.0])?, looping.0);
+        let superclass = jni_call(&mut emu, 10, &[looping.0])?;
+        assert_eq!(jni_call(&mut emu, 24, &[superclass, looping.0])?, 1);
         let unknown = emu.class("example/Unknown");
         assert_eq!(
             jni_call(&mut emu, 10, &[unknown.0])

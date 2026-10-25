@@ -155,6 +155,60 @@ fn clone_copies_tls_and_stack_sets_tids_and_can_replace_or_clear_ctid() -> Resul
 }
 
 #[test]
+fn disabled_clone_keeps_flag_checks_tid_writes_and_single_thread_futex_results() -> Result<()> {
+    for arch in [Architecture::Arm32, Architecture::Arm64] {
+        let mut emu = Emulator::builder().threads(false).build()?;
+        emu.load_library(format!("rootfs/{}/libc.so", arch.library_dir()))?;
+        let clone = syscall_code(&mut emu, 0x100, 120, 220)?;
+        let futex = syscall_code(&mut emu, 0x200, 240, 98)?;
+        let ptid = emu.malloc(8)?;
+        let ctid = emu.malloc(8)?;
+        emu.write_bytes(ptid, &[0xa5; 8])?;
+        emu.write_bytes(ctid, &[0xa5; 8])?;
+        for flags in [0, 0x100, 0x10000] {
+            assert_eq!(
+                emu.call_function(clone, &[flags | 0x1100000, 0, ptid, 0, ctid, 0])?,
+                (-38i64) as u64 & arch.pointer_mask()
+            );
+            assert_eq!(emu.read_bytes(ptid, 8)?, [0xa5; 8]);
+            assert_eq!(emu.read_bytes(ctid, 8)?, [0xa5; 8]);
+        }
+        for (i, (parent, child)) in [(true, false), (false, true), (true, true), (false, false)]
+            .into_iter()
+            .enumerate()
+        {
+            emu.write_bytes(ptid, &[0xa5; 8])?;
+            emu.write_bytes(ctid, &[0xa5; 8])?;
+            let flags = 0x10100
+                | 0x280000 // CLONE_SETTLS | CLONE_CHILD_CLEARTID
+                | if parent { 0x100000 } else { 0 }
+                | if child { 0x1000000 } else { 0 };
+            let tid = 1235 + i as u32;
+            assert_eq!(
+                emu.call_function(clone, &[flags, 0, ptid, 0, ctid, 0])?,
+                u64::from(tid)
+            );
+            for (address, written) in [(ptid, parent), (ctid, child)] {
+                assert_eq!(
+                    emu.read_bytes(address, 4)?,
+                    if written {
+                        tid.to_le_bytes()
+                    } else {
+                        [0xa5; 4]
+                    }
+                );
+                assert_eq!(emu.read_bytes(address + 4, 4)?, [0xa5; 4]);
+            }
+            assert_eq!(
+                emu.call_function(futex, &[0, 0, 0, 0, 0, 0])?,
+                (-11i64) as u64 & arch.pointer_mask()
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn pthread_join_returns_value_and_clears_tid() -> Result<()> {
     for arch in [Architecture::Arm32, Architecture::Arm64] {
         let (mut emu, libc) = libc_emulator(arch)?;

@@ -17,7 +17,7 @@ fn recording_header_uses_effective_builder_clock_and_seed() -> unidroid::Result<
                 ));
                 let options: unidroid::serve::Options = serde_json::from_value(json!({
                     "rootfs":"rootfs", "apk":null, "process_name":null, "prop":[], "alias":[], "file":[], "superclass":[],
-                    "fixed_clock":override_options.then_some(456), "random_seed":override_options.then_some(7), "translation_cache_mb":8,
+                    "fixed_clock":override_options.then_some(456), "random_seed":override_options.then_some(7), "translation_cache_mb":8, "no_threads":false,
                 }))?;
                 let words: [u32; 2] = if arm64 {
                     [0xd4000001, 0xd65f03c0]
@@ -73,6 +73,97 @@ fn recording_header_uses_effective_builder_clock_and_seed() -> unidroid::Result<
 }
 
 #[test]
+fn recording_preserves_effective_thread_setting_and_replays_worker_behavior() -> unidroid::Result<()>
+{
+    use base64::{Engine, prelude::BASE64_STANDARD};
+    use unidroid::Emulator;
+    for arm64 in [true, false] {
+        // Parent returns its tid; child sets a flag on its supplied stack and exits.
+        let clone: &[u32] = if arm64 {
+            &[
+                0xd2801b88, 0xd4000001, 0xb4000040, 0xd65f03c0, 0x52800021, 0xb90003e1, 0xd2800000,
+                0xd2800ba8, 0xd4000001,
+            ]
+        } else {
+            &[
+                0xe92d40b0, 0xe59d4010, 0xe3a07078, 0xef000000, 0xe3500000, 0x18bd80b0, 0xe3a01001,
+                0xe58d1000, 0xe3a00000, 0xe3a07001, 0xef000000,
+            ]
+        };
+        let yield_thread: &[u32] = if arm64 {
+            &[0xd2800f88, 0xd4000001, 0xd65f03c0]
+        } else {
+            &[0xe92d4080, 0xe3a0709e, 0xef000000, 0xe8bd8080]
+        };
+        for (run, no_threads, flag) in [
+            (false, false, 0u32),
+            (true, false, 1),
+            (true, true, 0),
+            (false, true, 0),
+        ] {
+            let path = std::env::temp_dir().join(format!(
+                "unidroid-effective-threads-{}.jsonl",
+                std::process::id()
+            ));
+            let options: unidroid::serve::Options = serde_json::from_value(json!({
+                "rootfs":"rootfs", "apk":null, "process_name":null, "prop":[], "alias":[], "file":[], "superclass":[],
+                "fixed_clock":123, "random_seed":42, "translation_cache_mb":8, "no_threads":no_threads,
+            }))?;
+            let commands = [
+                json!({"cmd":"load", "path":if arm64 { "rootfs/lib64/libc.so" } else { "rootfs/lib/libc.so" }}),
+                json!({"cmd":"write", "address":"131328", "base64":BASE64_STANDARD.encode(clone.iter().flat_map(|word| word.to_le_bytes()).collect::<Vec<_>>())}),
+                json!({"cmd":"write", "address":"131584", "base64":BASE64_STANDARD.encode(yield_thread.iter().flat_map(|word| word.to_le_bytes()).collect::<Vec<_>>())}),
+                json!({"cmd":"write", "address":"1879052288", "base64":"AAAAAA=="}),
+                json!({"cmd":"call_function", "address":"131328", "args":["65792", "1879052288", "0", "0", "0"]}),
+                json!({"cmd":"read", "address":"1879052288", "size":4}),
+                json!({"cmd":"call_function", "address":"131584", "args":[]}),
+                json!({"cmd":"read", "address":"1879052288", "size":4}),
+            ];
+            let input: String = commands
+                .iter()
+                .map(|command| format!("{command}\n"))
+                .collect();
+            let mut output = Vec::new();
+            unidroid::serve::record(
+                &options,
+                Emulator::builder().threads(run),
+                std::fs::File::create(&path)?,
+                input.as_bytes(),
+                &mut output,
+            )?;
+            let recording = std::fs::read_to_string(&path)?;
+            let header: Value = serde_json::from_str(recording.lines().next().unwrap())?;
+            assert_eq!(header["options"]["no_threads"], flag == 0);
+            let responses: Vec<Value> = String::from_utf8(output)?
+                .lines()
+                .map(serde_json::from_str)
+                .collect::<std::result::Result<_, _>>()?;
+            for response in &responses {
+                assert!(response.get("ok").is_some(), "{response}");
+            }
+            assert_eq!(responses[4]["ok"], "1235");
+            assert_eq!(responses[5]["ok"], "AAAAAA==");
+            assert_eq!(responses[6]["ok"], "0");
+            assert_eq!(
+                responses[7]["ok"],
+                BASE64_STANDARD.encode(flag.to_le_bytes())
+            );
+            for builder in [
+                Emulator::builder(),
+                Emulator::builder().threads(flag == 0), // Opposite of the recorded setting.
+            ] {
+                assert_eq!(
+                    unidroid::serve::replay(recording.as_bytes(), builder)?,
+                    commands.len()
+                );
+            }
+            std::fs::remove_file(path)?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn arm64_counter_reads_are_recorded_and_replayed_across_rewind() -> unidroid::Result<()> {
     use base64::{Engine, prelude::BASE64_STANDARD};
     use unidroid::Emulator;
@@ -82,7 +173,7 @@ fn arm64_counter_reads_are_recorded_and_replayed_across_rewind() -> unidroid::Re
     ));
     let options: unidroid::serve::Options = serde_json::from_value(json!({
         "rootfs":"rootfs", "apk":null, "process_name":null, "prop":[], "alias":[], "file":[], "superclass":[],
-        "fixed_clock":123, "random_seed":null, "translation_cache_mb":8,
+        "fixed_clock":123, "random_seed":null, "translation_cache_mb":8, "no_threads":false,
     }))?;
     let code: Vec<_> = [0xd53be040u32, 0xd65f03c0, 0xd53be020, 0xd65f03c0]
         .into_iter()
