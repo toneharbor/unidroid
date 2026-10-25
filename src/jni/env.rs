@@ -231,7 +231,7 @@ impl Emulator {
                 };
                 let scope = self.jni.scope;
                 self.jni.objects.retain(|_, v| v.scope < scope);
-                self.jni.scope = scope.saturating_sub(1).max(2);
+                self.jni.scope = scope.saturating_sub(1).max(self.jni.frame_floor.max(2));
                 if let Some(object) = object {
                     Ok(self.insert_ref(object, self.jni.scope).0)
                 } else {

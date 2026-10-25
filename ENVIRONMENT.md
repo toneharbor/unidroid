@@ -155,6 +155,18 @@ Assets use the APK's retained Archive index and reader. A compressed asset is in
 
 Three deliberate departures from unidbg 0.9.9: package flags are honored (unidbg ignores `GET_SIGNATURES` and `GET_SIGNING_CERTIFICATES`); the returned PackageManager class is `android/app/ApplicationPackageManager` (unidbg uses `android/content/pm/PackageManager`); and requests for other packages reach the handler (unidbg answers any name).
 
+## JNI references
+
+Handles made by host APIs such as `new_string`, `new_object` and `class` are host-owned. Free them with `Emulator::release` or serve `release`. Guest `NewGlobalRef` and `NewWeakGlobalRef` create global references. They survive calls until `DeleteGlobalRef` or `DeleteWeakGlobalRef`. Guest local references live in a local frame; `DeleteLocalRef` can free them earlier.
+
+Each host call to `call_static_jni_method`, `call_jni_method` or `call_jni_onload` gets its own local frame. A `call_function`, `call_function_with` or serve `call_function` made between calls also gets one, including constructors run by `load_library` or `run_constructors`. The frame's locals are freed on return, including on error and in frames the guest pushed but did not pop. Constructors keep no return value.
+
+An object result from a successful JNI call keeps its reference if it was a local created during that call. A JNI call that fails with a pending Java exception keeps no result. A raw call treats its returned bits as a possible handle: even an integer result that equals such a local keeps it. This includes locals in unpopped frames. At top level, the kept local becomes host-owned; free it with `release`. A nested JNI call moves its kept local into the caller's frame. Returned globals, host-owned handles and locals from outer frames keep their ownership.
+
+A raw call made during another call joins that call's frame. This includes calls from handlers, import hooks and debugger stops. Extra `PopLocalFrame` calls stop at the current call's frame and cannot free locals from an outer call.
+
+The frame belongs to the host call and is shared by all guest threads. Locals created by a background thread are freed when that call returns. A thread that continues into the next call must keep what it needs as global references.
+
 ## Built-in Java classes
 
 Common Java calls are answered before `JniHandler`, policy rules, `Probe` and the serve driver. Instance calls use the receiver's built-in kind plus the method name and JNI signature, so looking up `get` on `java/util/Map` works on a built-in HashMap. Constructors, static methods and static fields use the class name. Uncovered methods, charsets and digest algorithms still reach your handler. Objects created with `new_object(class, value)` remain opaque, even when their class is `java/util/HashMap`; with an APK, the Context entry points above are the exception. Other calls still reach your handler.

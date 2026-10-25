@@ -68,6 +68,7 @@ impl Clone for JniState {
             identities: HashMap::new(),
             next_identity: self.next_identity,
             scope: self.scope,
+            frame_floor: self.frame_floor,
             env: self.env,
             vm: self.vm,
             weak: self.weak.clone(),

@@ -83,9 +83,8 @@ fn to_reflected_returns_local_references_and_host_handles_outlive_frames() -> Re
     for arch in ARCHES {
         let mut emu = emulator(arch)?;
         let class = emu.class("example/Owner");
-        // Enter scope 2, the local scope used by guest JNI invocations.
-        jni_call(&mut emu, 19, &[8])?;
-        jni_call(&mut emu, 19, &[8])?;
+        // Act as code inside a native method's frame.
+        emu.jni.scope = 2;
         let host_method = emu.new_reflected_method("example/Owner", "run", "()V", false);
         let host_field = emu.new_reflected_field("example/Owner", "count", "I", true);
         let mut locals = Vec::new();

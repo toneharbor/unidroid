@@ -289,12 +289,12 @@ impl Emulator {
         let image = self.modules[module.0].image.clone();
         let base = self.modules[module.0].base;
         if image.init != 0 {
-            self.call_function_with(handler, base + image.init, &[])?;
+            self.call_function_kind(handler, base + image.init, &[], b'V')?;
         }
         for i in 0..image.init_count {
             let address = self.read_pointer(base + image.init_array + i * self.pointer_size())?;
             if address != 0 && address != self.architecture().pointer_mask() {
-                self.call_function_with(handler, address, &[])?;
+                self.call_function_kind(handler, address, &[], b'V')?;
             }
         }
         Ok(())

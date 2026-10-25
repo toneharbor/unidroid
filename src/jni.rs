@@ -172,6 +172,7 @@ pub(crate) struct JniState {
     identities: HashMap<*const RefCell<Object>, (Weak<RefCell<Object>>, i32)>,
     next_identity: i32,
     scope: usize,
+    frame_floor: usize,
     env: u64,
     vm: u64,
     weak: HashSet<Handle>,

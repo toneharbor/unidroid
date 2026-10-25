@@ -70,8 +70,8 @@ fn android_answers_return_fresh_local_references_and_native_manager_accepts_them
         let (file, _) = apk_emulator(arch)?;
         let mut emu = Emulator::builder().apk(&file.path).build()?;
         let module = emu.load_library(format!("rootfs/{}/libc.so", arch.library_dir()))?;
-        jni_call(&mut emu, 19, &[32])?;
-        jni_call(&mut emu, 19, &[32])?;
+        // Act as code inside a native method's frame.
+        emu.jni.scope = 2;
         let app = application(&mut emu)?;
         let again = application(&mut emu)?;
         assert_ne!(app, again);

@@ -143,18 +143,35 @@ impl Emulator {
         kind: u8,
         handler: &mut dyn JniHandler,
     ) -> Result<JniValue> {
-        let old_scope = self.jni.scope;
-        self.jni.scope = old_scope.max(1) + 1;
-        let result = self
-            .invoke(
+        self.jni_frame(false, kind, |emu| {
+            let result = emu.invoke(
                 function,
                 args.iter().map(|&value| (value.kind(), value.bits())),
                 kind,
                 handler,
-            )
-            .map(|bits| decode(kind, bits));
+            );
+            emu.exception_result()?;
+            result
+        })
+    }
+    pub(crate) fn jni_frame(
+        &mut self,
+        join_active: bool,
+        kind: u8,
+        body: impl FnOnce(&mut Self) -> Result<u64>,
+    ) -> Result<JniValue> {
+        // Raw C calls join an active frame; JNI invocations always open a new one.
+        if join_active && self.jni.scope >= 2 {
+            return body(self).map(|bits| decode(kind, bits));
+        }
+        let old_scope = self.jni.scope;
+        let old_floor = self.jni.frame_floor;
+        self.jni.scope = old_scope.max(1) + 1;
+        self.jni.frame_floor = self.jni.scope;
+        let result = body(self).map(|bits| decode(kind, bits));
         if let Ok(JniValue::Object(handle)) = result
             && let Some(reference) = self.jni.objects.get_mut(&handle)
+            && reference.scope > old_scope.max(1)
         {
             reference.scope = old_scope;
         }
@@ -162,7 +179,7 @@ impl Emulator {
             .objects
             .retain(|_, reference| reference.scope <= old_scope.max(1));
         self.jni.scope = old_scope;
-        self.exception_result()?;
+        self.jni.frame_floor = old_floor;
         result
     }
     pub(super) fn jni_allocator(&mut self, name: &str, argument: u64) -> Result<u64> {

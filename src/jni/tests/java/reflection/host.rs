@@ -32,7 +32,8 @@ fn host_reflection_shares_ids_and_exposes_member_details() -> Result<()> {
                 } else {
                     None
                 };
-                jni_call(&mut emu, 19, &[8])?;
+                // Act as code inside a native method's frame.
+                emu.jni.scope = 2;
                 let host = if kind == ReflectedMemberKind::Field {
                     emu.new_reflected_field("example/Owner", name, signature, is_static)
                 } else {

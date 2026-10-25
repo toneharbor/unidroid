@@ -15,8 +15,8 @@ fn class_lookups_return_independent_local_references() -> Result<()> {
                     emu.class("example/Child").0
                 }
             };
-            jni_call(&mut emu, 19, &[16])?;
-            jni_call(&mut emu, 19, &[16])?;
+            // Act as code inside a native method's frame.
+            emu.jni.scope = 2;
             let first = jni_call(&mut emu, index, &[argument])?;
             let second = jni_call(&mut emu, index, &[argument])?;
             assert_ne!(first, second, "JNIEnv index {index}, {arch:?}");
@@ -45,8 +45,8 @@ fn guest_class_lookups_leave_api_handles_stable() -> Result<()> {
             let name = "example/Bridge";
             let stable = api_first.then(|| emu.class(name));
             let text = emu.new_cstring(name)?;
-            jni_call(&mut emu, 19, &[16])?;
-            jni_call(&mut emu, 19, &[16])?;
+            // Act as code inside a native method's frame.
+            emu.jni.scope = 2;
             let local = jni_call(&mut emu, 6, &[text])?;
             let api = emu.class(name);
             if let Some(stable) = stable {
@@ -182,9 +182,9 @@ fn handles_wrap_without_reusing_live_or_remembered_class_ids() -> Result<()> {
             &[emu.jni.env, class.0, name, signature],
         )?;
         assert_eq!(id, 0x8000_0000);
-        let push = emu.read_pointer(table + 19 * emu.pointer_size())?;
         let pop = emu.read_pointer(table + 20 * emu.pointer_size())?;
-        emu.call_function(push, &[emu.jni.env, 16])?;
+        // Act as code inside a native method's frame.
+        emu.jni.scope = 2;
         emu.jni.next_handle = 0x7fff_ffff;
         let result = emu.call_function(pop, &[emu.jni.env, live.0])?;
         assert_eq!(result, 4);

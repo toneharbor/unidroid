@@ -57,8 +57,8 @@ fn class_instances_use_runtime_type_but_assignability_uses_represented_type() ->
 fn get_class_returns_a_new_local_reference_to_the_cached_class() -> Result<()> {
     for arch in ARCHES {
         let mut emu = emulator(arch)?;
-        jni_call(&mut emu, 19, &[16])?;
-        jni_call(&mut emu, 19, &[16])?;
+        // Act as code inside a native method's frame.
+        emu.jni.scope = 2;
         let name = emu.new_cstring("java/lang/Class")?;
         let class = Handle(jni_call(&mut emu, 6, &[name])?);
         emu.free(name);
@@ -79,9 +79,8 @@ fn get_class_returns_a_new_local_reference_to_the_cached_class() -> Result<()> {
 fn returned_local_references_can_be_deleted_without_releasing_receivers() -> Result<()> {
     for arch in ARCHES {
         let mut emu = emulator(arch)?;
-        // Keep local references across helper calls, which enter their own native frame.
-        jni_call(&mut emu, 19, &[16])?;
-        jni_call(&mut emu, 19, &[16])?;
+        // Act as code inside a native method's frame.
+        emu.jni.scope = 2;
         let string = emu.new_string("abc");
         let string = Handle(jni_call(&mut emu, 25, &[string.0])?);
         let builder = construct(&mut emu, "java/lang/StringBuilder", "()V", &[])?;

@@ -1,15 +1,12 @@
 use crate::hook::HostResult;
-use crate::{CpuData, Emulator, HostFunction, JniHandler, RETURN, Result, TRAMPOLINE, threads};
+use crate::{
+    CpuData, Emulator, HostFunction, JniHandler, JniValue, RETURN, Result, TRAMPOLINE, threads,
+};
 use unicorn_engine::unicorn_const::{MemType, uc_error};
 
 impl Emulator {
     pub fn call_function(&mut self, function: u64, args: &[u64]) -> Result<u64> {
-        self.invoke(
-            function,
-            args.iter().map(|&bits| (b'L', bits)),
-            b'L',
-            &mut (),
-        )
+        self.call_function_with(&mut (), function, args)
     }
     pub fn call_function_with(
         &mut self,
@@ -17,12 +14,24 @@ impl Emulator {
         function: u64,
         args: &[u64],
     ) -> Result<u64> {
-        self.invoke(
-            function,
-            args.iter().map(|&bits| (b'L', bits)),
-            b'L',
-            handler,
-        )
+        self.call_function_kind(handler, function, args, b'L')
+    }
+    pub(crate) fn call_function_kind(
+        &mut self,
+        handler: &mut dyn JniHandler,
+        function: u64,
+        args: &[u64],
+        kind: u8,
+    ) -> Result<u64> {
+        self.jni_frame(true, kind, |emu| {
+            emu.invoke(
+                function,
+                args.iter().map(|&bits| (b'L', bits)),
+                kind,
+                handler,
+            )
+        })
+        .map(JniValue::bits)
     }
     pub(crate) fn invoke(
         &mut self,
