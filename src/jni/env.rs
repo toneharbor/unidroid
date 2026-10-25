@@ -230,7 +230,10 @@ impl Emulator {
                     None
                 };
                 let scope = self.jni.scope;
-                self.jni.objects.retain(|_, v| v.scope < scope);
+                let tid = self.threads.tid();
+                self.jni
+                    .objects
+                    .retain(|_, v| v.scope < scope || v.tid != tid);
                 self.jni.scope = scope.saturating_sub(1).max(self.jni.frame_floor.max(2));
                 if let Some(object) = object {
                     Ok(self.insert_ref(object, self.jni.scope).0)
@@ -255,7 +258,7 @@ impl Emulator {
                     .jni
                     .objects
                     .get(&Handle(a))
-                    .is_some_and(|v| v.scope >= 2)
+                    .is_some_and(|v| v.scope >= 2 && v.tid == self.threads.tid())
                 {
                     self.release(Handle(a));
                 }
@@ -317,7 +320,14 @@ impl Emulator {
                 self.write_pointer(self.reg(1)?, self.jni.env)?;
                 Ok(0)
             }
-            5 => Ok(0),
+            5 => {
+                let tid = self.threads.tid();
+                if tid != crate::threads::MAIN_TID {
+                    self.jni.clear_thread_locals(tid);
+                    self.jni.scope = self.jni.frame_floor;
+                }
+                Ok(0)
+            }
             _ => Err(self.unsupported_vm("reserved")),
         }
     }

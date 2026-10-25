@@ -2,6 +2,7 @@ use super::*;
 use crate::{Architecture, Resume, Stop, StopReason};
 
 mod lifecycle;
+mod threads;
 
 const ARCHES: [Architecture; 2] = [Architecture::Arm32, Architecture::Arm64];
 const CODE: u64 = crate::RETURN + 0x100;

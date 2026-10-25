@@ -45,6 +45,7 @@ impl Clone for JniState {
                         Reference {
                             object: copy(&reference.object, &mut seen, &mut pending),
                             scope: reference.scope,
+                            tid: reference.tid,
                         },
                     )
                 })
@@ -157,7 +158,14 @@ impl Emulator {
                 break handle;
             }
         };
-        self.jni.objects.insert(handle, Reference { object, scope });
+        self.jni.objects.insert(
+            handle,
+            Reference {
+                object,
+                scope,
+                tid: self.threads.tid(),
+            },
+        );
         handle
     }
     pub(super) fn allocate_object(&mut self, object: Object) -> Rc<RefCell<Object>> {
@@ -195,7 +203,11 @@ impl Emulator {
             self.jni
                 .objects
                 .entry(handle)
-                .or_insert(Reference { object, scope: 0 })
+                .or_insert(Reference {
+                    object,
+                    scope: 0,
+                    tid: self.threads.tid(),
+                })
                 .scope = 0;
             return handle;
         }

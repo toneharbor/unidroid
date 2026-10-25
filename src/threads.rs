@@ -1,4 +1,4 @@
-use crate::{CpuData, Emulator, Result};
+use crate::{CpuData, Emulator, Result, jni::FramePosition};
 use std::collections::VecDeque;
 use unicorn_engine::{Context, Unicorn};
 
@@ -31,6 +31,7 @@ pub(crate) enum Action {
 struct SavedThread {
     identity: Identity,
     context: Context,
+    jni_frame: FramePosition,
     pc: u64,
     wait: Option<Wait>,
 }
@@ -75,6 +76,7 @@ impl Threads {
                 Ok(SavedThread {
                     identity: thread.identity,
                     context: cpu.context_init()?,
+                    jni_frame: thread.jni_frame,
                     pc: thread.pc,
                     wait: thread.wait,
                 })
@@ -169,6 +171,7 @@ impl Emulator {
                     clear_tid: if a[0] & 0x200000 != 0 { a[4] } else { 0 },
                 },
                 context,
+                jni_frame: FramePosition::BASE,
                 pc,
                 wait: None,
             });
@@ -328,16 +331,23 @@ impl Emulator {
             .position(|thread| thread.wait.is_none())
             .unwrap();
         let next = self.threads.saved.remove(index).unwrap();
-        if !matches!(self.threads.action, Action::Exit) {
-            let context = self.cpu()?.context_init()?;
+        let context = if matches!(self.threads.action, Action::Exit) {
+            self.jni.clear_thread_locals(self.threads.tid());
+            None
+        } else {
+            Some(self.cpu()?.context_init()?)
+        };
+        self.cpu_mut()?.context_restore(&next.context)?;
+        let jni_frame = self.jni.swap_frame(next.jni_frame);
+        if let Some(context) = context {
             self.threads.saved.push_back(SavedThread {
                 identity: self.threads.current,
                 context,
+                jni_frame,
                 pc,
                 wait,
             });
         }
-        self.cpu_mut()?.context_restore(&next.context)?;
         self.threads.current = next.identity;
         self.threads.action = Action::Continue;
         Ok(next.pc)
@@ -353,6 +363,8 @@ impl Emulator {
                 .unwrap();
             let main = self.threads.saved.remove(index).unwrap();
             self.cpu_mut()?.context_restore(&main.context)?;
+            self.jni.clear_thread_locals(self.threads.tid());
+            self.jni.swap_frame(main.jni_frame);
             self.threads.current = main.identity;
         }
         self.threads.action = Action::Continue;

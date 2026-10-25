@@ -164,6 +164,7 @@ impl Emulator {
         if join_active && self.jni.scope >= 2 {
             return body(self).map(|bits| decode(kind, bits));
         }
+        let tid = self.threads.tid();
         let old_scope = self.jni.scope;
         let old_floor = self.jni.frame_floor;
         self.jni.scope = old_scope.max(1) + 1;
@@ -172,12 +173,13 @@ impl Emulator {
         if let Ok(JniValue::Object(handle)) = result
             && let Some(reference) = self.jni.objects.get_mut(&handle)
             && reference.scope > old_scope.max(1)
+            && reference.tid == tid
         {
             reference.scope = old_scope;
         }
         self.jni
             .objects
-            .retain(|_, reference| reference.scope <= old_scope.max(1));
+            .retain(|_, reference| reference.scope <= old_scope.max(1) || reference.tid != tid);
         self.jni.scope = old_scope;
         self.jni.frame_floor = old_floor;
         result

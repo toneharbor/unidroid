@@ -143,6 +143,16 @@ impl Object {
 struct Reference {
     object: Rc<RefCell<Object>>,
     scope: usize,
+    tid: u32,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct FramePosition {
+    scope: usize,
+    floor: usize,
+}
+impl FramePosition {
+    pub(crate) const BASE: Self = Self { scope: 2, floor: 2 };
 }
 #[derive(Clone)]
 struct Member {
@@ -178,6 +188,20 @@ pub(crate) struct JniState {
     weak: HashSet<Handle>,
     pending: Option<PendingException>,
     history: env::history::History,
+}
+
+impl JniState {
+    pub(crate) fn swap_frame(&mut self, frame: FramePosition) -> FramePosition {
+        FramePosition {
+            scope: std::mem::replace(&mut self.scope, frame.scope),
+            floor: std::mem::replace(&mut self.frame_floor, frame.floor),
+        }
+    }
+
+    pub(crate) fn clear_thread_locals(&mut self, tid: u32) {
+        self.objects
+            .retain(|_, reference| reference.scope < 2 || reference.tid != tid);
+    }
 }
 
 #[cfg(test)]
