@@ -37,6 +37,88 @@ fn string_builder_append_object_uses_the_handlers_to_string() -> Result<()> {
 }
 
 #[test]
+fn to_string_exceptions_leave_builders_unchanged_and_value_of_null() -> Result<()> {
+    struct Raises {
+        exception: Handle,
+        answer: Handle,
+    }
+    impl JniHandler for Raises {
+        fn member(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+            assert_eq!(
+                (
+                    call.op,
+                    call.is_static,
+                    call.class,
+                    call.name,
+                    call.signature
+                ),
+                (
+                    JniOp::Call,
+                    false,
+                    "app/Text",
+                    "toString",
+                    "()Ljava/lang/String;"
+                )
+            );
+            assert_eq!(jni_call(emu, 13, &[self.exception.0]).unwrap(), 0); // Throw
+            Some(self.answer.into())
+        }
+    }
+    for arch in ARCHES {
+        let mut emu = emulator(arch)?;
+        let builder = construct(&mut emu, "java/lang/StringBuilder", "()V", &[])?;
+        let object = emu.new_object("app/Text", ());
+        let exception = emu.new_object("java/lang/IllegalStateException", ());
+        let string = emu.new_string("ignored answer");
+        let slots = emu.malloc(8)?;
+        emu.write_u64(slots, object.0)?;
+        let table = emu.read_pointer(emu.jni.env)?;
+        for (class, name, signature, is_static) in [
+            (
+                "java/lang/StringBuilder",
+                "append",
+                "(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
+                false,
+            ),
+            (
+                "java/lang/String",
+                "valueOf",
+                "(Ljava/lang/Object;)Ljava/lang/String;",
+                true,
+            ),
+        ] {
+            let class = emu.class(class);
+            let name = emu.new_cstring(name)?;
+            let signature = emu.new_cstring(signature)?;
+            let id = jni_call(
+                &mut emu,
+                if is_static { 113 } else { 33 },
+                &[class.0, name, signature],
+            )?;
+            let function =
+                emu.read_pointer(table + (if is_static { 116 } else { 36 }) * emu.pointer_size())?;
+            let receiver = if is_static { class } else { builder };
+            for answer in [Handle(0), string] {
+                // A raw guest call leaves the exception pending for inspection and clearing.
+                let result = emu.call_function_with(
+                    &mut Raises { exception, answer },
+                    function,
+                    &[emu.jni.env, receiver.0, id, slots],
+                )?;
+                assert_eq!(jni_call(&mut emu, 228, &[])?, 1); // ExceptionCheck
+                let pending = jni_call(&mut emu, 15, &[])?; // ExceptionOccurred
+                assert_eq!(jni_call(&mut emu, 24, &[pending, exception.0])?, 1);
+                jni_call(&mut emu, 17, &[])?; // ExceptionClear
+                assert_eq!(jni_call(&mut emu, 228, &[])?, 0);
+                assert_eq!(text(&mut emu, builder)?, "", "{arch:?}");
+                assert_eq!(result, 0, "{arch:?}: static={is_static}, answer={answer:?}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn string_value_of_object_returns_its_to_string_result() -> Result<()> {
     struct Text(Handle);
     impl JniHandler for Text {

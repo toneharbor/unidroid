@@ -22,10 +22,16 @@ pub(super) use maps::Map;
 pub(super) type ObjectRef = Option<Rc<RefCell<Object>>>;
 
 #[derive(Debug)]
-struct Exception(&'static str, Option<String>);
+enum Exception {
+    New(&'static str, Option<String>),
+    Pending,
+}
 impl std::fmt::Display for Exception {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        f.write_str(match self {
+            Self::New(class, _) => class,
+            Self::Pending => "pending Java exception",
+        })
     }
 }
 impl std::error::Error for Exception {}
@@ -33,7 +39,7 @@ pub(super) fn exception(
     class: &'static str,
     message: Option<String>,
 ) -> Box<dyn std::error::Error> {
-    Box::new(Exception(class, message))
+    Box::new(Exception::New(class, message))
 }
 
 pub(super) fn dispatch(
@@ -46,7 +52,9 @@ pub(super) fn dispatch(
     match result {
         Err(error) => match error.downcast::<Exception>() {
             Ok(error) => {
-                emu.pending_exception(error.0, error.1);
+                if let Exception::New(class, message) = *error {
+                    emu.pending_exception(class, message);
+                }
                 Ok(Some(super::value::decode(call.type_code, 0)))
             }
             Err(error) => Err(emu.jni_message(error).into()),
@@ -232,6 +240,9 @@ fn object_content(
             super::handler::check_answer(emu, &call, function, answer)?
         }
     };
+    if emu.jni.pending.is_some() {
+        return Err(Box::new(Exception::Pending));
+    }
     answer
         .map(|value| ObjectText::String(value.object()))
         .ok_or_else(|| emu.jni_error(function, &class, call.name, call.signature))
