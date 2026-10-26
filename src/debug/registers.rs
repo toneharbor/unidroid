@@ -69,6 +69,25 @@ fn description(arch: Architecture) -> &'static Description {
     }
 }
 
+// W writes zero-extend into X/SP; Unicorn's W writer leaves the upper half intact.
+fn write_target(arch: Architecture, reg: i32, value: u64) -> (i32, u64) {
+    if arch != Architecture::Arm64 {
+        return (reg, value);
+    }
+    let parent = if (X::W0 as i32..=X::W30 as i32).contains(&reg) {
+        match reg - X::W0 as i32 {
+            29 => X::FP as i32,
+            30 => X::LR as i32,
+            n => X::X0 as i32 + n,
+        }
+    } else if reg == X::WSP as i32 {
+        X::SP as i32
+    } else {
+        return (reg, value);
+    };
+    (parent, u64::from(value as u32))
+}
+
 pub(super) fn indexed(name: &str, prefix: &str, count: i32, first: i32) -> Option<i32> {
     name.strip_prefix(prefix)?
         .parse::<i32>()
@@ -110,6 +129,7 @@ impl Emulator {
 
     pub fn set_register(&mut self, name: &str, value: u64) -> Result<()> {
         let reg = self.named_register(name)?;
+        let (reg, value) = write_target(self.architecture(), reg, value);
         Ok(self.cpu_mut()?.reg_write(reg, value)?)
     }
 

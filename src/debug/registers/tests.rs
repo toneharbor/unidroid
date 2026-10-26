@@ -31,17 +31,38 @@ fn named_registers_and_expressions_accept_scalar_aliases() -> Result<()> {
                 .collect::<Vec<_>>(),
         )?;
         let aliases: &[(&str, &str)] = if arm64 {
-            &[("w0", "x0"), ("x29", "fp"), ("x30", "lr"), ("s0", "d0")]
+            &[
+                ("w0", "x0"),
+                ("w28", "x28"),
+                ("w29", "fp"),
+                ("w30", "lr"),
+                ("wsp", "sp"),
+                ("x29", "fp"),
+                ("x30", "lr"),
+                ("s0", "d0"),
+            ]
         } else {
             &[("ip", "r12"), ("sb", "r9"), ("fp", "r11"), ("s0", "d0")]
         };
         for &(name, general) in aliases {
-            emu.set_register(general, 0)?;
-            emu.set_register(name, 42)?;
-            assert_eq!(emu.register(name)?, 42);
-            assert_eq!(emu.register(general)?, 42);
+            let saved = emu.register(general)?;
+            let word = arm64 && name.starts_with('w');
+            for &value in if word {
+                &[42, 0xffff_ffff_0000_002a][..]
+            } else {
+                &[42][..]
+            } {
+                let initial = if word { 0x1234_5678_0000_0000 } else { 0 };
+                emu.set_register(general, initial)?;
+                assert_eq!(emu.register(general)?, initial, "{general}");
+                assert_eq!(emu.register(name)?, 0, "{name}");
+                emu.set_register(name, value)?;
+                assert_eq!(emu.register(name)?, 42, "{name}");
+                assert_eq!(emu.register(general)?, 42, "{name} must replace {general}");
+            }
             emu.set_register(general, 7)?;
             assert_eq!(emu.register(name)?, 7);
+            emu.set_register(general, saved)?;
         }
         let error = emu.register("oops").unwrap_err().to_string();
         assert!(error.starts_with("unknown register oops; valid names: "));
