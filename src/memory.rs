@@ -134,17 +134,25 @@ impl Emulator {
         self.write_bytes(address, &value.to_le_bytes())
     }
     pub(super) fn cstring(&self, address: u64) -> Result<String> {
+        Ok(String::from_utf8_lossy(&self.read_cstring_bytes(address)?).into_owned())
+    }
+    pub(super) fn read_cstring_bytes(&self, address: u64) -> Result<Vec<u8>> {
+        let page_size = self.cpu()?.ctl_get_page_size()? as u64;
         let mut value = Vec::new();
         let mut p = address;
         loop {
-            let byte = self.read_bytes(p, 1)?[0];
-            if byte == 0 {
-                break;
+            let size = (page_size - p % page_size) as usize;
+            let bytes = self.read_bytes(p, size)?;
+            let length = bytes
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(bytes.len());
+            value.extend_from_slice(&bytes[..length]);
+            if length < bytes.len() {
+                return Ok(value);
             }
-            value.push(byte);
-            p += 1;
+            p += size as u64;
         }
-        Ok(String::from_utf8_lossy(&value).into_owned())
     }
     pub(super) fn protect(&mut self, start: u64, size: u64, permissions: Prot) -> Result<()> {
         let end = start + page_up(size);
@@ -172,6 +180,48 @@ impl Emulator {
         self.regions = regions;
         self.cpu_mut()?
             .mem_protect(start, end - start, permissions)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Architecture, PAGE};
+    use unicorn_engine::unicorn_const::Prot;
+
+    #[test]
+    fn cstring_reads_across_page_boundaries() -> Result<()> {
+        for arch in [Architecture::Arm32, Architecture::Arm64] {
+            let mut emu = Emulator::builder().build()?;
+            emu.setup_cpu(arch)?;
+
+            let last = 0x3000_0000;
+            emu.cpu_mut()?
+                .mem_map(last, PAGE, Prot::READ | Prot::WRITE)?;
+            emu.write_bytes(last + PAGE - 2, b"x\0")?;
+            assert_eq!(emu.cstring(last + PAGE - 2)?, "x");
+
+            let cross = 0x3000_2000;
+            emu.cpu_mut()?
+                .mem_map(cross, 2 * PAGE, Prot::READ | Prot::WRITE)?;
+            emu.write_bytes(cross + PAGE - 2, b"abc\0")?;
+            assert_eq!(emu.cstring(cross + PAGE - 2)?, "abc");
+
+            let partial = 0x3000_7000;
+            emu.cpu_mut()?
+                .mem_map(partial, PAGE, Prot::READ | Prot::WRITE)?;
+            emu.write_bytes(partial, b"x\0")?;
+            emu.cpu_mut()?.mem_unmap(partial + 0x400, 0xc00)?;
+            assert_eq!(emu.cstring(partial)?, "x");
+
+            let missing = 0x3000_5000;
+            emu.cpu_mut()?
+                .mem_map(missing, PAGE, Prot::READ | Prot::WRITE)?;
+            emu.write_bytes(missing + PAGE - 3, b"abc")?;
+            let error = emu.cstring(missing + PAGE - 3).unwrap_err().to_string();
+            assert_eq!(error, "Invalid memory read (UC_ERR_READ_UNMAPPED)");
+        }
         Ok(())
     }
 }

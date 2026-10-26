@@ -336,6 +336,8 @@ Policy values use the call's type letter:
 
 Collection answers create fresh built-in maps and lists; supported classes and snapshot behavior are described in [ENVIRONMENT.md](ENVIRONMENT.md). If building a collection answer fails, every handle created for that answer is released. Arrays accept `Z B C S I J F D` and use the same little-endian bytes as serve's `new_array`. Object, string and array answers create fresh handles each time. A constructor (`new`) needs an `L` answer even though its signature ends in `V`.
 
+A policy object answer is a JNI local reference of the guest call that asked for it. The guest may free it with `DeleteLocalRef`; otherwise it is freed when that call returns. An answer returned from a top-level call becomes host-owned; free it with `release`. See [JNI reference lifetimes](ENVIRONMENT.md#jni-references). A local `toString` answer that `StringBuilder.append(Object)` only reads for its text is freed once the text is read. Calling `PolicyHandler::member` yourself outside any guest call gives host-owned handles; free them with `release`.
+
 In Rust, load a file with `Policy::load(path)` or JSON text with `Policy::parse(text)`, then wrap your existing handler:
 
 ```rust

@@ -103,11 +103,9 @@ pub(super) fn configure(emu: &mut Emulator, enabled: bool) -> Result<()> {
         }
         let callback = state.clone();
         let modules = emu.module_table.clone();
-        let hook = emu
-            .cpu_mut()?
-            .add_code_hook(address, address, move |cpu, _, _| {
-                enter(cpu, &callback, &modules, arch, function);
-            })?;
+        let hook = emu.add_code_hook(address, address, move |cpu, _, _| {
+            enter(cpu, &callback, &modules, arch, function);
+        })?;
         state.borrow_mut().entry_hooks.insert(address, hook);
         changed = true;
     }

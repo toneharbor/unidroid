@@ -57,7 +57,11 @@ impl Object {
                 emu.release(handle);
             }
         }
-        result
+        let handle = result?;
+        if handle != Handle(0) {
+            emu.move_to_current_jni_scope(handle);
+        }
+        Ok(handle)
     }
     fn create_inner(self, emu: &mut Emulator, created: &mut Vec<Handle>) -> Result<Handle> {
         let handle = match self {

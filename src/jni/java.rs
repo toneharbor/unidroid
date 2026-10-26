@@ -175,22 +175,24 @@ fn dispatch_inner(
     }
     collections::call(emu, call, &receiver)
 }
-enum ObjectText {
-    Units(Vec<u16>),
-    String(Handle),
-}
-
 fn object_text(
     emu: &mut Emulator,
     handle: Handle,
     function: &str,
     handler: &mut dyn JniHandler,
 ) -> Result<Vec<u16>> {
-    match object_content(emu, handle, function, handler)? {
-        ObjectText::Units(text) => Ok(text),
-        ObjectText::String(Handle(0)) => Ok("null".encode_utf16().collect()),
-        ObjectText::String(handle) => units(emu, handle),
+    if let Some(text) = object::text(emu, &reference(emu, handle)?) {
+        return Ok(text);
     }
+    let mut text = Vec::new();
+    emu.jni_frame(false, b'V', |emu| {
+        text = match object_to_string(emu, handle, function, handler)? {
+            Handle(0) => "null".encode_utf16().collect(),
+            handle => units(emu, handle)?,
+        };
+        Ok(0)
+    })?;
+    Ok(text)
 }
 
 fn object_string(
@@ -206,23 +208,19 @@ fn object_string(
     {
         return Ok(return_ref(emu, receiver));
     }
-    match object_content(emu, handle, function, handler)? {
-        ObjectText::Units(text) => Ok(string(emu, text)),
-        ObjectText::String(handle) => Ok(handle.into()),
+    if let Some(text) = object::text(emu, &receiver) {
+        return Ok(string(emu, text));
     }
+    object_to_string(emu, handle, function, handler).map(JniValue::Object)
 }
 
-fn object_content(
+fn object_to_string(
     emu: &mut Emulator,
     handle: Handle,
     function: &str,
     handler: &mut dyn JniHandler,
-) -> Result<ObjectText> {
-    let receiver = reference(emu, handle)?;
-    if let Some(text) = object::text(emu, &receiver) {
-        return Ok(ObjectText::Units(text));
-    }
-    let class = receiver.unwrap().borrow().java_type();
+) -> Result<Handle> {
+    let class = emu.jni_object(handle)?.borrow().java_type();
     let call = JniCall {
         op: JniOp::Call,
         is_static: false,
@@ -244,7 +242,7 @@ fn object_content(
         return Err(Box::new(Exception::Pending));
     }
     answer
-        .map(|value| ObjectText::String(value.object()))
+        .map(JniValue::object)
         .ok_or_else(|| emu.jni_error(function, &class, call.name, call.signature))
 }
 

@@ -138,9 +138,8 @@ impl RunControl {
 
 impl Emulator {
     pub(crate) fn run_cpu(&mut self, pc: u64, stepping: bool) -> Result<()> {
-        let cpu = self.cpu_mut()?;
         let hook = if stepping {
-            let hook = cpu.add_code_hook(1, 0, |cpu, _, _| {
+            let hook = self.add_code_hook(1, 0, |cpu, _, _| {
                 let data = cpu.get_data_mut();
                 if data.step_started {
                     let _ = cpu.emu_stop();
@@ -148,7 +147,7 @@ impl Emulator {
                     data.step_started = true;
                 }
             })?;
-            cpu.ctl_flush_tb()?;
+            self.cpu_mut()?.ctl_flush_tb()?;
             Some(hook)
         } else {
             None

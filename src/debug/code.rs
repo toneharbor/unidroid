@@ -246,23 +246,21 @@ impl Emulator {
         for (start, end) in ranges {
             let state = self.code.state.clone();
             let events = self.events.clone();
-            let hook =
-                self.cpu_mut()?
-                    .add_code_hook(start, end - 1, move |cpu, address, size| {
-                        let mut state = state.borrow_mut();
-                        if let Some(event) = state.finish(cpu, arch, false) {
-                            events.borrow_mut().emit(event);
-                        }
-                        if state.selection.contains(address)
-                            && let Err(error) = state.capture(cpu, arch, address, size)
-                        {
-                            events.borrow_mut().emit(State::warning(
-                                &state.selection.location(address),
-                                address,
-                                error,
-                            ));
-                        }
-                    })?;
+            let hook = self.add_code_hook(start, end - 1, move |cpu, address, size| {
+                let mut state = state.borrow_mut();
+                if let Some(event) = state.finish(cpu, arch, false) {
+                    events.borrow_mut().emit(event);
+                }
+                if state.selection.contains(address)
+                    && let Err(error) = state.capture(cpu, arch, address, size)
+                {
+                    events.borrow_mut().emit(State::warning(
+                        &state.selection.location(address),
+                        address,
+                        error,
+                    ));
+                }
+            })?;
             self.code.hooks.push(hook);
         }
         self.cpu_mut()?.ctl_flush_tb()?;

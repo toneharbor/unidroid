@@ -3,6 +3,7 @@ use crate::{Architecture, Resume, Stop, StopReason};
 
 mod append;
 mod lifecycle;
+mod policy;
 mod threads;
 
 const ARCHES: [Architecture; 2] = [Architecture::Arm32, Architecture::Arm64];

@@ -27,7 +27,27 @@ impl Emulator {
         }) & !1
     }
 
+    pub(super) fn add_code_hook(
+        &mut self,
+        begin: u64,
+        end: u64,
+        callback: impl FnMut(&mut Unicorn<'_, CpuData>, u64, u32) + 'static,
+    ) -> Result<UcHookId> {
+        self.tracepoints.mark_stale();
+        Ok(self.cpu_mut()?.add_code_hook(begin, end, callback)?)
+    }
+
     pub(super) fn install_address_hook(
+        &mut self,
+        address: u64,
+        callback: impl FnMut(&mut Unicorn<'_, CpuData>, u64, u32) + 'static,
+    ) -> Result<UcHookId> {
+        let end = self.address_hook_end(address);
+        self.cpu_mut()?.ctl_remove_cache(address, end + 1)?;
+        self.add_code_hook(address, end, callback)
+    }
+
+    pub(super) fn install_tracepoint_hook(
         &mut self,
         address: u64,
         callback: impl FnMut(&mut Unicorn<'_, CpuData>, u64, u32) + 'static,
