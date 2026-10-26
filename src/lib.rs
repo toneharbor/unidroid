@@ -38,7 +38,8 @@ pub use debug::{
     watch::{Watch, WatchAction, WatchHit},
 };
 pub use jni::{
-    Handle, JniCall, JniHandler, JniValue, PrimitiveType, ReflectedMember, ReflectedMemberKind,
+    Handle, JniCall, JniHandler, JniOp, JniValue, PrimitiveType, ReflectedMember,
+    ReflectedMemberKind,
 };
 
 use arch::Architecture;

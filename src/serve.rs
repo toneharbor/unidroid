@@ -407,7 +407,7 @@ impl<R: BufRead, W: Write> Session<R, W> {
                 json!(items)
             }
             Command::NewBoxed { r#type, value } => {
-                if !matches!(r#type.as_str(), "Z" | "B" | "C" | "S" | "I" | "J" | "F" | "D") {
+                if !matches!(r#type.as_bytes(), [code] if crate::PrimitiveType::from_code(*code).is_some()) {
                     return Err(format!("expected boxed type Z B C S I J F D, got {type}").into());
                 }
                 let value = decode(r#type.as_bytes()[0], &value, "boxed value")?;
@@ -455,28 +455,21 @@ impl<R: BufRead, W: Write> Session<R, W> {
             }
         }
     }
-    fn member(
-        &mut self,
-        emu: &mut Emulator,
-        call: &JniCall<'_>,
-        op: &str,
-        is_static: bool,
-        kind: u8,
-    ) -> Option<JniValue> {
+    fn member(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
         if let Some(policy) = &mut self.policy
-            && let Some(result) = policy.member(emu, call, op, is_static, kind)
+            && let Some(result) = policy.member(emu, call)
         {
             return self.policy_answer(result);
         }
         let question = json!({
-            "op":op, "static":is_static, "type":char::from(kind).to_string(),
+            "op":call.op.name(), "static":call.is_static, "type":char::from(call.type_code).to_string(),
             "class":call.class, "name":call.name, "signature":call.signature,
             "receiver":call.receiver.0, "args":call.args.iter().copied().map(encode).collect::<Vec<_>>()
         });
         self.question(
             emu,
             question,
-            kind,
+            call.type_code,
             &format!("answer for {}->{}{}", call.class, call.name, call.signature),
         )
     }

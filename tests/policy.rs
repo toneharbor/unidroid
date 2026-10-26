@@ -1,7 +1,11 @@
-use unidroid::{Emulator, Handle, JniCall, JniHandler, Policy, Probe, Result};
+use unidroid::{Emulator, Handle, JniCall, JniHandler, JniOp, JniValue, Policy, Probe, Result};
 
 fn call(signature: &str) -> JniCall<'_> {
+    let kind = signature.rsplit(')').next().unwrap().as_bytes()[0];
     JniCall {
+        op: JniOp::Call,
+        is_static: false,
+        type_code: if kind == b'[' { b'L' } else { kind },
         class: "test/Answers",
         name: "value",
         signature,
@@ -67,12 +71,30 @@ fn ordered_rules_match_wildcards_and_static_then_fall_through() -> Result<()> {
         {
             let mut handler = policy.handler(&mut fallback);
             assert_eq!(
-                handler.call_static_int_method(&mut emu, &call("()I")),
-                Some(88)
+                handler.member(
+                    &mut emu,
+                    &JniCall {
+                        is_static: true,
+                        ..call("()I")
+                    }
+                ),
+                Some(JniValue::Int(88))
             );
-            assert_eq!(handler.get_int_field(&mut emu, &call("I")), Some(99));
+            assert_eq!(
+                handler.member(
+                    &mut emu,
+                    &JniCall {
+                        op: JniOp::Get,
+                        ..call("I")
+                    }
+                ),
+                Some(JniValue::Int(99))
+            );
             for value in [12, 34, 56, 0] {
-                assert_eq!(handler.call_int_method(&mut emu, &call("()I")), Some(value));
+                assert_eq!(
+                    handler.member(&mut emu, &call("()I")),
+                    Some(JniValue::Int(value))
+                );
             }
             handler.finish(Ok(()))?;
         }

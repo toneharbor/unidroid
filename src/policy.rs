@@ -79,22 +79,19 @@ impl Policy {
         &mut self,
         emu: &mut Emulator,
         call: &JniCall<'_>,
-        op: &str,
-        is_static: bool,
-        kind: u8,
     ) -> Option<Result<JniValue>> {
         self.answer(
             emu,
             Request {
-                op,
-                is_static: Some(is_static),
+                op: call.op.name(),
+                is_static: Some(call.is_static),
                 class: Some(call.class),
                 name: Some(call.name),
                 signature: Some(call.signature),
                 from: None,
                 to: None,
             },
-            kind,
+            call.type_code,
         )
     }
 
@@ -153,10 +150,7 @@ impl Policy {
                     request.signature.unwrap()
                 ),
             };
-            let context = format!(
-                "policy rule {index} for {call} from {}",
-                emu.location(emu.lr().unwrap_or(0))
-            );
+            let context = emu.jni_message(format!("policy rule {index} for {call}"));
             return Some(value::decode(emu, kind, value, &context));
         }
         None

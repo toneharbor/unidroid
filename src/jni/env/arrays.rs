@@ -17,7 +17,7 @@ impl Emulator {
                     self.pending_exception("java/lang/NegativeArraySizeException", None);
                     Ok(0)
                 } else {
-                    let initial = (c != 0).then(|| self.jni_object(Handle(c))).transpose()?;
+                    let initial = crate::jni::java::reference(self, Handle(c))?;
                     let class = self.class_name(Handle(b))?;
                     Ok(self
                         .insert_object(Object::ObjectArray(vec![initial; length as usize], class))
@@ -37,10 +37,10 @@ impl Emulator {
                     }
                     values[index as usize].clone()
                 };
-                Ok(value.map_or(0, |object| self.insert_ref(object, self.jni.scope).0))
+                Ok(self.handle_or_null(value, self.jni.scope).0)
             }
             174 => {
-                let value = (c != 0).then(|| self.jni_object(Handle(c))).transpose()?;
+                let value = crate::jni::java::reference(self, Handle(c))?;
                 let object = self.require_object(&function, a)?;
                 let Object::ObjectArray(values, _) = &mut *object.borrow_mut() else {
                     return Err(self.reference_error(&function, a));

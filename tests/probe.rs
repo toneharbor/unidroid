@@ -1,4 +1,4 @@
-use unidroid::{Emulator, Handle, JniCall, JniHandler, Probe, Result};
+use unidroid::{Emulator, Handle, JniCall, JniHandler, JniOp, JniValue, Probe, Result};
 
 #[test]
 fn probe_defaults_cover_members_constructors_and_assignability() -> Result<()> {
@@ -6,37 +6,29 @@ fn probe_defaults_cover_members_constructors_and_assignability() -> Result<()> {
         let mut emu = Emulator::builder().build()?;
         emu.load_library(format!("tests/fixtures/{abi}/libjnidispatch.so"))?;
         let mut probe = Probe::default();
-        let call = |signature| JniCall {
-            class: "test/Defaults",
-            name: "value",
-            signature,
-            receiver: Handle(0),
-            args: &[],
-        };
-        assert_eq!(probe.call_int_method(&mut emu, &call("()I")), Some(0));
-        assert_eq!(
-            probe.call_static_int_method(&mut emu, &call("()I")),
-            Some(0)
-        );
-        assert_eq!(probe.get_int_field(&mut emu, &call("I")), Some(0));
-        assert_eq!(probe.set_int_field(&mut emu, &call("I")), Some(()));
-        assert_eq!(
-            probe.new_object(
-                &mut emu,
-                &JniCall {
-                    name: "<init>",
-                    ..call("()V")
-                }
-            ),
-            Some(Handle(0))
-        );
-        assert_eq!(
-            probe.call_boolean_method(&mut emu, &call("()Z")),
-            Some(false)
-        );
-        assert_eq!(probe.call_long_method(&mut emu, &call("()J")), Some(0));
-        assert_eq!(probe.call_double_method(&mut emu, &call("()D")), Some(0.0));
-        assert_eq!(probe.call_void_method(&mut emu, &call("()V")), Some(()));
+        for (op, is_static, signature, expected) in [
+            (JniOp::Call, false, "()I", JniValue::Int(0)),
+            (JniOp::Call, true, "()I", JniValue::Int(0)),
+            (JniOp::Get, false, "I", JniValue::Int(0)),
+            (JniOp::Set, false, "I", JniValue::Void),
+            (JniOp::New, false, "()V", Handle(0).into()),
+            (JniOp::Call, false, "()Z", JniValue::Boolean(false)),
+            (JniOp::Call, false, "()J", JniValue::Long(0)),
+            (JniOp::Call, false, "()D", JniValue::Double(0.0)),
+            (JniOp::Call, false, "()V", JniValue::Void),
+        ] {
+            let call = JniCall {
+                op,
+                is_static,
+                type_code: expected.type_code(),
+                class: "test/Defaults",
+                name: if op == JniOp::New { "<init>" } else { "value" },
+                signature,
+                receiver: Handle(0),
+                args: &[],
+            };
+            assert_eq!(probe.member(&mut emu, &call), Some(expected));
+        }
         assert_eq!(
             probe.is_assignable(&mut emu, "test/A", "test/B"),
             Some(false)

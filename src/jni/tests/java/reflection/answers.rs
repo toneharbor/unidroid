@@ -11,21 +11,26 @@ impl ReflectionHandler {
     }
 }
 impl JniHandler for ReflectionHandler {
-    fn call_object_method(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<Handle> {
-        self.record(call);
-        Some(emu.new_string("handled"))
-    }
-    fn call_int_method(&mut self, _emu: &mut Emulator, call: &JniCall<'_>) -> Option<i32> {
-        self.record(call);
-        Some(7)
-    }
-    fn call_void_method(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<()> {
-        self.record(call);
-        assert_eq!(
-            emu.reflected_member(call.receiver).unwrap().class,
-            "example/Owner"
-        );
-        Some(())
+    fn member(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+        match (call.op, call.is_static, call.type_code) {
+            (JniOp::Call, false, b'L') => {
+                self.record(call);
+                Some(JniValue::Object(emu.new_string("handled")))
+            }
+            (JniOp::Call, false, b'I') => {
+                self.record(call);
+                Some(JniValue::Int(7))
+            }
+            (JniOp::Call, false, b'V') => {
+                self.record(call);
+                assert_eq!(
+                    emu.reflected_member(call.receiver).unwrap().class,
+                    "example/Owner"
+                );
+                Some(JniValue::Void)
+            }
+            _ => None,
+        }
     }
 }
 

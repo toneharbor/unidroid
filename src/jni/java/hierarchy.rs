@@ -1,5 +1,148 @@
 use crate::Emulator;
 
+pub(in crate::jni) struct Class {
+    pub(in crate::jni) superclass: Option<&'static str>,
+    interfaces: &'static [&'static str],
+    owned: bool,
+    android: bool,
+}
+
+macro_rules! classes {
+    ($name:expr; $( $class:literal => $superclass:expr, $interfaces:expr, $owned:literal, $android:literal; )*) => {
+        match $name {
+            $($class => Class {
+                superclass: $superclass,
+                interfaces: &$interfaces,
+                owned: $owned,
+                android: $android,
+            },)*
+            _ => return None,
+        }
+    };
+}
+
+pub(in crate::jni) fn class(name: &str, android: bool) -> Option<Class> {
+    // Class => superclass, interfaces, emulator-owned objects, requires an APK.
+    let row = classes! { name;
+        "java/lang/String" => Some("java/lang/Object"),
+            ["java/io/Serializable", "java/lang/Comparable", "java/lang/CharSequence", "java/lang/constant/Constable", "java/lang/constant/ConstantDesc"], true, false;
+        "java/lang/Class" => Some("java/lang/Object"),
+            ["java/io/Serializable", "java/lang/reflect/GenericDeclaration", "java/lang/reflect/Type", "java/lang/reflect/AnnotatedElement", "java/lang/invoke/TypeDescriptor$OfField", "java/lang/constant/Constable"], true, false;
+        "java/lang/reflect/Method" => Some("java/lang/reflect/Executable"), [], true, false;
+        "java/lang/reflect/Constructor" => Some("java/lang/reflect/Executable"), [], true, false;
+        "java/lang/reflect/Executable" => Some("java/lang/reflect/AccessibleObject"), [], true, false;
+        "java/lang/reflect/Field" => Some("java/lang/reflect/AccessibleObject"), [], true, false;
+        "java/lang/reflect/AccessibleObject" => Some("java/lang/Object"), [], true, false;
+        "java/lang/reflect/GenericDeclaration" => None, ["java/lang/reflect/AnnotatedElement"], false, false;
+        "java/lang/invoke/TypeDescriptor$OfField" => None, ["java/lang/invoke/TypeDescriptor"], false, false;
+        "java/lang/Boolean" => Some("java/lang/Object"),
+            ["java/io/Serializable", "java/lang/Comparable", "java/lang/constant/Constable"], true, false;
+        "java/lang/Character" => Some("java/lang/Object"),
+            ["java/io/Serializable", "java/lang/Comparable", "java/lang/constant/Constable"], true, false;
+        "java/lang/Byte" => Some("java/lang/Number"), ["java/lang/Comparable", "java/lang/constant/Constable"], true, false;
+        "java/lang/Short" => Some("java/lang/Number"), ["java/lang/Comparable", "java/lang/constant/Constable"], true, false;
+        "java/lang/Integer" => Some("java/lang/Number"),
+            ["java/lang/Comparable", "java/lang/constant/Constable", "java/lang/constant/ConstantDesc"], true, false;
+        "java/lang/Long" => Some("java/lang/Number"),
+            ["java/lang/Comparable", "java/lang/constant/Constable", "java/lang/constant/ConstantDesc"], true, false;
+        "java/lang/Float" => Some("java/lang/Number"),
+            ["java/lang/Comparable", "java/lang/constant/Constable", "java/lang/constant/ConstantDesc"], true, false;
+        "java/lang/Double" => Some("java/lang/Number"),
+            ["java/lang/Comparable", "java/lang/constant/Constable", "java/lang/constant/ConstantDesc"], true, false;
+        "java/lang/Number" => Some("java/lang/Object"), ["java/io/Serializable"], false, false;
+        "java/lang/StringBuilder" => Some("java/lang/AbstractStringBuilder"), ["java/io/Serializable", "java/lang/Comparable"], true, false;
+        "java/lang/AbstractStringBuilder" => Some("java/lang/Object"), ["java/lang/Appendable", "java/lang/CharSequence"], false, false;
+        "java/nio/charset/Charset" => Some("java/lang/Object"), ["java/lang/Comparable"], true, false;
+        "java/security/MessageDigest" => Some("java/security/MessageDigestSpi"), [], true, false;
+        "java/security/MessageDigestSpi" => Some("java/lang/Object"), [], false, false;
+        "java/util/HashMap" => Some("java/util/AbstractMap"),
+            ["java/util/Map", "java/lang/Cloneable", "java/io/Serializable"], true, false;
+        "java/util/LinkedHashMap" => Some("java/util/HashMap"), ["java/util/SequencedMap"], true, false;
+        "java/util/TreeMap" => Some("java/util/AbstractMap"),
+            ["java/util/NavigableMap", "java/lang/Cloneable", "java/io/Serializable"], true, false;
+        "java/util/AbstractMap" => Some("java/lang/Object"), ["java/util/Map"], false, false;
+        "java/util/NavigableMap" => None, ["java/util/SortedMap"], false, false;
+        "java/util/SortedMap" => None, ["java/util/SequencedMap"], false, false;
+        "java/util/SequencedMap" => None, ["java/util/Map"], false, false;
+        "java/util/HashSet" => Some("java/util/AbstractSet"),
+            ["java/util/Set", "java/lang/Cloneable", "java/io/Serializable"], true, false;
+        "java/util/ArrayList" => Some("java/util/AbstractList"),
+            ["java/util/List", "java/util/RandomAccess", "java/lang/Cloneable", "java/io/Serializable"], true, false;
+        "java/util/LinkedList" => Some("java/util/AbstractSequentialList"),
+            ["java/util/List", "java/util/Deque", "java/lang/Cloneable", "java/io/Serializable"], true, false;
+        "java/util/AbstractSequentialList" => Some("java/util/AbstractList"), [], false, false;
+        "java/util/AbstractList" => Some("java/util/AbstractCollection"), ["java/util/List"], false, false;
+        "java/util/AbstractSet" => Some("java/util/AbstractCollection"), ["java/util/Set"], false, false;
+        "java/util/AbstractCollection" => Some("java/lang/Object"), ["java/util/Collection"], false, false;
+        "java/util/List" => None, ["java/util/SequencedCollection"], false, false;
+        "java/util/Set" => None, ["java/util/Collection"], false, false;
+        "java/util/Queue" => None, ["java/util/Collection"], false, false;
+        "java/util/SequencedCollection" => None, ["java/util/Collection"], false, false;
+        "java/util/Deque" => None, ["java/util/Queue", "java/util/SequencedCollection"], false, false;
+        "java/util/Collection" => None, ["java/lang/Iterable"], false, false;
+        "java/util/NavigableSet" => None, ["java/util/SortedSet"], false, false;
+        "java/util/SortedSet" => None, ["java/util/SequencedSet"], false, false;
+        "java/util/SequencedSet" => None, ["java/util/Set", "java/util/SequencedCollection"], false, false;
+        "java/util/HashMap$Node" => Some("java/lang/Object"), ["java/util/Map$Entry"], true, false;
+        "java/util/TreeMap$Entry" => Some("java/lang/Object"), ["java/util/Map$Entry"], true, false;
+        "java/util/LinkedHashMap$Entry" => Some("java/util/HashMap$Node"), [], true, false;
+        "java/util/HashMap$KeySet" => Some("java/util/AbstractSet"), [], true, false;
+        "java/util/HashMap$EntrySet" => Some("java/util/AbstractSet"), [], true, false;
+        "java/util/TreeMap$EntrySet" => Some("java/util/AbstractSet"), [], true, false;
+        "java/util/LinkedHashMap$LinkedKeySet" => Some("java/util/AbstractSet"), ["java/util/SequencedSet"], true, false;
+        "java/util/LinkedHashMap$LinkedEntrySet" => Some("java/util/AbstractSet"), ["java/util/SequencedSet"], true, false;
+        "java/util/TreeMap$KeySet" => Some("java/util/AbstractSet"), ["java/util/NavigableSet"], true, false;
+        "java/util/HashMap$Values" => Some("java/util/AbstractCollection"), [], true, false;
+        "java/util/TreeMap$Values" => Some("java/util/AbstractCollection"), [], true, false;
+        "java/util/LinkedHashMap$LinkedValues" => Some("java/util/AbstractCollection"), ["java/util/SequencedCollection"], true, false;
+        "java/util/ArrayList$Itr" => Some("java/lang/Object"), ["java/util/Iterator"], true, false;
+        "java/util/LinkedList$ListItr" => Some("java/lang/Object"), ["java/util/ListIterator"], true, false;
+        "java/util/ListIterator" => None, ["java/util/Iterator"], false, false;
+        "java/util/HashMap$KeyIterator" => Some("java/util/HashMap$HashIterator"), ["java/util/Iterator"], true, false;
+        "java/util/HashMap$ValueIterator" => Some("java/util/HashMap$HashIterator"), ["java/util/Iterator"], true, false;
+        "java/util/HashMap$EntryIterator" => Some("java/util/HashMap$HashIterator"), ["java/util/Iterator"], true, false;
+        "java/util/LinkedHashMap$LinkedKeyIterator" => Some("java/util/LinkedHashMap$LinkedHashIterator"), ["java/util/Iterator"], true, false;
+        "java/util/LinkedHashMap$LinkedValueIterator" => Some("java/util/LinkedHashMap$LinkedHashIterator"), ["java/util/Iterator"], true, false;
+        "java/util/LinkedHashMap$LinkedEntryIterator" => Some("java/util/LinkedHashMap$LinkedHashIterator"), ["java/util/Iterator"], true, false;
+        "java/util/TreeMap$KeyIterator" => Some("java/util/TreeMap$PrivateEntryIterator"), [], true, false;
+        "java/util/TreeMap$ValueIterator" => Some("java/util/TreeMap$PrivateEntryIterator"), [], true, false;
+        "java/util/TreeMap$EntryIterator" => Some("java/util/TreeMap$PrivateEntryIterator"), [], true, false;
+        "java/util/TreeMap$PrivateEntryIterator" => Some("java/lang/Object"), ["java/util/Iterator"], false, false;
+        "java/util/HashMap$HashIterator" => Some("java/lang/Object"), [], false, false;
+        "java/util/LinkedHashMap$LinkedHashIterator" => Some("java/lang/Object"), [], false, false;
+        "java/lang/Object" => None, [], false, false;
+        "java/io/Serializable" => None, [], false, false;
+        "java/lang/Comparable" => None, [], false, false;
+        "java/lang/CharSequence" => None, [], false, false;
+        "java/lang/constant/Constable" => None, [], false, false;
+        "java/lang/constant/ConstantDesc" => None, [], false, false;
+        "java/lang/reflect/Type" => None, [], false, false;
+        "java/lang/reflect/AnnotatedElement" => None, [], false, false;
+        "java/lang/invoke/TypeDescriptor" => None, [], false, false;
+        "java/lang/Appendable" => None, [], false, false;
+        "java/lang/Cloneable" => None, [], false, false;
+        "java/lang/Iterable" => None, [], false, false;
+        "java/util/Map" => None, [], false, false;
+        "java/util/Map$Entry" => None, [], false, false;
+        "java/util/Iterator" => None, [], false, false;
+        "java/util/RandomAccess" => None, [], false, false;
+        "android/app/Application" => Some("android/content/ContextWrapper"), [], false, true;
+        "android/app/Service" => Some("android/content/ContextWrapper"), [], false, true;
+        "android/view/ContextThemeWrapper" => Some("android/content/ContextWrapper"), [], false, true;
+        "android/app/Activity" => Some("android/view/ContextThemeWrapper"), [], false, true;
+        "android/content/ContextWrapper" => Some("android/content/Context"), [], false, true;
+        "android/app/ApplicationPackageManager" => Some("android/content/pm/PackageManager"), [], false, true;
+        "android/content/Context" => Some("java/lang/Object"), [], false, true;
+        "android/content/pm/PackageManager" => Some("java/lang/Object"), [], false, true;
+        "android/content/pm/PackageInfo" => Some("java/lang/Object"), [], false, true;
+        "android/content/pm/Signature" => Some("java/lang/Object"), [], false, true;
+        "android/content/pm/SigningInfo" => Some("java/lang/Object"), [], false, true;
+        "android/content/pm/ApplicationInfo" => Some("java/lang/Object"), [], false, true;
+        "android/content/res/AssetManager" => Some("java/lang/Object"), [], false, true;
+    };
+    (!row.android || android).then_some(row)
+}
+
 pub(in crate::jni) fn assignable(emu: &Emulator, from: &str, to: &str) -> Option<bool> {
     let android = emu.apk().is_some();
     if !to.starts_with("java/")
@@ -8,231 +151,23 @@ pub(in crate::jni) fn assignable(emu: &Emulator, from: &str, to: &str) -> Option
     {
         return None;
     }
-    let chain = emu.class_chain(from);
-    let builtins: Vec<_> = chain
+    let builtins: Vec<_> = emu
+        .class_chain(from)
         .into_iter()
-        .filter(|class| {
-            owned_class(class) || (android && super::super::android::parent(class).is_some())
-        })
+        .filter(|name| class(name, android).is_some_and(|row| row.owned || row.android))
         .collect();
     if builtins.is_empty() {
         return None;
     }
-    Some(
-        builtins
-            .into_iter()
-            .any(|class| reaches(class, to, android)),
-    )
+    Some(builtins.into_iter().any(|name| reaches(name, to, android)))
 }
+
 fn reaches(from: &str, to: &str, android: bool) -> bool {
     from == to
-        || parents(from)
-            .iter()
-            .any(|parent| reaches(parent, to, android))
-        || (android
-            && super::super::android::parent(from)
-                .is_some_and(|parent| reaches(parent, to, android)))
-}
-fn owned_class(class: &str) -> bool {
-    matches!(
-        class,
-        "java/lang/String"
-            | "java/lang/Class"
-            | "java/lang/reflect/Method"
-            | "java/lang/reflect/Constructor"
-            | "java/lang/reflect/Field"
-            | "java/lang/reflect/Executable"
-            | "java/lang/reflect/AccessibleObject"
-            | "java/lang/StringBuilder"
-            | "java/lang/Boolean"
-            | "java/lang/Byte"
-            | "java/lang/Character"
-            | "java/lang/Short"
-            | "java/lang/Integer"
-            | "java/lang/Long"
-            | "java/lang/Float"
-            | "java/lang/Double"
-            | "java/nio/charset/Charset"
-            | "java/security/MessageDigest"
-            | "java/util/HashMap"
-            | "java/util/LinkedHashMap"
-            | "java/util/TreeMap"
-            | "java/util/HashSet"
-            | "java/util/ArrayList"
-            | "java/util/LinkedList"
-            | "java/util/HashMap$Node"
-            | "java/util/LinkedHashMap$Entry"
-            | "java/util/TreeMap$Entry"
-            | "java/util/HashMap$KeySet"
-            | "java/util/HashMap$Values"
-            | "java/util/HashMap$EntrySet"
-            | "java/util/LinkedHashMap$LinkedKeySet"
-            | "java/util/LinkedHashMap$LinkedValues"
-            | "java/util/LinkedHashMap$LinkedEntrySet"
-            | "java/util/TreeMap$KeySet"
-            | "java/util/TreeMap$Values"
-            | "java/util/TreeMap$EntrySet"
-            | "java/util/ArrayList$Itr"
-            | "java/util/LinkedList$ListItr"
-            | "java/util/HashMap$KeyIterator"
-            | "java/util/HashMap$ValueIterator"
-            | "java/util/HashMap$EntryIterator"
-            | "java/util/LinkedHashMap$LinkedKeyIterator"
-            | "java/util/LinkedHashMap$LinkedValueIterator"
-            | "java/util/LinkedHashMap$LinkedEntryIterator"
-            | "java/util/TreeMap$KeyIterator"
-            | "java/util/TreeMap$ValueIterator"
-            | "java/util/TreeMap$EntryIterator"
-    )
-}
-fn parents(class: &str) -> &'static [&'static str] {
-    match class {
-        "java/lang/String" => &[
-            "java/lang/Object",
-            "java/io/Serializable",
-            "java/lang/Comparable",
-            "java/lang/CharSequence",
-            "java/lang/constant/Constable",
-            "java/lang/constant/ConstantDesc",
-        ],
-        "java/lang/Class" => &[
-            "java/lang/Object",
-            "java/io/Serializable",
-            "java/lang/reflect/GenericDeclaration",
-            "java/lang/reflect/Type",
-            "java/lang/reflect/AnnotatedElement",
-            "java/lang/invoke/TypeDescriptor$OfField",
-            "java/lang/constant/Constable",
-        ],
-        "java/lang/reflect/Method" | "java/lang/reflect/Constructor" => {
-            &["java/lang/reflect/Executable"]
-        }
-        "java/lang/reflect/Executable" | "java/lang/reflect/Field" => {
-            &["java/lang/reflect/AccessibleObject"]
-        }
-        "java/lang/reflect/AccessibleObject" => &["java/lang/Object"],
-        "java/lang/reflect/GenericDeclaration" => &["java/lang/reflect/AnnotatedElement"],
-        "java/lang/invoke/TypeDescriptor$OfField" => &["java/lang/invoke/TypeDescriptor"],
-        "java/lang/Boolean" | "java/lang/Character" => &[
-            "java/lang/Object",
-            "java/io/Serializable",
-            "java/lang/Comparable",
-            "java/lang/constant/Constable",
-        ],
-        "java/lang/Byte" | "java/lang/Short" => &[
-            "java/lang/Number",
-            "java/lang/Comparable",
-            "java/lang/constant/Constable",
-        ],
-        "java/lang/Integer" | "java/lang/Long" | "java/lang/Float" | "java/lang/Double" => &[
-            "java/lang/Number",
-            "java/lang/Comparable",
-            "java/lang/constant/Constable",
-            "java/lang/constant/ConstantDesc",
-        ],
-        "java/lang/Number" => &["java/lang/Object", "java/io/Serializable"],
-        "java/lang/StringBuilder" => &[
-            "java/lang/AbstractStringBuilder",
-            "java/io/Serializable",
-            "java/lang/Comparable",
-        ],
-        "java/lang/AbstractStringBuilder" => &[
-            "java/lang/Object",
-            "java/lang/Appendable",
-            "java/lang/CharSequence",
-        ],
-        "java/nio/charset/Charset" => &["java/lang/Object", "java/lang/Comparable"],
-        "java/security/MessageDigest" => &["java/security/MessageDigestSpi"],
-        "java/security/MessageDigestSpi" => &["java/lang/Object"],
-        "java/util/HashMap" => &[
-            "java/util/AbstractMap",
-            "java/util/Map",
-            "java/lang/Cloneable",
-            "java/io/Serializable",
-        ],
-        "java/util/LinkedHashMap" => &["java/util/HashMap", "java/util/SequencedMap"],
-        "java/util/TreeMap" => &[
-            "java/util/AbstractMap",
-            "java/util/NavigableMap",
-            "java/lang/Cloneable",
-            "java/io/Serializable",
-        ],
-        "java/util/AbstractMap" => &["java/lang/Object", "java/util/Map"],
-        "java/util/NavigableMap" => &["java/util/SortedMap"],
-        "java/util/SortedMap" => &["java/util/SequencedMap"],
-        "java/util/SequencedMap" => &["java/util/Map"],
-        "java/util/HashSet" => &[
-            "java/util/AbstractSet",
-            "java/util/Set",
-            "java/lang/Cloneable",
-            "java/io/Serializable",
-        ],
-        "java/util/ArrayList" => &[
-            "java/util/AbstractList",
-            "java/util/List",
-            "java/util/RandomAccess",
-            "java/lang/Cloneable",
-            "java/io/Serializable",
-        ],
-        "java/util/LinkedList" => &[
-            "java/util/AbstractSequentialList",
-            "java/util/List",
-            "java/util/Deque",
-            "java/lang/Cloneable",
-            "java/io/Serializable",
-        ],
-        "java/util/AbstractSequentialList" => &["java/util/AbstractList"],
-        "java/util/AbstractList" => &["java/util/AbstractCollection", "java/util/List"],
-        "java/util/AbstractSet" => &["java/util/AbstractCollection", "java/util/Set"],
-        "java/util/AbstractCollection" => &["java/lang/Object", "java/util/Collection"],
-        "java/util/List" => &["java/util/SequencedCollection"],
-        "java/util/Set" | "java/util/Queue" | "java/util/SequencedCollection" => {
-            &["java/util/Collection"]
-        }
-        "java/util/Deque" => &["java/util/Queue", "java/util/SequencedCollection"],
-        "java/util/Collection" => &["java/lang/Iterable"],
-        "java/util/NavigableSet" => &["java/util/SortedSet"],
-        "java/util/SortedSet" => &["java/util/SequencedSet"],
-        "java/util/SequencedSet" => &["java/util/Set", "java/util/SequencedCollection"],
-        "java/util/HashMap$Node" | "java/util/TreeMap$Entry" => {
-            &["java/lang/Object", "java/util/Map$Entry"]
-        }
-        "java/util/LinkedHashMap$Entry" => &["java/util/HashMap$Node"],
-        "java/util/HashMap$KeySet"
-        | "java/util/HashMap$EntrySet"
-        | "java/util/TreeMap$EntrySet" => &["java/util/AbstractSet"],
-        "java/util/LinkedHashMap$LinkedKeySet" | "java/util/LinkedHashMap$LinkedEntrySet" => {
-            &["java/util/AbstractSet", "java/util/SequencedSet"]
-        }
-        "java/util/TreeMap$KeySet" => &["java/util/AbstractSet", "java/util/NavigableSet"],
-        "java/util/HashMap$Values" | "java/util/TreeMap$Values" => {
-            &["java/util/AbstractCollection"]
-        }
-        "java/util/LinkedHashMap$LinkedValues" => &[
-            "java/util/AbstractCollection",
-            "java/util/SequencedCollection",
-        ],
-        "java/util/ArrayList$Itr" => &["java/lang/Object", "java/util/Iterator"],
-        "java/util/LinkedList$ListItr" => &["java/lang/Object", "java/util/ListIterator"],
-        "java/util/ListIterator" => &["java/util/Iterator"],
-        "java/util/HashMap$KeyIterator"
-        | "java/util/HashMap$ValueIterator"
-        | "java/util/HashMap$EntryIterator" => {
-            &["java/util/HashMap$HashIterator", "java/util/Iterator"]
-        }
-        "java/util/LinkedHashMap$LinkedKeyIterator"
-        | "java/util/LinkedHashMap$LinkedValueIterator"
-        | "java/util/LinkedHashMap$LinkedEntryIterator" => &[
-            "java/util/LinkedHashMap$LinkedHashIterator",
-            "java/util/Iterator",
-        ],
-        "java/util/TreeMap$KeyIterator"
-        | "java/util/TreeMap$ValueIterator"
-        | "java/util/TreeMap$EntryIterator" => &["java/util/TreeMap$PrivateEntryIterator"],
-        "java/util/TreeMap$PrivateEntryIterator" => &["java/lang/Object", "java/util/Iterator"],
-        "java/util/HashMap$HashIterator" | "java/util/LinkedHashMap$LinkedHashIterator" => {
-            &["java/lang/Object"]
-        }
-        _ => &[],
-    }
+        || class(from, android).is_some_and(|row| {
+            row.superclass
+                .into_iter()
+                .chain(row.interfaces.iter().copied())
+                .any(|parent| reaches(parent, to, android))
+        })
 }

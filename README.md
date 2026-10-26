@@ -46,14 +46,14 @@ cargo add unidroid
 The crate doesn't include `rootfs`. Copy the `rootfs` directory from this repository, or take it from a release download.
 
 ```rust
-use unidroid::{Emulator, JniHandler, JniCall, Handle, JniValue, Trace};
+use unidroid::{Emulator, JniHandler, JniCall, JniOp, JniValue, Trace};
 
 // Answer app-specific Java calls here.
 struct Env;
 impl JniHandler for Env {
-    fn call_static_object_method(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<Handle> {
-        match (call.class, call.name) {
-            ("java/lang/System", "getProperty") => Some(emu.new_string("UTF-8")),
+    fn member(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+        match (call.op, call.is_static, call.class, call.name) {
+            (JniOp::Call, true, "java/lang/System", "getProperty") => Some(emu.new_string("UTF-8").into()),
             _ => None, // Returning None stops and tells you which call needs an answer
         }
     }
@@ -90,7 +90,7 @@ When the `.so` calls Java you haven't answered, it stops with a message like thi
 unhandled JNI call: CallStaticObjectMethodV java/lang/System->getProperty(Ljava/lang/String;)Ljava/lang/String; from libjnidispatch.so+0x97c4
 ```
 
-Add the matching method to `JniHandler` and run again. It's the same idea as setting up the environment in unidbg.
+Answer the call in `JniHandler::member` and run again. `JniCall` carries `op: JniOp` (`Call`, `Get`, `Set`, `New`), `is_static: bool` and `type_code: u8`, alongside `class`, `name`, `signature`, `receiver` and `args`. `JniOp::name()` returns `call`, `get`, `set` or `new`. The answer type is `Z B C S I J F D` for primitives, `L` for objects, arrays and constructors, and `V` for void calls and field sets; answer the latter with `Some(JniValue::Void)`. `None` means unhandled. `JniValue::type_code()` exposes the answer's type letter. A mismatch stops the guest with `wrong JNI answer type: {function} {class}->{name}{signature} expected {want}, got {got} from {location}`. The `import`, `stopped` and `is_assignable` callbacks keep their separate roles.
 
 See [ENVIRONMENT.md](ENVIRONMENT.md) for built-in Java classes.
 
@@ -122,7 +122,7 @@ emu.superclass("com/example/Sign", "com/example/Base");
 emu.superclass("com/example/Base", "java/lang/Object");
 ```
 
-Now `GetSuperclass` answers, and `call_static_jni_method(.., "com/example/Sign", ..)` also finds a native method registered on `com/example/Base`. Without it, `GetSuperclass` stops and says which class to declare.
+Now `GetSuperclass` answers, and `call_static_jni_method(.., "com/example/Sign", ..)` also finds a native method registered on `com/example/Base`. `GetSuperclass` uses explicit declarations first, then the built-in hierarchy (Android classes require an APK); known interfaces and `java/lang/Object` return null. An undeclared app class still stops and says which class to declare.
 
 See [ENVIRONMENT.md](ENVIRONMENT.md) for replacing imported C functions and running constructors yourself.
 

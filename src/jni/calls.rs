@@ -1,20 +1,27 @@
 use super::names::mangle;
-use super::value::{argument_types, decode};
+use super::value::{decode, method_types};
 use super::{Handle, JniHandler, JniValue, MEMBER_ID_BASE, Member, Object};
 use crate::{Emulator, HostFunction, Module, Result};
 use std::{cell::RefCell, rc::Rc};
 
 impl Emulator {
+    pub(crate) fn jni_message(&self, message: impl std::fmt::Display) -> String {
+        let message = message.to_string();
+        let suffix = format!(" from {}", self.location(self.lr().unwrap_or(0)));
+        if message.ends_with(&suffix) {
+            message
+        } else {
+            message + &suffix
+        }
+    }
+
     pub(super) fn reference_error(
         &self,
         function: &str,
         handle: u64,
     ) -> Box<dyn std::error::Error> {
-        format!(
-            "invalid JNI reference 0x{handle:x} in {function} from {}",
-            self.location(self.lr().unwrap_or(0))
-        )
-        .into()
+        self.jni_message(format!("invalid JNI reference 0x{handle:x} in {function}"))
+            .into()
     }
     pub(super) fn require_object(
         &self,
@@ -37,11 +44,8 @@ impl Emulator {
             .ok_or_else(|| self.member_error(function, id))
     }
     pub(super) fn member_error(&self, function: &str, id: u64) -> Box<dyn std::error::Error> {
-        format!(
-            "invalid JNI id 0x{id:x} in {function} from {}",
-            self.location(self.lr().unwrap_or(0))
-        )
-        .into()
+        self.jni_message(format!("invalid JNI id 0x{id:x} in {function}"))
+            .into()
     }
     pub(crate) fn setup_jni(&mut self) -> Result<()> {
         let p = self.pointer_size();
@@ -112,7 +116,13 @@ impl Emulator {
         args: &[JniValue],
     ) -> Result<JniValue> {
         self.cpu()?;
-        let (name, signature) = method.split_at(method.find('(').unwrap());
+        let invalid = || {
+            self.jni_message(format!(
+                "invalid JNI signature {method} in call_native_method"
+            ))
+        };
+        let (name, signature) = method.split_at(method.find('(').ok_or_else(invalid)?);
+        let (_, result_type) = method_types(signature).ok_or_else(invalid)?;
         let chain = self.class_chain(class);
         let found = chain.iter().find_map(|&class| {
             let key = (class.to_owned(), method.to_owned());
@@ -133,7 +143,6 @@ impl Emulator {
         let receiver = receiver.unwrap_or_else(|| self.class(&declaring));
         let mut values = vec![JniValue::Object(Handle(self.jni.env)), receiver.into()];
         values.extend_from_slice(args);
-        let result_type = signature.as_bytes()[signature.find(')').unwrap() + 1];
         self.invoke_jni(function, &values, result_type, handler)
     }
     pub(super) fn invoke_jni(
@@ -202,25 +211,18 @@ impl Emulator {
         name: &str,
         signature: &str,
     ) -> Box<dyn std::error::Error> {
-        format!(
-            "unhandled JNI call: {function} {class}->{name}{signature} from {}",
-            self.location(self.lr().unwrap_or(0))
-        )
+        self.jni_message(format!(
+            "unhandled JNI call: {function} {class}->{name}{signature}"
+        ))
         .into()
     }
     pub(super) fn unsupported_jni(&self, name: &str) -> Box<dyn std::error::Error> {
-        format!(
-            "unsupported JNIEnv function {name} from {}",
-            self.location(self.lr().unwrap_or(0))
-        )
-        .into()
+        self.jni_message(format!("unsupported JNIEnv function {name}"))
+            .into()
     }
     pub(super) fn unsupported_vm(&self, name: &str) -> Box<dyn std::error::Error> {
-        format!(
-            "unsupported JavaVM function {name} from {}",
-            self.location(self.lr().unwrap_or(0))
-        )
-        .into()
+        self.jni_message(format!("unsupported JavaVM function {name}"))
+            .into()
     }
     pub(super) fn validate_ref(&self, function: &str, handle: u64, kind: u8) -> Result<()> {
         if handle == 0 && kind == 6 {
@@ -245,13 +247,23 @@ impl Emulator {
             Err(self.reference_error(function, handle))
         }
     }
+    pub(super) fn signature_error(
+        &self,
+        function: &str,
+        signature: &str,
+    ) -> Box<dyn std::error::Error> {
+        self.jni_message(format!("invalid JNI signature {signature} in {function}"))
+            .into()
+    }
     pub(super) fn jni_arguments(
         &self,
+        function: &str,
         signature: &str,
         variant: usize,
         start: usize,
     ) -> Result<Vec<JniValue>> {
-        let kinds = argument_types(signature);
+        let (kinds, _) =
+            method_types(signature).ok_or_else(|| self.signature_error(function, signature))?;
         let bits = self.argument_bits(&kinds, variant, start)?;
         Ok(kinds
             .into_iter()

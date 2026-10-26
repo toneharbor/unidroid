@@ -5,9 +5,14 @@ fn invalid_receivers_fail_before_builtin_and_handler_dispatch() -> Result<()> {
     #[derive(Default)]
     struct Handler(Vec<Handle>);
     impl JniHandler for Handler {
-        fn call_int_method(&mut self, _: &mut Emulator, call: &JniCall<'_>) -> Option<i32> {
-            self.0.push(call.receiver);
-            Some(7)
+        fn member(&mut self, _: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+            match (call.op, call.is_static, call.type_code) {
+                (JniOp::Call, false, b'I') => {
+                    self.0.push(call.receiver);
+                    Some(JniValue::Int(7))
+                }
+                _ => None,
+            }
         }
     }
     for arch in ARCHES {
@@ -161,27 +166,24 @@ fn opaque_objects_and_uncovered_builtins_reach_the_handler() -> Result<()> {
     #[derive(Default)]
     struct Handler(usize);
     impl JniHandler for Handler {
-        fn call_boolean_method(&mut self, _: &mut Emulator, _: &JniCall<'_>) -> Option<bool> {
-            self.0 += 1;
-            Some(true)
-        }
-        fn call_int_method(&mut self, _: &mut Emulator, _: &JniCall<'_>) -> Option<i32> {
-            self.0 += 1;
-            Some(99)
-        }
-        fn call_object_method(&mut self, emu: &mut Emulator, _: &JniCall<'_>) -> Option<Handle> {
-            self.0 += 1;
-            Some(emu.new_string("fallback"))
-        }
-        fn call_static_object_method(
-            &mut self,
-            emu: &mut Emulator,
-            call: &JniCall<'_>,
-        ) -> Option<Handle> {
-            self.call_object_method(emu, call)
-        }
-        fn new_object(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<Handle> {
-            self.call_object_method(emu, call)
+        fn member(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+            match (call.op, call.is_static, call.type_code) {
+                (JniOp::Call, false, b'Z') => {
+                    self.0 += 1;
+                    Some(JniValue::Boolean(true))
+                }
+                (JniOp::Call, false, b'I') => {
+                    self.0 += 1;
+                    Some(JniValue::Int(99))
+                }
+                (JniOp::Call, false, b'L')
+                | (JniOp::Call, true, b'L')
+                | (JniOp::New, false, b'L') => {
+                    self.0 += 1;
+                    Some(JniValue::Object(emu.new_string("fallback")))
+                }
+                _ => None,
+            }
         }
     }
     for arch in ARCHES {

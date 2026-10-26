@@ -1,34 +1,79 @@
+use super::JniOp;
+
+pub(super) struct MemberFunction {
+    pub op: JniOp,
+    pub is_static: bool,
+    pub kind: usize,
+    pub variant: usize,
+    pub nonvirtual: bool,
+    pub member_argument: usize,
+}
+impl MemberFunction {
+    pub fn type_code(&self) -> u8 {
+        match self.op {
+            JniOp::Set => b'V',
+            JniOp::New => b'L',
+            _ => b"LZBCSIJFDV"[self.kind],
+        }
+    }
+}
+
+pub(super) fn member_function(index: usize) -> Option<MemberFunction> {
+    use JniOp::*;
+    let (op, is_static, base, methods, nonvirtual) = match index {
+        28..=30 => (New, false, 28, true, false),
+        34..=63 => (Call, false, 34, true, false),
+        64..=93 => (Call, false, 64, true, true),
+        95..=103 => (Get, false, 95, false, false),
+        104..=112 => (Set, false, 104, false, false),
+        114..=143 => (Call, true, 114, true, false),
+        145..=153 => (Get, true, 145, false, false),
+        154..=162 => (Set, true, 154, false, false),
+        _ => return None,
+    };
+    let offset = index - base;
+    Some(MemberFunction {
+        op,
+        is_static,
+        kind: if methods { offset / 3 } else { offset },
+        variant: if methods { offset % 3 } else { 0 },
+        nonvirtual,
+        member_argument: if nonvirtual { 3 } else { 2 },
+    })
+}
+
 pub(super) fn jni_name(index: usize) -> String {
     const TYPES: [&str; 10] = [
         "Object", "Boolean", "Byte", "Char", "Short", "Int", "Long", "Float", "Double", "Void",
     ];
     const VARIANTS: [&str; 3] = ["", "V", "A"];
-    match index {
-        28..=30 => format!("NewObject{}", VARIANTS[index - 28]),
-        34..=93 => {
-            let base = if index < 64 { 34 } else { 64 };
-            format!(
+    if let Some(member) = member_function(index) {
+        let prefix = if member.is_static {
+            "Static"
+        } else if member.nonvirtual {
+            "Nonvirtual"
+        } else {
+            ""
+        };
+        return match member.op {
+            JniOp::New => format!("NewObject{}", VARIANTS[member.variant]),
+            JniOp::Call => format!(
                 "Call{}{}Method{}",
-                if base == 64 { "Nonvirtual" } else { "" },
-                TYPES[(index - base) / 3],
-                VARIANTS[(index - base) % 3]
-            )
-        }
-        114..=143 => format!(
-            "CallStatic{}Method{}",
-            TYPES[(index - 114) / 3],
-            VARIANTS[(index - 114) % 3]
-        ),
-        95..=112 | 145..=162 => {
-            let base = if index < 145 { 95 } else { 145 };
-            let set = index - base >= 9;
-            format!(
+                prefix, TYPES[member.kind], VARIANTS[member.variant]
+            ),
+            JniOp::Get | JniOp::Set => format!(
                 "{}{}{}Field",
-                if set { "Set" } else { "Get" },
-                if base == 145 { "Static" } else { "" },
-                TYPES[(index - base) % 9]
-            )
-        }
+                if member.op == JniOp::Get {
+                    "Get"
+                } else {
+                    "Set"
+                },
+                prefix,
+                TYPES[member.kind]
+            ),
+        };
+    }
+    match index {
         175..=214 => {
             let block = (index - 175) / 8;
             format!(

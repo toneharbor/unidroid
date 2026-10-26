@@ -1,23 +1,5 @@
 use super::*;
 
-macro_rules! handlers {
-    ($(($name:ident, $op:literal, $static:literal, $kind:literal, $variant:ident, $result:ty)),* $(,)?) => {
-        $(fn $name(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<$result> {
-            match self.member(emu, call, $op, $static, $kind) {
-                Some(JniValue::$variant(value)) => Some(value),
-                _ => None,
-            }
-        })*
-    };
-}
-macro_rules! void_handlers {
-    ($(($name:ident, $op:literal, $static:literal)),* $(,)?) => {
-        $(fn $name(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<()> {
-            self.member(emu, call, $op, $static, b'V').map(|_| ())
-        })*
-    };
-}
-
 impl<R: BufRead, W: Write> JniHandler for Session<R, W> {
     fn import(&mut self, emu: &mut Emulator, call: &crate::ImportCall<'_>) -> Option<u64> {
         let question = json!({
@@ -72,5 +54,7 @@ impl<R: BufRead, W: Write> JniHandler for Session<R, W> {
             _ => None,
         }
     }
-    crate::policy::handler::members!(handlers, void_handlers);
+    fn member(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+        Session::member(self, emu, call)
+    }
 }

@@ -29,7 +29,7 @@ impl From<i64> for JniValue {
     }
 }
 impl JniValue {
-    pub(crate) fn type_code(self) -> u8 {
+    pub fn type_code(self) -> u8 {
         match self {
             Self::Object(_) => b'L',
             Self::Boolean(_) => b'Z',
@@ -83,7 +83,7 @@ impl JniValue {
         }
     }
 }
-pub(super) fn decode(kind: u8, bits: u64) -> JniValue {
+pub(crate) fn decode(kind: u8, bits: u64) -> JniValue {
     match kind {
         b'L' | b'[' => JniValue::Object(Handle(bits)),
         b'Z' => JniValue::Boolean(bits != 0),
@@ -97,24 +97,45 @@ pub(super) fn decode(kind: u8, bits: u64) -> JniValue {
         _ => JniValue::Void,
     }
 }
-pub(super) fn argument_types(signature: &str) -> Vec<u8> {
-    let mut types = Vec::new();
-    let mut bytes = signature.bytes().skip(1);
-    while let Some(mut kind) = bytes.next() {
-        if kind == b')' {
-            break;
-        }
-        types.push(kind);
-        while kind == b'[' {
-            kind = bytes.next().unwrap();
-        }
-        if kind == b'L' {
-            for c in bytes.by_ref() {
-                if c == b';' {
-                    break;
-                }
-            }
-        }
+pub(crate) fn method_types(signature: &str) -> Option<(Vec<u8>, u8)> {
+    let mut bytes = signature.as_bytes().strip_prefix(b"(")?;
+    let mut parameters = Vec::new();
+    while bytes.first() != Some(&b')') {
+        parameters.push(take_field(&mut bytes)?);
     }
-    types
+    bytes = &bytes[1..];
+    let result = if bytes == b"V" {
+        bytes = &[];
+        b'V'
+    } else {
+        take_field(&mut bytes)?
+    };
+    bytes.is_empty().then_some((parameters, result))
+}
+
+pub(super) fn field_type(signature: &str) -> Option<u8> {
+    let mut bytes = signature.as_bytes();
+    let kind = take_field(&mut bytes)?;
+    bytes.is_empty().then_some(kind)
+}
+
+fn take_field(bytes: &mut &[u8]) -> Option<u8> {
+    let (&kind, rest) = bytes.split_first()?;
+    *bytes = rest;
+    let mut element = kind;
+    while element == b'[' {
+        let (&next, rest) = bytes.split_first()?;
+        *bytes = rest;
+        element = next;
+    }
+    if element == b'L' {
+        let end = bytes.iter().position(|&b| b == b';')?;
+        if end == 0 {
+            return None;
+        }
+        *bytes = &bytes[end + 1..];
+    } else {
+        super::PrimitiveType::from_code(element)?;
+    }
+    Some(kind)
 }

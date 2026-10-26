@@ -198,9 +198,14 @@ fn api_handles_created_by_a_handler_live_until_release() -> Result<()> {
     #[derive(Default)]
     struct Handler(Handle);
     impl JniHandler for Handler {
-        fn call_static_void_method(&mut self, emu: &mut Emulator, _: &JniCall<'_>) -> Option<()> {
-            self.0 = emu.new_object("example/Value", 42u32);
-            Some(())
+        fn member(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+            match (call.op, call.is_static, call.type_code) {
+                (JniOp::Call, true, b'V') => {
+                    self.0 = emu.new_object("example/Value", 42u32);
+                    Some(JniValue::Void)
+                }
+                _ => None,
+            }
         }
     }
     for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {

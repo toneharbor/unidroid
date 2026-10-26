@@ -69,12 +69,7 @@ impl Emulator {
                     kind: *kind,
                 })
             }
-            object => Err(format!(
-                "invalid handle {}: {}, not a reflected member",
-                handle.0,
-                object.java_type()
-            )
-            .into()),
+            object => Err(object.handle_error(handle, "a reflected member")),
         }
     }
 
@@ -111,7 +106,7 @@ impl Emulator {
                 } else {
                     member.name.clone()
                 };
-                super::java::string(self, name.encode_utf16().collect::<Vec<_>>())
+                super::java::string_utf8(self, &name)
             }
             ("getDeclaringClass", "()Ljava/lang/Class;") => {
                 let class = member.class.clone();
@@ -156,10 +151,10 @@ impl Emulator {
             },
             |object| object.java_type(),
         );
-        Err(format!(
-            "invalid reflected member 0x{handle:x}: {class} in {function} from {}",
-            self.location(self.lr().unwrap_or(0))
-        )
-        .into())
+        Err(self
+            .jni_message(format!(
+                "invalid reflected member 0x{handle:x}: {class} in {function}"
+            ))
+            .into())
     }
 }

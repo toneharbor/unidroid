@@ -1,5 +1,6 @@
-use super::{Handle, JniCall, JniValue, Object, java};
+use super::{Handle, JniCall, JniOp, JniValue, Object, java};
 use crate::{Emulator, Result};
+use java::string_utf8;
 use std::{cell::RefCell, rc::Rc};
 
 mod packages;
@@ -28,28 +29,6 @@ impl Android {
     }
 }
 
-pub(super) fn parent(class: &str) -> Option<&'static str> {
-    Some(match class {
-        "android/app/Application" | "android/app/Service" | "android/view/ContextThemeWrapper" => {
-            "android/content/ContextWrapper"
-        }
-        "android/app/Activity" => "android/view/ContextThemeWrapper",
-        "android/content/ContextWrapper" => "android/content/Context",
-        "android/app/ApplicationPackageManager" => "android/content/pm/PackageManager",
-        "android/content/Context"
-        | "android/content/pm/PackageManager"
-        | "android/content/pm/PackageInfo"
-        | "android/content/pm/Signature"
-        | "android/content/pm/SigningInfo"
-        | "android/content/pm/ApplicationInfo"
-        | "android/content/res/AssetManager" => "java/lang/Object",
-        _ => return None,
-    })
-}
-
-fn string(emu: &mut Emulator, value: &str) -> JniValue {
-    java::string(emu, value.encode_utf16().collect::<Vec<_>>())
-}
 fn object(emu: &mut Emulator, value: Android) -> JniValue {
     emu.insert_object(Object::Android(value)).into()
 }
@@ -62,8 +41,8 @@ fn application(emu: &mut Emulator) -> JniValue {
     java::return_ref(emu, Some(application))
 }
 
-pub(super) fn dispatch(emu: &mut Emulator, call: &JniCall<'_>, op: u8) -> Result<Option<JniValue>> {
-    if op == 6
+pub(super) fn dispatch(emu: &mut Emulator, call: &JniCall<'_>) -> Result<Option<JniValue>> {
+    if call.op == JniOp::New
         && call.class == "android/content/pm/Signature"
         && call.name == "<init>"
         && call.signature == "([B)V"
@@ -75,30 +54,34 @@ pub(super) fn dispatch(emu: &mut Emulator, call: &JniCall<'_>, op: u8) -> Result
         let bytes = emu.byte_array(input)?;
         return Ok(Some(object(emu, Android::Signature(bytes))));
     }
-    if op == 1 && call.class == "android/app/ActivityThread" {
+    if call.op == JniOp::Call && call.is_static && call.class == "android/app/ActivityThread" {
         return Ok(match (call.name, call.signature) {
             ("currentApplication", "()Landroid/app/Application;") => Some(application(emu)),
             ("currentPackageName", "()Ljava/lang/String;") => {
-                Some(string(emu, &emu.apk().unwrap().package.clone()))
+                Some(string_utf8(emu, &emu.apk().unwrap().package.clone()))
             }
             ("currentProcessName", "()Ljava/lang/String;") => {
-                Some(string(emu, &emu.process_name.clone()))
+                Some(string_utf8(emu, &emu.process_name.clone()))
             }
             _ => None,
         });
     }
-    if op == 3 && call.class == "android/content/pm/PackageManager" && call.signature == "I" {
+    if call.op == JniOp::Get
+        && call.is_static
+        && call.class == "android/content/pm/PackageManager"
+        && call.signature == "I"
+    {
         return Ok(match call.name {
             "GET_SIGNATURES" => Some(JniValue::Int(0x40)),
             "GET_SIGNING_CERTIFICATES" => Some(JniValue::Int(0x08000000)),
             _ => None,
         });
     }
-    if !matches!(op, 0 | 2) {
+    if call.is_static || !matches!(call.op, JniOp::Call | JniOp::Get) {
         return Ok(None);
     }
     let receiver = emu.jni_object(call.receiver)?;
-    if op == 2 {
+    if call.op == JniOp::Get {
         return packages::field(emu, call, &receiver.borrow());
     }
     if [receiver.borrow().java_type().as_str(), call.class]
@@ -107,10 +90,10 @@ pub(super) fn dispatch(emu: &mut Emulator, call: &JniCall<'_>, op: u8) -> Result
     {
         let value = match (call.name, call.signature) {
             ("getPackageName", "()Ljava/lang/String;") => {
-                string(emu, &emu.apk().unwrap().package.clone())
+                string_utf8(emu, &emu.apk().unwrap().package.clone())
             }
             ("getPackageCodePath" | "getPackageResourcePath", "()Ljava/lang/String;") => {
-                string(emu, &emu.apk().unwrap().source_dir())
+                string_utf8(emu, &emu.apk().unwrap().source_dir())
             }
             ("getPackageManager", "()Landroid/content/pm/PackageManager;") => {
                 object(emu, Android::PackageManager)

@@ -25,14 +25,14 @@ fn patterns_are_anchored_and_only_star_is_special() -> Result<()> {
             let mut fallback = ();
             let mut handler = policy.handler(&mut fallback);
             assert_eq!(
-                handler.call_int_method(
+                handler.member(
                     &mut emu,
                     &JniCall {
                         name,
                         ..call("()I")
                     }
                 ),
-                expected,
+                expected.map(JniValue::Int),
                 "{pattern} / {name}"
             );
             handler.finish(Ok(()))?;
@@ -51,14 +51,14 @@ fn null_class_matches_any_class() -> Result<()> {
         let mut handler = policy.handler(&mut fallback);
         for class in ["test/Answers", "other/Thing"] {
             assert_eq!(
-                handler.call_int_method(
+                handler.member(
                     &mut emu,
                     &JniCall {
                         class,
                         ..call("()I")
                     }
                 ),
-                Some(7),
+                Some(JniValue::Int(7)),
                 "{class}"
             );
         }
@@ -123,7 +123,17 @@ fn empty_sequences_fall_through_and_constructors_use_object_answers() -> Result<
         )?;
         let mut fallback = ();
         let mut handler = policy.handler(&mut fallback);
-        let object = handler.new_object(&mut emu, &call("()V")).unwrap();
+        let object = handler
+            .member(
+                &mut emu,
+                &JniCall {
+                    op: JniOp::New,
+                    type_code: b'L',
+                    ..call("()V")
+                },
+            )
+            .unwrap()
+            .object();
         assert!(
             emu.string(object)
                 .unwrap_err()
@@ -131,7 +141,7 @@ fn empty_sequences_fall_through_and_constructors_use_object_answers() -> Result<
                 .contains("test/Created")
         );
         assert_eq!(
-            handler.call_object_method(&mut emu, &call("()Ljava/lang/Object;")),
+            handler.member(&mut emu, &call("()Ljava/lang/Object;")),
             None
         );
         handler.finish(Ok(()))?;

@@ -1,8 +1,8 @@
 use super::{code, emulator};
 use std::{cell::RefCell, rc::Rc};
 use unidroid::{
-    Checkpoint, Emulator, Handle, JniCall, JniHandler, Policy, Result, Resume, Stop, Trace, Watch,
-    WatchAction,
+    Checkpoint, Emulator, JniCall, JniHandler, JniOp, JniValue, Policy, Result, Resume, Stop,
+    Trace, Watch, WatchAction,
 };
 
 struct DuringCall<'a> {
@@ -22,9 +22,14 @@ impl JniHandler for DuringCall<'_> {
         self.check(emu);
         Resume::Return(42)
     }
-    fn get_static_object_field(&mut self, emu: &mut Emulator, _: &JniCall<'_>) -> Option<Handle> {
-        self.check(emu);
-        None
+    fn member(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+        match (call.op, call.is_static, call.type_code) {
+            (JniOp::Get, true, b'L') => {
+                self.check(emu);
+                None
+            }
+            _ => None,
+        }
     }
 }
 

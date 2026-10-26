@@ -23,9 +23,12 @@ fn failed_policy_collections_release_all_created_handles() -> Result<()> {
             let mut handler = policy.handler(&mut fallback);
             assert!(
                 handler
-                    .call_object_method(
+                    .member(
                         &mut emu,
                         &JniCall {
+                            op: JniOp::Call,
+                            is_static: false,
+                            type_code: b'L',
                             class: "test/Policy",
                             name: "value",
                             signature: "()Ljava/lang/Object;",

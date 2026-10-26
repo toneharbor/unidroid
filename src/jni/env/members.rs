@@ -1,15 +1,13 @@
-use crate::jni::handler::dispatch;
-use crate::jni::value::decode;
-use crate::jni::{
-    Handle, JniCall, JniHandler, JniValue, MEMBER_ID_BASE, Member, ReflectedMemberKind,
-};
+use crate::jni::handler::check_answer;
+use crate::jni::names::member_function;
+use crate::jni::value::{decode, field_type};
+use crate::jni::{Handle, JniCall, JniHandler, JniOp, MEMBER_ID_BASE, Member, ReflectedMemberKind};
 use crate::{Emulator, Result};
 
 pub(super) fn member_id(index: usize, b: u64, c: u64) -> Option<u64> {
     match index {
-        64..=93 => Some(c),
-        9 | 12 | 28..=30 | 34..=63 | 95..=112 | 114..=143 | 145..=162 => Some(b),
-        _ => None,
+        9 | 12 => Some(b),
+        _ => member_function(index).map(|member| if member.member_argument == 3 { c } else { b }),
     }
 }
 
@@ -71,31 +69,35 @@ impl Emulator {
                     index == 94 || index == 144,
                 ))
             }
-            28..=30 | 34..=93 | 95..=112 | 114..=143 | 145..=162 => {
-                let constructor = (28..=30).contains(&index);
-                let nonvirtual = (64..=93).contains(&index);
+            _ if member_function(index).is_some() => {
+                let decoded = member_function(index).unwrap();
                 let member = self.require_member(&function, member_id(index, b, c).unwrap())?;
-                let (operation, kind, variant) = match index {
-                    28..=30 => (6, 0, index - 28),
-                    34..=63 => (0, (index - 34) / 3, (index - 34) % 3),
-                    64..=93 => (0, (index - 64) / 3, (index - 64) % 3),
-                    95..=103 => (2, index - 95, 0),
-                    104..=112 => (4, index - 104, 0),
-                    114..=143 => (1, (index - 114) / 3, (index - 114) % 3),
-                    145..=153 => (3, index - 145, 0),
-                    154..=162 => (5, index - 154, 0),
-                    _ => unreachable!(),
-                };
-                let args = if operation == 4 || operation == 5 {
-                    let kind = member.signature.as_bytes()[0];
-                    let bits = self.argument(3, kind)?;
-                    vec![decode(kind, bits)]
-                } else if operation == 2 || operation == 3 {
-                    Vec::new()
+                let field = if matches!(decoded.op, JniOp::Get | JniOp::Set) {
+                    Some(
+                        field_type(&member.signature)
+                            .ok_or_else(|| self.signature_error(&function, &member.signature))?,
+                    )
                 } else {
-                    self.jni_arguments(&member.signature, variant, if nonvirtual { 4 } else { 3 })?
+                    None
+                };
+                let args = match decoded.op {
+                    JniOp::Set => {
+                        let kind = field.unwrap();
+                        let bits = self.argument(3, kind)?;
+                        vec![decode(kind, bits)]
+                    }
+                    JniOp::Get => Vec::new(),
+                    _ => self.jni_arguments(
+                        &function,
+                        &member.signature,
+                        decoded.variant,
+                        if decoded.nonvirtual { 4 } else { 3 },
+                    )?,
                 };
                 let call = JniCall {
+                    op: decoded.op,
+                    is_static: decoded.is_static,
+                    type_code: decoded.type_code(),
                     class: &member.class,
                     name: &member.name,
                     signature: &member.signature,
@@ -112,14 +114,13 @@ impl Emulator {
                         from: self.location(self.lr()?),
                     });
                 }
-                let result =
-                    match crate::jni::java::dispatch(self, &call, operation, &function, handler)? {
-                        Some(value) => Some(value),
-                        None if constructor => {
-                            handler.new_object(self, &call).map(JniValue::Object)
-                        }
-                        None => dispatch(handler, self, &call, operation, kind),
-                    };
+                let result = match crate::jni::java::dispatch(self, &call, &function, handler)? {
+                    Some(value) => Some(value),
+                    None => {
+                        let answer = handler.member(self, &call);
+                        check_answer(self, &call, &function, answer)?
+                    }
+                };
                 let value = result.ok_or_else(|| {
                     self.jni_error(&function, &member.class, &member.name, &member.signature)
                 })?;

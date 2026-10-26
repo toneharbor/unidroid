@@ -1,43 +1,40 @@
-use unidroid::{Emulator, Handle, JniCall, JniHandler, JniValue, Result};
+use unidroid::{Emulator, JniCall, JniHandler, JniOp, JniValue, Result};
 
 struct JnaHandler;
 impl JniHandler for JnaHandler {
-    fn call_static_object_method(
-        &mut self,
-        emu: &mut Emulator,
-        call: &JniCall<'_>,
-    ) -> Option<Handle> {
-        if call.class == "java/lang/System"
-            && call.name == "getProperty"
-            && call.signature == "(Ljava/lang/String;)Ljava/lang/String;"
-            && emu.string(call.args[0].object()).ok()? == "file.encoding"
-        {
-            Some(emu.new_string("UTF-8"))
-        } else {
-            None
+    fn member(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+        match (call.op, call.is_static, call.type_code) {
+            (JniOp::Call, true, b'L') => {
+                if call.class == "java/lang/System"
+                    && call.name == "getProperty"
+                    && call.signature == "(Ljava/lang/String;)Ljava/lang/String;"
+                    && emu.string(call.args[0].object()).ok()? == "file.encoding"
+                {
+                    Some(JniValue::Object(emu.new_string("UTF-8")))
+                } else {
+                    None
+                }
+            }
+            (JniOp::Get, true, b'L') => {
+                if call.name != "TYPE" || call.signature != "Ljava/lang/Class;" {
+                    return None;
+                }
+                let name = match call.class {
+                    "java/lang/Void" => "void",
+                    "java/lang/Boolean" => "boolean",
+                    "java/lang/Byte" => "byte",
+                    "java/lang/Character" => "char",
+                    "java/lang/Short" => "short",
+                    "java/lang/Integer" => "int",
+                    "java/lang/Long" => "long",
+                    "java/lang/Float" => "float",
+                    "java/lang/Double" => "double",
+                    _ => return None,
+                };
+                Some(JniValue::Object(emu.class(name)))
+            }
+            _ => None,
         }
-    }
-    fn get_static_object_field(
-        &mut self,
-        emu: &mut Emulator,
-        call: &JniCall<'_>,
-    ) -> Option<Handle> {
-        if call.name != "TYPE" || call.signature != "Ljava/lang/Class;" {
-            return None;
-        }
-        let name = match call.class {
-            "java/lang/Void" => "void",
-            "java/lang/Boolean" => "boolean",
-            "java/lang/Byte" => "byte",
-            "java/lang/Character" => "char",
-            "java/lang/Short" => "short",
-            "java/lang/Integer" => "int",
-            "java/lang/Long" => "long",
-            "java/lang/Float" => "float",
-            "java/lang/Double" => "double",
-            _ => return None,
-        };
-        Some(emu.class(name))
     }
 }
 

@@ -106,26 +106,36 @@ fn host_reflection_shares_ids_and_exposes_member_details() -> Result<()> {
 
 struct DeclarationHandler;
 impl JniHandler for DeclarationHandler {
-    fn call_object_method(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<Handle> {
-        assert_eq!(call.class, "java/lang/Class");
-        assert_eq!(call.name, "getDeclaredMethod");
-        assert_eq!(
-            call.signature,
-            "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;"
-        );
-        assert_eq!(emu.string(call.args[0].object()).unwrap(), "run");
-        assert!(emu.object_array(call.args[1].object()).unwrap().is_empty());
-        Some(emu.new_reflected_method("example/Owner", "run", "()V", false))
-    }
-    fn call_int_method(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<i32> {
-        assert_eq!(call.class, "java/lang/reflect/Method");
-        assert_eq!(call.name, "getModifiers");
-        let member = emu.reflected_member(call.receiver).unwrap();
-        assert_eq!(member.class, "example/Owner");
-        assert_eq!(member.name, "run");
-        assert_eq!(member.signature, "()V");
-        assert_eq!(member.kind, ReflectedMemberKind::Method);
-        Some(if member.is_static { 8 } else { 0 })
+    fn member(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+        match (call.op, call.is_static, call.type_code) {
+            (JniOp::Call, false, b'L') => {
+                assert_eq!(call.class, "java/lang/Class");
+                assert_eq!(call.name, "getDeclaredMethod");
+                assert_eq!(
+                    call.signature,
+                    "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;"
+                );
+                assert_eq!(emu.string(call.args[0].object()).unwrap(), "run");
+                assert!(emu.object_array(call.args[1].object()).unwrap().is_empty());
+                Some(JniValue::Object(emu.new_reflected_method(
+                    "example/Owner",
+                    "run",
+                    "()V",
+                    false,
+                )))
+            }
+            (JniOp::Call, false, b'I') => {
+                assert_eq!(call.class, "java/lang/reflect/Method");
+                assert_eq!(call.name, "getModifiers");
+                let member = emu.reflected_member(call.receiver).unwrap();
+                assert_eq!(member.class, "example/Owner");
+                assert_eq!(member.name, "run");
+                assert_eq!(member.signature, "()V");
+                assert_eq!(member.kind, ReflectedMemberKind::Method);
+                Some(JniValue::Int(if member.is_static { 8 } else { 0 }))
+            }
+            _ => None,
+        }
     }
 }
 

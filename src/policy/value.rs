@@ -91,16 +91,10 @@ impl Object {
 }
 
 pub(crate) fn new_array(emu: &mut Emulator, kind: &str, base64: &str) -> Result<Handle> {
-    let kind = match kind {
-        "Z" => PrimitiveType::Boolean,
-        "B" => PrimitiveType::Byte,
-        "C" => PrimitiveType::Char,
-        "S" => PrimitiveType::Short,
-        "I" => PrimitiveType::Int,
-        "J" => PrimitiveType::Long,
-        "F" => PrimitiveType::Float,
-        "D" => PrimitiveType::Double,
-        _ => return Err(format!("unknown array type: {kind}").into()),
-    };
+    let kind = match kind.as_bytes() {
+        [code] => PrimitiveType::from_code(*code),
+        _ => None,
+    }
+    .ok_or_else(|| format!("unknown array type: {kind}"))?;
     Ok(emu.new_primitive_array(kind, &BASE64_STANDARD.decode(base64)?))
 }

@@ -10,6 +10,67 @@ mod lifecycle;
 mod packages;
 mod signatures;
 
+#[test]
+fn android_objects_have_the_same_text_directly_and_inside_lists() -> Result<()> {
+    for arch in ARCHES {
+        let (_file, mut emu) = apk_emulator(arch)?;
+        let bytes = emu.new_byte_array(b"ab");
+        let signature = construct(
+            &mut emu,
+            "android/content/pm/Signature",
+            "([B)V",
+            &[bytes.into()],
+        )?;
+        assert_eq!(
+            text(&mut emu, signature)?,
+            "android.content.pm.Signature@fe2"
+        );
+        let list = emu.new_java_list("java/util/ArrayList", &[signature])?;
+        let value = static_call(
+            &mut emu,
+            "java/lang/String",
+            "valueOf(Ljava/lang/Object;)Ljava/lang/String;",
+            &[list.into()],
+        )?
+        .object();
+        assert_eq!(emu.string(value)?, "[android.content.pm.Signature@fe2]");
+        let builder = construct(&mut emu, "java/lang/StringBuilder", "()V", &[])?;
+        call(
+            &mut emu,
+            builder,
+            "append(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
+            &[list.into()],
+        )?;
+        assert_eq!(
+            text(&mut emu, builder)?,
+            "[android.content.pm.Signature@fe2]"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn android_superclasses_require_an_apk_unless_explicitly_declared() -> Result<()> {
+    for arch in ARCHES {
+        let (_file, mut emu) = apk_emulator(arch)?;
+        let class = emu.class("android/app/Application");
+        let parent = Handle(jni_call(&mut emu, 10, &[class.0])?);
+        assert_eq!(emu.class_name(parent)?, "android/content/ContextWrapper");
+        let mut emu = emulator(arch)?;
+        let class = emu.class("android/app/Application");
+        assert!(
+            jni_call(&mut emu, 10, &[class.0])
+                .unwrap_err()
+                .to_string()
+                .contains("superclass not declared")
+        );
+        emu.superclass("android/app/Application", "app/Declared");
+        let parent = Handle(jni_call(&mut emu, 10, &[class.0])?);
+        assert_eq!(emu.class_name(parent)?, "app/Declared");
+    }
+    Ok(())
+}
+
 fn field(
     emu: &mut Emulator,
     receiver: Handle,

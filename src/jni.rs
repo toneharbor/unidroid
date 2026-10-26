@@ -6,9 +6,9 @@ mod java;
 mod names;
 mod objects;
 mod reflection;
-mod value;
+pub(crate) mod value;
 
-pub use handler::{JniCall, JniHandler};
+pub use handler::{JniCall, JniHandler, JniOp};
 pub use reflection::{ReflectedMember, ReflectedMemberKind};
 pub use value::{Handle, JniValue};
 
@@ -31,6 +31,20 @@ pub enum PrimitiveType {
     Double,
 }
 impl PrimitiveType {
+    pub(crate) fn from_code(code: u8) -> Option<Self> {
+        Some(match code {
+            b'Z' => Self::Boolean,
+            b'B' => Self::Byte,
+            b'C' => Self::Char,
+            b'S' => Self::Short,
+            b'I' => Self::Int,
+            b'J' => Self::Long,
+            b'F' => Self::Float,
+            b'D' => Self::Double,
+            _ => return None,
+        })
+    }
+
     fn size(self) -> usize {
         match self {
             Self::Boolean | Self::Byte => 1,
@@ -91,6 +105,15 @@ enum Object {
     Exception(String, Option<String>),
 }
 impl Object {
+    fn handle_error(&self, handle: Handle, expected: &str) -> Box<dyn std::error::Error> {
+        format!(
+            "invalid handle {}: {}, not {expected}",
+            handle.0,
+            self.java_type()
+        )
+        .into()
+    }
+
     fn is_container(&self) -> bool {
         matches!(
             self,

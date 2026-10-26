@@ -1,17 +1,14 @@
 use std::{cell::RefCell, rc::Rc};
-use unidroid::{Emulator, Handle, JniCall, JniHandler, Result, Trace};
+use unidroid::{Emulator, JniCall, JniHandler, JniOp, JniValue, Result, Trace};
 
 struct Answers;
 impl JniHandler for Answers {
-    fn get_static_object_field(
-        &mut self,
-        emu: &mut Emulator,
-        call: &JniCall<'_>,
-    ) -> Option<Handle> {
-        Some(emu.class(call.class))
-    }
-    fn call_static_object_method(&mut self, emu: &mut Emulator, _: &JniCall<'_>) -> Option<Handle> {
-        Some(emu.new_string("UTF-8"))
+    fn member(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+        match (call.op, call.is_static, call.type_code) {
+            (JniOp::Get, true, b'L') => Some(JniValue::Object(emu.class(call.class))),
+            (JniOp::Call, true, b'L') => Some(JniValue::Object(emu.new_string("UTF-8"))),
+            _ => None,
+        }
     }
 }
 

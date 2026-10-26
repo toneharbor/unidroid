@@ -7,6 +7,7 @@ mod frames;
 mod java;
 mod natives;
 mod objects;
+mod signatures;
 mod strings;
 
 fn libc_emulator(arch: crate::Architecture) -> Result<(Emulator, Module)> {

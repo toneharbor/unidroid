@@ -37,12 +37,12 @@ fn errors_outside_a_rule_have_no_rule_index() {
 #[test]
 fn wrong_primitive_and_object_values_report_the_rule_index() -> Result<()> {
     macro_rules! bad {
-        ($emu:ident, $value:expr, $method:ident, $signature:literal) => {{
+        ($emu:ident, $value:expr, $signature:literal) => {{
             let mut policy = Policy::parse(&json!({"rules":[{"op":"set"},{"value":$value}]}).to_string())?;
             let mut probe = Probe::default();
             {
                 let mut handler = policy.handler(&mut probe);
-                assert_eq!(handler.$method(&mut $emu, &call($signature)), None);
+                assert_eq!(handler.member(&mut $emu, &call($signature)), None);
                 let error = handler.finish(Ok(())).unwrap_err().to_string();
                 assert!(error.contains(concat!("rule 1 for call test/Answers->value", $signature)), "{error}");
             }
@@ -52,16 +52,16 @@ fn wrong_primitive_and_object_values_report_the_rule_index() -> Result<()> {
     for lib in ["rootfs/lib64/libc.so", "rootfs/lib/libc.so"] {
         let mut emu = Emulator::builder().build()?;
         emu.load_library(lib)?;
-        bad!(emu, 1, call_boolean_method, "()Z");
-        bad!(emu, 128, call_byte_method, "()B");
-        bad!(emu, -1, call_char_method, "()C");
-        bad!(emu, 32768, call_short_method, "()S");
-        bad!(emu, 2147483648i64, call_int_method, "()I");
-        bad!(emu, 1.5, call_int_method, "()I");
-        bad!(emu, 9007199254740993i64, call_long_method, "()J");
-        bad!(emu, "9223372036854775808", call_long_method, "()J");
-        bad!(emu, 1e40, call_float_method, "()F");
-        bad!(emu, "1.5", call_double_method, "()D");
+        bad!(emu, 1, "()Z");
+        bad!(emu, 128, "()B");
+        bad!(emu, -1, "()C");
+        bad!(emu, 32768, "()S");
+        bad!(emu, 2147483648i64, "()I");
+        bad!(emu, 1.5, "()I");
+        bad!(emu, 9007199254740993i64, "()J");
+        bad!(emu, "9223372036854775808", "()J");
+        bad!(emu, 1e40, "()F");
+        bad!(emu, "1.5", "()D");
         for value in [
             json!(5),
             json!(true),
@@ -71,7 +71,7 @@ fn wrong_primitive_and_object_values_report_the_rule_index() -> Result<()> {
             json!({"array":"B"}),
             json!({"array":"B","base64":"!"}),
         ] {
-            bad!(emu, value, call_object_method, "()Ljava/lang/Object;");
+            bad!(emu, value, "()Ljava/lang/Object;");
         }
     }
     Ok(())

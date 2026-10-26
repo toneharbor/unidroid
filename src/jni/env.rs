@@ -1,4 +1,4 @@
-use super::names::jni_name;
+use super::names::{jni_name, member_function};
 use super::{Handle, JniHandler, Object};
 use crate::{Emulator, Result};
 use std::rc::Rc;
@@ -47,14 +47,18 @@ impl Emulator {
         // The kind of reference each function takes as its first argument.
         // NewStringUTF, NewDirectByteBuffer and GetObjectRefType take a
         // pointer or any value there, so they are not checked.
-        let kind = match index {
-            21..=25 | 32 | 226 | 227 => Some(6),
-            164..=166 | 168..=170 | 220 | 221 | 224 | 225 => Some(2),
-            171 => Some(5),
-            183..=214 | 222 | 223 => Some(3),
-            9 | 10 | 12 | 27..=30 | 33 | 94 | 113..=162 | 215 | 216 => Some(1),
-            31 | 34..=93 | 95..=112 | 230 | 231 => Some(0),
-            _ => None,
+        let kind = if let Some(member) = member_function(index) {
+            Some(u8::from(member.is_static || member.op == super::JniOp::New))
+        } else {
+            match index {
+                21..=25 | 32 | 226 | 227 => Some(6),
+                164..=166 | 168..=170 | 220 | 221 | 224 | 225 => Some(2),
+                171 => Some(5),
+                183..=214 | 222 | 223 => Some(3),
+                9 | 10 | 12 | 27 | 33 | 94 | 113 | 144 | 215 | 216 => Some(1),
+                31 | 230 | 231 => Some(0),
+                _ => None,
+            }
         };
         if let Some(kind) = kind {
             self.validate_ref(&function, a, kind)?;
@@ -90,7 +94,7 @@ impl Emulator {
         if matches!(index, 226 | 227) {
             self.validate_ref(&function, a, 6)?;
         }
-        if self.trace.jni && !matches!(index,28..=30 | 34..=93 | 95..=112 | 114..=143 | 145..=162) {
+        if self.trace.jni && member_function(index).is_none() {
             let details = self
                 .jni_details(index, [a, b, c])?
                 .unwrap_or_else(|| format!("arg1=0x{a:x}, arg2=0x{b:x}, arg3=0x{c:x}"));
@@ -106,16 +110,17 @@ impl Emulator {
             9 | 12 => self.jni_to_reflected(&function, b, c != 0),
             10 => {
                 let class = self.class_name(Handle(a))?;
-                if class == "java/lang/Object" {
-                    return Ok(0);
+                let superclass = self.jni.superclasses.get(&class).cloned();
+                if let Some(superclass) = superclass {
+                    return Ok(self.find_class(&superclass).0);
                 }
-                let Some(superclass) = self.jni.superclasses.get(&class).cloned() else {
-                    return Err(format!(
-                        "GetSuperclass {class} from {}: superclass not declared; declare it with Emulator::superclass, --superclass, or the serve command superclass",
-                        self.location(self.lr()?)
-                    ).into());
-                };
-                Ok(self.find_class(&superclass).0)
+                if let Some(row) = super::java::hierarchy::class(&class, self.apk().is_some()) {
+                    return Ok(row.superclass.map_or(0, |name| self.find_class(name).0));
+                }
+                Err(format!(
+                    "GetSuperclass {class} from {}: superclass not declared; declare it with Emulator::superclass, --superclass, or the serve command superclass",
+                    self.location(self.lr()?)
+                ).into())
             }
             32 if a == 0 => Ok(1),
             11 | 32 => {
@@ -274,7 +279,9 @@ impl Emulator {
                 let name = self.jni_object(Handle(a))?.borrow().java_type();
                 Ok(self.find_class(&name).0)
             }
-            28..=30 | 33..=162 => self.jni_members_function(index, function, a, b, c, handler),
+            _ if member_function(index).is_some() || matches!(index, 33 | 94 | 113 | 144) => {
+                self.jni_members_function(index, function, a, b, c, handler)
+            }
             163..=170 | 220 | 221 | 224 | 225 => {
                 self.jni_strings_function(index, function, a, b, c)
             }

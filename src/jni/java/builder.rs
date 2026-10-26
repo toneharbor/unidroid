@@ -17,16 +17,23 @@ pub(super) fn construct(emu: &mut Emulator, call: &JniCall<'_>) -> Result<Option
     };
     Ok(Some(emu.insert_object(Object::StringBuilder(value)).into()))
 }
-pub(super) fn argument(emu: &Emulator, value: JniValue) -> Result<Option<Vec<u16>>> {
-    Ok(match value {
-        JniValue::Object(handle) => object::text(&reference(emu, handle)?),
-        _ => Some(boxing::text(value)),
-    })
+fn argument(
+    emu: &mut Emulator,
+    value: JniValue,
+    function: &str,
+    handler: &mut dyn JniHandler,
+) -> Result<Vec<u16>> {
+    match value {
+        JniValue::Object(handle) => object_text(emu, handle, function, handler),
+        _ => Ok(boxing::text(value)),
+    }
 }
 pub(super) fn call(
     emu: &mut Emulator,
     call: &JniCall<'_>,
     receiver: &Rc<RefCell<Object>>,
+    function: &str,
+    handler: &mut dyn JniHandler,
 ) -> Result<Option<JniValue>> {
     match (call.name, call.signature) {
         ("length", "()I") => {
@@ -44,9 +51,7 @@ pub(super) fn call(
             | "(C)Ljava/lang/StringBuilder;"
             | "(Z)Ljava/lang/StringBuilder;",
         ) => {
-            let Some(value) = argument(emu, call.args[0])? else {
-                return Ok(None);
-            };
+            let value = argument(emu, call.args[0], function, handler)?;
             let Object::StringBuilder(builder) = &mut *receiver.borrow_mut() else {
                 unreachable!()
             };

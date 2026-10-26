@@ -1,6 +1,7 @@
 use super::*;
 use crate::{Architecture, Resume, Stop, StopReason};
 
+mod append;
 mod lifecycle;
 mod threads;
 

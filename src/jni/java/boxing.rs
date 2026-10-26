@@ -191,12 +191,9 @@ pub(super) fn static_call(
         }
         ("java/lang/Integer", "toString", "(I)Ljava/lang/String;")
         | ("java/lang/Long", "toString", "(J)Ljava/lang/String;") => string(emu, text(a[0])),
-        ("java/lang/Integer", "toHexString", "(I)Ljava/lang/String;") => string(
-            emu,
-            format!("{:x}", a[0].int() as u32)
-                .encode_utf16()
-                .collect::<Vec<_>>(),
-        ),
+        ("java/lang/Integer", "toHexString", "(I)Ljava/lang/String;") => {
+            string_utf8(emu, &format!("{:x}", a[0].int() as u32))
+        }
         _ => return Ok(None),
     };
     Ok(Some(result))

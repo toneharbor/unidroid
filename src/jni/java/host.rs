@@ -19,17 +19,12 @@ impl Emulator {
         let entries = match &*self.jni_object(handle)?.borrow() {
             Object::Map(map) => map.ordered(),
             object => {
-                return Err(format!(
-                    "invalid handle {}: {}, not a built-in map",
-                    handle.0,
-                    object.java_type()
-                )
-                .into());
+                return Err(object.handle_error(handle, "a built-in map"));
             }
         };
         Ok(entries
             .into_iter()
-            .map(|(key, value)| (self.java_host_ref(key), self.java_host_ref(value)))
+            .map(|(key, value)| (self.handle_or_null(key, 0), self.handle_or_null(value, 0)))
             .collect())
     }
     pub fn new_java_list(&mut self, class: &str, items: &[Handle]) -> Result<Handle> {
@@ -50,17 +45,12 @@ impl Emulator {
         let items = match &*self.jni_object(handle)?.borrow() {
             Object::List(_, items) => items.clone(),
             object => {
-                return Err(format!(
-                    "invalid handle {}: {}, not a built-in list",
-                    handle.0,
-                    object.java_type()
-                )
-                .into());
+                return Err(object.handle_error(handle, "a built-in list"));
             }
         };
         Ok(items
             .into_iter()
-            .map(|item| self.java_host_ref(item))
+            .map(|item| self.handle_or_null(item, 0))
             .collect())
     }
     pub fn new_boxed(&mut self, value: JniValue) -> Result<Handle> {
@@ -72,15 +62,7 @@ impl Emulator {
     pub fn unboxed(&self, handle: Handle) -> Result<JniValue> {
         match &*self.jni_object(handle)?.borrow() {
             Object::Boxed(value) => Ok(*value),
-            object => Err(format!(
-                "invalid handle {}: {}, not a boxed primitive",
-                handle.0,
-                object.java_type()
-            )
-            .into()),
+            object => Err(object.handle_error(handle, "a boxed primitive")),
         }
-    }
-    fn java_host_ref(&mut self, object: ObjectRef) -> Handle {
-        object.map_or(Handle(0), |object| self.insert_ref(object, 0))
     }
 }

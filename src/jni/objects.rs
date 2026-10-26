@@ -168,6 +168,13 @@ impl Emulator {
         );
         handle
     }
+    pub(super) fn handle_or_null(
+        &mut self,
+        object: super::java::ObjectRef,
+        scope: usize,
+    ) -> Handle {
+        object.map_or(Handle(0), |object| self.insert_ref(object, scope))
+    }
     pub(super) fn allocate_object(&mut self, object: Object) -> Rc<RefCell<Object>> {
         let object = Rc::new(RefCell::new(object));
         self.jni.track_container(&object);
@@ -251,12 +258,7 @@ impl Emulator {
     pub fn string(&self, handle: Handle) -> Result<String> {
         match &*self.jni_object(handle)?.borrow() {
             Object::String(s) => Ok(String::from_utf16_lossy(s)),
-            object => Err(format!(
-                "invalid handle {}: {}, not a string",
-                handle.0,
-                object.java_type()
-            )
-            .into()),
+            object => Err(object.handle_error(handle, "a string")),
         }
     }
     pub fn new_byte_array(&mut self, bytes: &[u8]) -> Handle {
@@ -272,12 +274,7 @@ impl Emulator {
     pub fn primitive_array(&self, handle: Handle) -> Result<Vec<u8>> {
         match &*self.jni_object(handle)?.borrow() {
             Object::Array(_, bytes) => Ok(bytes.clone()),
-            object => Err(format!(
-                "invalid handle {}: {}, not a primitive array",
-                handle.0,
-                object.java_type()
-            )
-            .into()),
+            object => Err(object.handle_error(handle, "a primitive array")),
         }
     }
     pub fn new_object<T: Any>(&mut self, class: &str, value: T) -> Handle {
@@ -286,11 +283,7 @@ impl Emulator {
     pub fn new_object_array(&mut self, class: &str, values: &[Handle]) -> Result<Handle> {
         let values = values
             .iter()
-            .map(|handle| {
-                (handle.0 != 0)
-                    .then(|| self.jni_object(*handle))
-                    .transpose()
-            })
+            .map(|&handle| super::java::reference(self, handle))
             .collect::<Result<_>>()?;
         Ok(self.insert_api_object(Object::ObjectArray(values, class.into())))
     }
@@ -298,17 +291,12 @@ impl Emulator {
         let values = match &*self.jni_object(handle)?.borrow() {
             Object::ObjectArray(values, _) => values.clone(),
             object => {
-                return Err(format!(
-                    "invalid handle {}: {}, not an object array",
-                    handle.0,
-                    object.java_type()
-                )
-                .into());
+                return Err(object.handle_error(handle, "an object array"));
             }
         };
         Ok(values
             .into_iter()
-            .map(|object| object.map_or(Handle(0), |object| self.insert_ref(object, 0)))
+            .map(|object| self.handle_or_null(object, 0))
             .collect())
     }
     pub(super) fn pending_exception(&mut self, class: &str, message: Option<String>) {

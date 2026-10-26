@@ -12,7 +12,9 @@ fn nested_collection_policy_values_create_fresh_builtin_objects() -> Result<()> 
         for _ in 0..2 {
             let mut fallback = ();
             let mut handler = policy.handler(&mut fallback);
-            let answer = handler.call_object_method(&mut emu, &call("()Ljava/lang/Object;"));
+            let answer = handler
+                .member(&mut emu, &call("()Ljava/lang/Object;"))
+                .map(JniValue::object);
             handler.finish(Ok(()))?;
             let entries = emu.java_map(answer.unwrap())?;
             assert_eq!(emu.string(entries[0].0)?, "k");
@@ -36,7 +38,7 @@ fn nested_collection_policy_values_create_fresh_builtin_objects() -> Result<()> 
         let mut handler = policy.handler(&mut fallback);
         assert!(
             handler
-                .call_object_method(&mut emu, &call("()Ljava/lang/Object;"))
+                .member(&mut emu, &call("()Ljava/lang/Object;"))
                 .is_none()
         );
         assert!(

@@ -1,15 +1,56 @@
 use super::*;
 
 #[test]
+fn string_builder_append_object_uses_the_handlers_to_string() -> Result<()> {
+    struct Text;
+    impl JniHandler for Text {
+        fn member(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+            assert_eq!(
+                (call.op, call.is_static, call.type_code),
+                (JniOp::Call, false, b'L')
+            );
+            assert_eq!(
+                (call.class, call.name, call.signature),
+                ("app/Text", "toString", "()Ljava/lang/String;")
+            );
+            Some(emu.new_string("handler text").into())
+        }
+    }
+    for arch in ARCHES {
+        let mut emu = emulator(arch)?;
+        let object = emu.new_object("app/Text", ());
+        let builder = construct(&mut emu, "java/lang/StringBuilder", "()V", &[])?;
+        let result = member(
+            &mut emu,
+            &mut Text,
+            builder,
+            "java/lang/StringBuilder",
+            "append(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
+            &[object.into()],
+            0,
+        )?
+        .object();
+        assert_eq!(jni_call(&mut emu, 24, &[builder.0, result.0])?, 1);
+        assert_eq!(text(&mut emu, builder)?, "handler text");
+    }
+    Ok(())
+}
+
+#[test]
 fn string_value_of_object_returns_its_to_string_result() -> Result<()> {
     struct Text(Handle);
     impl JniHandler for Text {
-        fn call_object_method(&mut self, _: &mut Emulator, call: &JniCall<'_>) -> Option<Handle> {
-            assert_eq!(
-                (call.class, call.name, call.signature),
-                ("test/Text", "toString", "()Ljava/lang/String;")
-            );
-            Some(self.0)
+        fn member(&mut self, _: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+            match (call.op, call.is_static, call.type_code) {
+                (JniOp::Call, false, b'L') => {
+                    assert_eq!(
+                        (call.class, call.name, call.signature),
+                        ("test/Text", "toString", "()Ljava/lang/String;")
+                    );
+                    Some(JniValue::Object(self.0))
+                }
+                _ => None,
+            }
         }
     }
     for arch in ARCHES {

@@ -57,10 +57,14 @@ pub(super) fn equal(emu: &Emulator, a: &ObjectRef, b: &ObjectRef) -> bool {
         _ => false,
     }
 }
-pub(super) fn text(object: &ObjectRef) -> Option<Vec<u16>> {
-    text_inner(object, &mut Vec::new())
+pub(super) fn text(emu: &mut Emulator, object: &ObjectRef) -> Option<Vec<u16>> {
+    text_inner(emu, object, &mut Vec::new())
 }
-fn text_inner(object: &ObjectRef, seen: &mut Vec<*const RefCell<Object>>) -> Option<Vec<u16>> {
+fn text_inner(
+    emu: &mut Emulator,
+    object: &ObjectRef,
+    seen: &mut Vec<*const RefCell<Object>>,
+) -> Option<Vec<u16>> {
     let Some(object) = object else {
         return Some("null".encode_utf16().collect());
     };
@@ -72,18 +76,30 @@ fn text_inner(object: &ObjectRef, seen: &mut Vec<*const RefCell<Object>>) -> Opt
     let result = match &*object.borrow() {
         Object::String(value) | Object::StringBuilder(value) => Some(value.clone()),
         Object::Boxed(value) => Some(boxing::text(*value)),
+        Object::Android(_) => {
+            let hash = hash(emu, &Some(object.clone()));
+            Some(
+                format!(
+                    "{}@{:x}",
+                    object.borrow().java_type().replace('/', "."),
+                    hash as u32
+                )
+                .encode_utf16()
+                .collect(),
+            )
+        }
         Object::List(_, items) => {
             let mut values = Vec::new();
             for item in items {
-                values.push(element_text(item, object, seen, "(this Collection)")?);
+                values.push(element_text(emu, item, object, seen, "(this Collection)")?);
             }
             Some(join(&values, "[", ", ", "]"))
         }
         Object::Map(map) => {
             let mut values = Vec::new();
             for (key, value) in map.ordered() {
-                let key = element_text(&key, object, seen, "(this Map)")?;
-                let value = element_text(&value, object, seen, "(this Map)")?;
+                let key = element_text(emu, &key, object, seen, "(this Map)")?;
+                let value = element_text(emu, &value, object, seen, "(this Map)")?;
                 values.push(join(&[key, value], "", "=", ""));
             }
             Some(join(&values, "{", ", ", "}"))
@@ -94,6 +110,7 @@ fn text_inner(object: &ObjectRef, seen: &mut Vec<*const RefCell<Object>>) -> Opt
     result
 }
 fn element_text(
+    emu: &mut Emulator,
     item: &ObjectRef,
     owner: &Rc<RefCell<Object>>,
     seen: &mut Vec<*const RefCell<Object>>,
@@ -102,7 +119,7 @@ fn element_text(
     if item.as_ref().is_some_and(|item| Rc::ptr_eq(item, owner)) {
         Some(recursive.encode_utf16().collect())
     } else {
-        text_inner(item, seen)
+        text_inner(emu, item, seen)
     }
 }
 fn join(items: &[Vec<u16>], start: &str, separator: &str, end: &str) -> Vec<u16> {
@@ -132,16 +149,7 @@ pub(super) fn call(
             &reference(emu, call.args[0].object())?,
         )),
         ("toString", "()Ljava/lang/String;") => {
-            if matches!(&*receiver.borrow(), Object::Android(_)) {
-                let hash = hash(emu, &Some(receiver.clone()));
-                let value = format!(
-                    "{}@{:x}",
-                    receiver.borrow().java_type().replace('/', "."),
-                    hash as u32
-                );
-                return Ok(Some(string(emu, value.encode_utf16().collect::<Vec<_>>())));
-            }
-            let Some(value) = text(&Some(receiver.clone())) else {
+            let Some(value) = text(emu, &Some(receiver.clone())) else {
                 return Ok(None);
             };
             if matches!(&*receiver.borrow(), Object::String(_)) {
@@ -154,10 +162,7 @@ pub(super) fn call(
             let Object::Class(name) = &*receiver.borrow() else {
                 return Ok(None);
             };
-            string(
-                emu,
-                name.replace('/', ".").encode_utf16().collect::<Vec<_>>(),
-            )
+            string_utf8(emu, &name.replace('/', "."))
         }
         _ => return Ok(None),
     };

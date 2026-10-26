@@ -101,11 +101,16 @@ fn pending_exceptions_keep_the_raising_call_location_through_inspection_and_rewi
 fn builtin_and_handler_exceptions_remember_their_jni_origin() -> Result<()> {
     struct Raises;
     impl JniHandler for Raises {
-        fn call_static_int_method(&mut self, emu: &mut Emulator, _: &JniCall<'_>) -> Option<i32> {
-            // Nested guest calls restore the outer JNI call before the handler raises.
-            assert_eq!(jni_call(emu, 4, &[]).unwrap(), 0x10006);
-            emu.pending_exception("test/HandlerException", None);
-            Some(0)
+        fn member(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+            match (call.op, call.is_static, call.type_code) {
+                (JniOp::Call, true, b'I') => {
+                    // Nested guest calls restore the outer JNI call before the handler raises.
+                    assert_eq!(jni_call(emu, 4, &[]).unwrap(), 0x10006);
+                    emu.pending_exception("test/HandlerException", None);
+                    Some(JniValue::Int(0))
+                }
+                _ => None,
+            }
         }
     }
     for arch in ARCHES {

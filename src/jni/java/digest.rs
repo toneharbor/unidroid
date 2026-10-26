@@ -98,9 +98,7 @@ pub(super) fn call(
             digest.state.reset();
             JniValue::Void
         }
-        ("getAlgorithm", "()Ljava/lang/String;") => {
-            string(emu, digest.algorithm.encode_utf16().collect::<Vec<_>>())
-        }
+        ("getAlgorithm", "()Ljava/lang/String;") => string_utf8(emu, &digest.algorithm),
         _ => return Ok(None),
     };
     Ok(Some(result))

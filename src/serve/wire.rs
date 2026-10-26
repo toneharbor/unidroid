@@ -24,42 +24,12 @@ pub(super) struct Method {
 impl TryFrom<String> for Method {
     type Error = serde_json::Error;
     fn try_from(name: String) -> std::result::Result<Self, Self::Error> {
-        fn field(bytes: &mut &[u8]) -> Option<u8> {
-            let (&kind, rest) = bytes.split_first()?;
-            *bytes = rest;
-            match kind {
-                b'Z' | b'B' | b'C' | b'S' | b'I' | b'J' | b'F' | b'D' => {}
-                b'L' => {
-                    let end = bytes.iter().position(|&b| b == b';')?;
-                    if end == 0 {
-                        return None;
-                    }
-                    *bytes = &bytes[end + 1..];
-                }
-                b'[' => {
-                    field(bytes)?;
-                }
-                _ => return None,
-            }
-            Some(kind)
-        }
         let parse = || {
             let start = name.find('(')?;
             if start == 0 {
                 return None;
             }
-            let mut bytes = &name.as_bytes()[start + 1..];
-            let mut parameters = Vec::new();
-            while bytes.first() != Some(&b')') {
-                parameters.push(field(&mut bytes)?);
-            }
-            bytes = &bytes[1..];
-            if bytes == b"V" {
-                bytes = &[];
-            } else {
-                field(&mut bytes)?;
-            }
-            bytes.is_empty().then_some(parameters)
+            crate::jni::value::method_types(&name[start..]).map(|(parameters, _)| parameters)
         };
         let parameters = parse().ok_or_else(|| {
             <serde_json::Error as Error>::invalid_value(

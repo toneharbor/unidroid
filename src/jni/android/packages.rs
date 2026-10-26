@@ -25,11 +25,11 @@ pub(super) fn field(
     let apk = emu.apk.as_ref().unwrap().clone();
     let value = match receiver {
         Object::Android(Android::PackageInfo(flags)) => match (call.name, call.signature) {
-            ("packageName", "Ljava/lang/String;") => string(emu, &apk.package),
+            ("packageName", "Ljava/lang/String;") => string_utf8(emu, &apk.package),
             ("versionName", "Ljava/lang/String;") => apk
                 .version_name
                 .as_ref()
-                .map_or(Handle(0).into(), |value| string(emu, value)),
+                .map_or(Handle(0).into(), |value| string_utf8(emu, value)),
             ("versionCode", "I") => JniValue::Int(apk.version_code as i32),
             ("signatures", "[Landroid/content/pm/Signature;") => {
                 if flags & 0x40 == 0 {
@@ -59,7 +59,7 @@ pub(super) fn field(
                 "processName" => emu.process_name.clone(),
                 _ => return Ok(None),
             };
-            string(emu, &value)
+            string_utf8(emu, &value)
         }
         _ => return Ok(None),
     };
@@ -102,7 +102,7 @@ pub(super) fn call(
         }
         (Object::Android(Android::Signature(bytes)), "toCharsString", "()Ljava/lang/String;") => {
             let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-            string(emu, &hex)
+            string_utf8(emu, &hex)
         }
         (Object::Android(Android::SigningInfo), name, signature) => {
             let apk = emu.apk.as_ref().unwrap().clone();

@@ -81,13 +81,8 @@ impl Emulator {
     }
 
     pub(crate) fn asset_function(&mut self, name: &str) -> Result<u64> {
-        self.asset_call(name).map_err(|error| {
-            format!(
-                "{name}: {error} from {}",
-                self.location(self.lr().unwrap_or(0))
-            )
-            .into()
-        })
+        self.asset_call(name)
+            .map_err(|error| self.jni_message(format!("{name}: {error}")).into())
     }
 
     fn asset_call(&mut self, name: &str) -> Result<u64> {

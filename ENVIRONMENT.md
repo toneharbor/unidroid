@@ -130,7 +130,7 @@ All these objects answer `getClass()Ljava/lang/Class;`, `toString()Ljava/lang/St
 - `android/app/ApplicationPackageManager` → `android/content/pm/PackageManager` → `java/lang/Object`.
 - PackageInfo, Signature, SigningInfo, ApplicationInfo and AssetManager → `java/lang/Object`.
 
-Declared app superclasses extend these chains. Unrelated Android and Java targets return false for known built-in sources; app-specific targets still reach `is_assignable`. `GetSuperclass` retains its explicit-declaration rule.
+Declared app superclasses extend these chains. Unrelated Android and Java targets return false for known built-in sources; app-specific targets still reach `is_assignable`. `GetSuperclass` uses explicit declarations first, then this built-in hierarchy when an APK is configured.
 
 With an APK, these C imports bind to host functions even though rootfs has no `libandroid.so`. `find_symbol` and `dlsym` resolve them, `hook_import` wraps them with the built-in as `original`, and import traces identify the built-ins as `libandroid.so`.
 
@@ -207,12 +207,14 @@ The constructors create or reuse the same member IDs as the corresponding `Get*I
 For example, a handler can model `Class.getDeclaredMethod` for a known no-argument app method and return an object accepted by `FromReflectedMethod`:
 
 ```rust
-use unidroid::{Emulator, Handle, JniCall, JniHandler};
+use unidroid::{Emulator, JniCall, JniHandler, JniOp, JniValue};
 
 struct Reflection;
 impl JniHandler for Reflection {
-    fn call_object_method(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<Handle> {
-        if call.class == "java/lang/Class"
+    fn member(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+        if call.op == JniOp::Call
+            && !call.is_static
+            && call.class == "java/lang/Class"
             && call.name == "getDeclaredMethod"
             && call.signature == "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;"
             && emu.string(call.args[0].object()).ok()? == "run"
@@ -223,7 +225,7 @@ impl JniHandler for Reflection {
                 emu.release(parameter);
             }
             if no_parameters {
-                return Some(emu.new_reflected_method("com/example/Signer", "run", "()V", false));
+                return Some(emu.new_reflected_method("com/example/Signer", "run", "()V", false).into());
             }
         }
         None
@@ -231,7 +233,7 @@ impl JniHandler for Reflection {
 }
 ```
 
-String lengths and indexes count UTF-16 units, including each half of a surrogate pair. Supported charsets are UTF-8 (the default), US-ASCII, ISO-8859-1, UTF-16LE and UTF-16BE; names ignore case, hyphens and underscores. `String.valueOf(Object)` returns the object's `toString()` result, including the same object for a String; uncovered `toString` calls reach your handler. StringBuilder `append(Object)` uses built-in text. Both use `"null"` for null. Unknown element text falls through to your handler. Map and list text uses Java's `{key=value, ...}` and `[item, ...]` forms.
+String lengths and indexes count UTF-16 units, including each half of a surrogate pair. Supported charsets are UTF-8 (the default), US-ASCII, ISO-8859-1, UTF-16LE and UTF-16BE; names ignore case, hyphens and underscores. `String.valueOf(Object)` returns the object's `toString()` result, including the same object for a String; uncovered `toString` calls reach your handler. StringBuilder `append(Object)` shares that object-to-text path: built-in text, built-in `toString`, then `JniHandler::member` for `toString()Ljava/lang/String;`. Built-in Android objects use `class@hash`, including as list or map elements. Both use `"null"` for null. Unknown element text falls through to your handler. Map and list text uses Java's `{key=value, ...}` and `[item, ...]` forms.
 
 `Integer`, `Short`, `Byte` and `Long` cache `valueOf` results for `-128..=127`; `Character` caches `0..=127`, and `Boolean` caches both values. Constructors and host `new_boxed` still create new objects. Each `StandardCharsets` field also returns the same object on every read. These caches belong to JNI state, survive released handles and preserve identity across checkpoints. Returned references are fresh local references. Charset equality compares canonical names, and its hash is the canonical name's Java `String.hashCode`; for example `Charset.forName("utf-8")` equals `StandardCharsets.UTF_8`.
 
@@ -239,7 +241,7 @@ String keys compare by UTF-16 content; boxed keys compare by primitive type and 
 
 Map views (`keySet`, `values`, `entrySet`) and iterators are **snapshots taken when created**. This differs from Java's live views. They keep references to their elements. Releasing an element's host handle does not remove it from a collection. All built-in object state is copied by checkpoints, preserving aliases and cycles; rewind restores collection contents, iterator positions, StringBuilder contents and digest state. Dropping or rewinding JNI state frees container cycles even after their last handles were released.
 
-`IsInstanceOf` tests the object's runtime class: a class object such as `String.class` is a `java/lang/Class`. A null object returns true for any valid class; invalid class handles remain reference errors. `IsAssignableFrom` compares the represented classes. Both recognize built-in class hierarchies after explicit `superclass` declarations. A declared app subclass of HashMap is also a Map. Built-in sources answer false for unrelated `java/` or `javax/` targets; app-specific targets still reach `is_assignable`. `GetSuperclass` continues to use explicit declarations.
+`IsInstanceOf` tests the object's runtime class: a class object such as `String.class` is a `java/lang/Class`. A null object returns true for any valid class; invalid class handles remain reference errors. `IsAssignableFrom` compares the represented classes. Both recognize built-in class hierarchies after explicit `superclass` declarations. A declared app subclass of HashMap is also a Map. Built-in sources answer false for unrelated `java/` or `javax/` targets; app-specific targets still reach `is_assignable`. `GetSuperclass` uses explicit declarations first, then the built-in superclass; known interfaces and `java/lang/Object` return null. For example, String returns Object and HashMap returns AbstractMap. Undeclared app classes still error.
 
 Digests support MD5, SHA-1 (also SHA1 and SHA), SHA-224, SHA-256, SHA-384 and SHA-512, ignoring case. `digest` returns bytes and resets the digest. `getAlgorithm` preserves the requested name. Base64 flags are Android's `DEFAULT` 0, `NO_PADDING` 1, `NO_WRAP` 2, `CRLF` 4 and `URL_SAFE` 8. Wrapped encoding breaks after 76 characters; nonempty output ends in exactly one line break, and empty output has none. Decoding accepts padded or unpadded input and skips non-alphabet bytes as Android does. Invalid padding throws `IllegalArgumentException` with `bad base-64`.
 

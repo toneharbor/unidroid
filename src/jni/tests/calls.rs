@@ -1,29 +1,27 @@
 use super::*;
-use crate::jni::value::{argument_types, decode};
+use crate::jni::value::{decode, method_types};
 
 #[test]
 fn arm32_mixed_variadic_v_and_a_calls_include_nonvirtual_stack_arguments() -> Result<()> {
     struct Handler;
     impl JniHandler for Handler {
-        fn call_long_method(&mut self, _: &mut Emulator, call: &JniCall<'_>) -> Option<i64> {
-            assert_eq!(
-                call.args,
-                [
-                    JniValue::Long(0x1122_3344_5566_7788),
-                    JniValue::Int(-7),
-                    JniValue::Long(-2),
-                    JniValue::Float(3.5),
-                    JniValue::Double(9.5)
-                ]
-            );
-            Some(0x8877_6655_4433_2211u64 as i64)
-        }
-        fn call_static_long_method(
-            &mut self,
-            emu: &mut Emulator,
-            call: &JniCall<'_>,
-        ) -> Option<i64> {
-            self.call_long_method(emu, call)
+        fn member(&mut self, _: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+            match (call.op, call.is_static, call.type_code) {
+                (JniOp::Call, false, b'J') | (JniOp::Call, true, b'J') => {
+                    assert_eq!(
+                        call.args,
+                        [
+                            JniValue::Long(0x1122_3344_5566_7788),
+                            JniValue::Int(-7),
+                            JniValue::Long(-2),
+                            JniValue::Float(3.5),
+                            JniValue::Double(9.5)
+                        ]
+                    );
+                    Some(JniValue::Long(0x8877_6655_4433_2211u64 as i64))
+                }
+                _ => None,
+            }
         }
     }
     let mut emu = Emulator::builder().build()?;
@@ -170,36 +168,16 @@ fn arm32_native_arguments_use_even_register_pairs_and_aligned_stack_slots() -> R
 #[test]
 fn arm32_field_values_and_double_results_follow_softfp() -> Result<()> {
     struct Handler(JniValue);
-    impl Handler {
-        fn check(&self, call: &JniCall<'_>) -> Option<()> {
-            assert_eq!(call.args, [self.0]);
-            Some(())
-        }
-    }
     impl JniHandler for Handler {
-        fn set_long_field(&mut self, _: &mut Emulator, c: &JniCall<'_>) -> Option<()> {
-            self.check(c)
-        }
-        fn set_static_long_field(&mut self, _: &mut Emulator, c: &JniCall<'_>) -> Option<()> {
-            self.check(c)
-        }
-        fn set_float_field(&mut self, _: &mut Emulator, c: &JniCall<'_>) -> Option<()> {
-            self.check(c)
-        }
-        fn set_static_float_field(&mut self, _: &mut Emulator, c: &JniCall<'_>) -> Option<()> {
-            self.check(c)
-        }
-        fn set_double_field(&mut self, _: &mut Emulator, c: &JniCall<'_>) -> Option<()> {
-            self.check(c)
-        }
-        fn set_static_double_field(&mut self, _: &mut Emulator, c: &JniCall<'_>) -> Option<()> {
-            self.check(c)
-        }
-        fn get_double_field(&mut self, _: &mut Emulator, _: &JniCall<'_>) -> Option<f64> {
-            Some(9.5)
-        }
-        fn get_static_double_field(&mut self, _: &mut Emulator, _: &JniCall<'_>) -> Option<f64> {
-            Some(9.5)
+        fn member(&mut self, _: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+            match (call.op, call.is_static, call.type_code) {
+                (JniOp::Set, _, b'V') if matches!(call.signature, "J" | "F" | "D") => {
+                    assert_eq!(call.args, [self.0]);
+                    Some(JniValue::Void)
+                }
+                (JniOp::Get, false, b'D') | (JniOp::Get, true, b'D') => Some(JniValue::Double(9.5)),
+                _ => None,
+            }
         }
     }
     let mut emu = Emulator::builder().build()?;
@@ -257,22 +235,23 @@ fn jni_a_and_v_and_variadic_calls_decode_the_same_arguments() -> Result<()> {
         array: Handle,
     }
     impl JniHandler for Handler {
-        fn call_static_double_method(
-            &mut self,
-            _: &mut Emulator,
-            call: &JniCall<'_>,
-        ) -> Option<f64> {
-            assert_eq!(call.class, "example/Math");
-            assert_eq!(
-                call.args,
-                [
-                    JniValue::Int(-7),
-                    self.array.into(),
-                    JniValue::Float(3.5),
-                    JniValue::Long(-2)
-                ]
-            );
-            Some(9.5)
+        fn member(&mut self, _: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+            match (call.op, call.is_static, call.type_code) {
+                (JniOp::Call, true, b'D') => {
+                    assert_eq!(call.class, "example/Math");
+                    assert_eq!(
+                        call.args,
+                        [
+                            JniValue::Int(-7),
+                            self.array.into(),
+                            JniValue::Float(3.5),
+                            JniValue::Long(-2)
+                        ]
+                    );
+                    Some(JniValue::Double(9.5))
+                }
+                _ => None,
+            }
         }
     }
     for arch in [crate::Architecture::Arm32, crate::Architecture::Arm64] {
@@ -351,7 +330,10 @@ fn jni_a_and_v_and_variadic_calls_decode_the_same_arguments() -> Result<()> {
 
 #[test]
 fn signature_counts_arrays_and_classes_as_one_argument() {
-    assert_eq!(argument_types("([B[[ILjava/lang/String;JFD)V"), b"[[LJFD");
+    assert_eq!(
+        method_types("([B[[ILjava/lang/String;JFD)V").unwrap().0,
+        b"[[LJFD"
+    );
     assert_eq!(decode(b'B', 255), JniValue::Byte(-1));
     assert_eq!(decode(b'I', 0xffff_ffff), JniValue::Int(-1));
 }
@@ -363,46 +345,43 @@ fn rust_jni_handler_can_call_guest_code_without_clobbering_the_outer_call() -> R
         fields: usize,
     }
     impl JniHandler for Handler {
-        fn get_static_object_field(
-            &mut self,
-            emu: &mut Emulator,
-            call: &JniCall<'_>,
-        ) -> Option<Handle> {
-            if call.name != "TYPE" || call.signature != "Ljava/lang/Class;" {
-                return None;
-            }
-            let name = match call.class {
-                "java/lang/Void" => "void",
-                "java/lang/Boolean" => "boolean",
-                "java/lang/Byte" => "byte",
-                "java/lang/Character" => "char",
-                "java/lang/Short" => "short",
-                "java/lang/Integer" => "int",
-                "java/lang/Long" => "long",
-                "java/lang/Float" => "float",
-                "java/lang/Double" => "double",
-                _ => return None,
-            };
-            assert_eq!(emu.call_function(self.strlen, &[self.text]).unwrap(), 6);
-            self.fields += 1;
-            Some(emu.class(name))
-        }
-        fn call_static_object_method(
-            &mut self,
-            emu: &mut Emulator,
-            call: &JniCall<'_>,
-        ) -> Option<Handle> {
-            if (call.class, call.name, call.signature)
-                == (
-                    "java/lang/System",
-                    "getProperty",
-                    "(Ljava/lang/String;)Ljava/lang/String;",
-                )
-                && emu.string(call.args[0].object()).ok()? == "file.encoding"
-            {
-                Some(emu.new_string("UTF-8"))
-            } else {
-                None
+        fn member(&mut self, emu: &mut Emulator, call: &JniCall<'_>) -> Option<JniValue> {
+            match (call.op, call.is_static, call.type_code) {
+                (JniOp::Get, true, b'L') => {
+                    if call.name != "TYPE" || call.signature != "Ljava/lang/Class;" {
+                        return None;
+                    }
+                    let name = match call.class {
+                        "java/lang/Void" => "void",
+                        "java/lang/Boolean" => "boolean",
+                        "java/lang/Byte" => "byte",
+                        "java/lang/Character" => "char",
+                        "java/lang/Short" => "short",
+                        "java/lang/Integer" => "int",
+                        "java/lang/Long" => "long",
+                        "java/lang/Float" => "float",
+                        "java/lang/Double" => "double",
+                        _ => return None,
+                    };
+                    assert_eq!(emu.call_function(self.strlen, &[self.text]).unwrap(), 6);
+                    self.fields += 1;
+                    Some(JniValue::Object(emu.class(name)))
+                }
+                (JniOp::Call, true, b'L') => {
+                    if (call.class, call.name, call.signature)
+                        == (
+                            "java/lang/System",
+                            "getProperty",
+                            "(Ljava/lang/String;)Ljava/lang/String;",
+                        )
+                        && emu.string(call.args[0].object()).ok()? == "file.encoding"
+                    {
+                        Some(JniValue::Object(emu.new_string("UTF-8")))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
             }
         }
     }
