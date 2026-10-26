@@ -58,10 +58,8 @@ impl Emulator {
         for (start, end) in ranges {
             let sites = state.clone();
             let events = self.events.clone();
-            hooks.push(self.cpu_mut()?.add_code_hook(
-                start,
-                end - 1,
-                move |cpu, address, size| {
+            hooks.push(
+                self.add_code_hook(start, end - 1, move |cpu, address, size| {
                     let mut state = sites.borrow_mut();
                     match call(cpu, arch, address, size) {
                         Ok(Some(pending)) => {
@@ -77,8 +75,8 @@ impl Emulator {
                             ),
                         }),
                     }
-                },
-            )?);
+                })?,
+            );
         }
         self.calls = Some(Calls { hooks, state });
         self.cpu_mut()?.ctl_flush_tb()?;

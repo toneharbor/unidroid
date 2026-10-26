@@ -59,16 +59,7 @@ impl Emulator {
                 Ok(0)
             }
             167 => {
-                let mut bytes = Vec::new();
-                let mut p = a;
-                loop {
-                    let byte = self.read_bytes(p, 1)?[0];
-                    if byte == 0 {
-                        break;
-                    }
-                    bytes.push(byte);
-                    p += 1;
-                }
+                let bytes = self.read_cstring_bytes(a)?;
                 Ok(self
                     .insert_object(Object::String(decode_modified_utf8(&bytes)))
                     .0)

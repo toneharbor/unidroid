@@ -15,11 +15,18 @@ pub struct Tracepoint {
 #[derive(Default)]
 pub(crate) struct Tracepoints {
     points: BTreeMap<u64, (Rc<RefCell<Point>>, UcHookId)>,
+    stale: bool,
 }
 struct Point {
     values: Vec<(String, Expr)>,
     log: bool,
     hits: BTreeMap<u64, u64>,
+}
+
+impl Tracepoints {
+    pub(crate) fn mark_stale(&mut self) {
+        self.stale = true;
+    }
 }
 
 impl Emulator {
@@ -81,19 +88,23 @@ impl Emulator {
     }
 
     pub(crate) fn refresh_tracepoints(&mut self) -> Result<()> {
+        if !self.tracepoints.stale {
+            return Ok(());
+        }
         let points = self.tracepoints.points.clone();
         for (address, (point, _)) in points {
             self.install_tracepoint(address, point)?;
         }
+        self.tracepoints.stale = false;
         Ok(())
     }
 
     fn install_tracepoint(&mut self, address: u64, point: Rc<RefCell<Point>>) -> Result<()> {
-        let at = self.symbolize(address);
         let events = self.events.clone();
+        let modules = self.module_table.clone();
         let previous = self.tracepoints.points.get(&address).map(|(_, hook)| *hook);
         let callback = point.clone();
-        let hook = self.install_address_hook(address, move |cpu, pc, _| {
+        let hook = self.install_tracepoint_hook(address, move |cpu, pc, _| {
             if pc != address {
                 return;
             }
@@ -103,6 +114,7 @@ impl Emulator {
                 *point.hits.entry(value).or_default() += 1;
             }
             if point.log {
+                let at = modules.borrow().symbolize(address);
                 let values = point
                     .values
                     .iter()
@@ -112,7 +124,7 @@ impl Emulator {
                     })
                     .collect();
                 events.borrow_mut().emit(Event::Tracepoint {
-                    at: at.clone(),
+                    at,
                     address,
                     thread: cpu.get_data().thread,
                     values,

@@ -89,12 +89,11 @@ impl Emulator {
         if self.watchpoints.boundary.is_none() {
             // Memory callbacks run inside an instruction. Let all of its accesses
             // finish, then stop at the next code hook (after an IT block on Thumb).
-            self.watchpoints.boundary =
-                Some(self.cpu_mut()?.add_code_hook(1, 0, |cpu, _, _| {
-                    if cpu.get_data().watch.is_some() {
-                        let _ = cpu.emu_stop();
-                    }
-                })?);
+            self.watchpoints.boundary = Some(self.add_code_hook(1, 0, |cpu, _, _| {
+                if cpu.get_data().watch.is_some() {
+                    let _ = cpu.emu_stop();
+                }
+            })?);
         }
         // The affected instructions can be anywhere, not just in the data range.
         self.cpu_mut()?.ctl_flush_tb()?;
