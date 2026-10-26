@@ -114,7 +114,7 @@ impl Emulator {
                 .backtrace()?
                 .into_iter()
                 .skip(1)
-                .map(|frame| self.symbolize(frame.address))
+                .map(|frame| frame.to_string())
                 .collect(),
         });
         Ok(())
@@ -126,13 +126,11 @@ impl Emulator {
             .ranges
             .remove(&address)
             .ok_or_else(|| format!("no watchpoint at {}", self.symbolize(address)))?;
-        self.cpu_mut()?.remove_hook(hook)?;
-        if self.watchpoints.ranges.is_empty()
-            && let Some(hook) = self.watchpoints.boundary.take()
-        {
-            self.cpu_mut()?.remove_hook(hook)?;
-        }
-        self.cpu_mut()?.ctl_flush_tb()?;
-        Ok(())
+        let boundary = if self.watchpoints.ranges.is_empty() {
+            self.watchpoints.boundary.take()
+        } else {
+            None
+        };
+        super::hooks::remove_hooks(self.cpu_mut()?, Some(hook).into_iter().chain(boundary))
     }
 }

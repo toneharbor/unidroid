@@ -1,4 +1,3 @@
-use super::code::Selection;
 use crate::{Emulator, Result};
 use serde::Serialize;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
@@ -42,20 +41,11 @@ impl Emulator {
     }
 
     pub(crate) fn trace_coverage(&mut self, entries: &[String]) -> Result<()> {
-        let selection = Selection::new(entries, &self.modules)?;
-        if self.uc.is_none() {
+        let Some(selection) =
+            self.prepare_range_trace(entries, |emu| std::mem::take(&mut emu.coverage.hooks))?
+        else {
             return Ok(());
-        }
-        let hooks = std::mem::take(&mut self.coverage.hooks);
-        if !hooks.is_empty() {
-            for hook in hooks {
-                self.cpu_mut()?.remove_hook(hook)?;
-            }
-            self.cpu_mut()?.ctl_flush_tb()?;
-        }
-        if selection.ranges.is_empty() {
-            return Ok(());
-        }
+        };
         let counts = self
             .coverage
             .counts

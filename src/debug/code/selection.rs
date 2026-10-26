@@ -1,5 +1,6 @@
-use crate::{Image, Loaded, Result};
-use std::sync::Arc;
+use crate::debug::modules::SharedModules;
+use crate::{Emulator, Result};
+use unicorn_engine::UcHookId;
 
 pub(crate) struct Spec {
     name: String,
@@ -40,34 +41,28 @@ impl Spec {
 #[derive(Default)]
 pub(crate) struct Selection {
     pub ranges: Vec<(u64, u64)>,
-    modules: Vec<(u64, String, Arc<Image>)>,
+    modules: SharedModules,
 }
 impl Selection {
-    pub fn new(entries: &[String], modules: &[Loaded]) -> Result<Self> {
+    pub fn new(entries: &[String], modules: SharedModules) -> Result<Self> {
         let specs = entries
             .iter()
             .map(|entry| Spec::parse(entry))
             .collect::<Result<Vec<_>>>()?;
         let mut ranges = Vec::new();
-        for module in modules {
+        for module in &modules.borrow().entries {
+            let module = &module.info;
             for spec in specs.iter().filter(|s| s.name == module.name) {
-                let (start, end) = spec.offsets.unwrap_or((0, module.image.size));
-                let end = end.min(module.image.size);
+                let (start, end) = spec.offsets.unwrap_or((0, module.size));
+                let end = end.min(module.size);
                 if start < end {
                     ranges.push((module.base + start, module.base + end));
                 }
             }
         }
-        let merged = merge(ranges);
-        if merged.is_empty() {
-            return Ok(Self::default());
-        }
         Ok(Self {
-            ranges: merged,
-            modules: modules
-                .iter()
-                .map(|m| (m.base, m.name.clone(), m.image.clone()))
-                .collect(),
+            ranges: merge(ranges),
+            modules,
         })
     }
     pub fn instruction_hooks(&self) -> Vec<(u64, u64)> {
@@ -86,12 +81,23 @@ impl Selection {
             .any(|&(start, end)| (start..end).contains(&address))
     }
     pub fn location(&self, address: u64) -> String {
-        crate::debug::symbolize(
-            address,
-            self.modules
-                .iter()
-                .map(|(base, name, image)| (*base, name.as_str(), image.as_ref())),
-        )
+        self.modules.borrow().symbolize(address)
+    }
+}
+
+impl Emulator {
+    pub(crate) fn prepare_range_trace(
+        &mut self,
+        entries: &[String],
+        take_hooks: impl FnOnce(&mut Self) -> Vec<UcHookId>,
+    ) -> Result<Option<Selection>> {
+        let selection = Selection::new(entries, self.module_table.clone())?;
+        if self.uc.is_none() {
+            return Ok(None);
+        }
+        let hooks = take_hooks(self);
+        crate::debug::hooks::remove_hooks(self.cpu_mut()?, hooks)?;
+        Ok((!selection.ranges.is_empty()).then_some(selection))
     }
 }
 

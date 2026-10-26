@@ -99,6 +99,7 @@ impl Emulator {
             arch: None,
             cache_size: builder.cache_size,
             modules: Vec::new(),
+            module_table: debug::modules::SharedModules::default(),
             regions: Vec::new(),
             host: Vec::new(),
             overrides: HashMap::new(),

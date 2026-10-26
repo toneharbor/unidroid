@@ -1,11 +1,10 @@
-use crate::{CpuData, Emulator, Event, HostFunction, Image, Result, TRAMPOLINE};
+use crate::{Emulator, Event, HostFunction, Result, TRAMPOLINE};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     rc::Rc,
-    sync::Arc,
 };
-use unicorn_engine::{UcHookId, Unicorn};
+use unicorn_engine::UcHookId;
 
 #[derive(Default)]
 pub(crate) struct Imports {
@@ -15,7 +14,6 @@ pub(crate) struct Imports {
 #[derive(Default)]
 struct Targets {
     exports: HashMap<u64, Target>,
-    apps: Vec<App>,
     suspended: HashSet<(usize, u32, u64)>,
     blocks: HashMap<u32, Blocks>,
 }
@@ -23,12 +21,6 @@ struct Targets {
 struct Blocks {
     previous: Option<u64>,
     current: Option<u64>,
-}
-struct App {
-    owner: usize,
-    base: u64,
-    name: String,
-    image: Arc<Image>,
 }
 struct Target {
     function: String,
@@ -67,16 +59,7 @@ impl Emulator {
     pub(crate) fn refresh_imports(&mut self) {
         let mut targets = self.imports.targets.borrow_mut();
         targets.exports.clear();
-        targets.apps.clear();
         for (i, m) in self.modules.iter().enumerate() {
-            if m.app {
-                targets.apps.push(App {
-                    owner: i,
-                    base: m.base,
-                    name: m.name.clone(),
-                    image: m.image.clone(),
-                });
-            }
             for symbol in &m.image.symbols {
                 if symbol.defined && symbol.function && !symbol.name.is_empty() {
                     let address = if symbol.absolute {
@@ -145,6 +128,7 @@ impl Emulator {
         if enabled && self.imports.hook.is_none() {
             self.refresh_imports();
             let targets = self.imports.targets.clone();
+            let modules = self.module_table.clone();
             let arch = self.architecture();
             let events = self.events.clone();
             let hook = self
@@ -168,35 +152,22 @@ impl Emulator {
                         return;
                     };
                     let Some(previous) = previous else { return };
-                    if !targets.apps.iter().any(|app| {
-                        target.owner != Some(app.owner)
-                            && (app.base..app.base + app.image.size).contains(&previous)
-                    }) {
+                    let modules = modules.borrow();
+                    let from_app = |address| {
+                        modules
+                            .at(address)
+                            .filter(|(owner, module)| module.app && target.owner != Some(*owner))
+                    };
+                    if from_app(previous).is_none() {
                         return;
                     }
                     let lr = uc.reg_read(arch.lr()).expect("link register") & !1;
-                    let Some(app) = targets.apps.iter().find(|app| {
-                        target.owner != Some(app.owner)
-                            && (app.base..app.base + app.image.size).contains(&lr)
-                    }) else {
+                    let Some((_, app)) = from_app(lr) else {
                         return;
                     };
-                    let mask = strings(&target.function);
-                    let args = (0..4)
-                        .map(|i| {
-                            let value = uc.reg_read(arch.gp(i)).expect("argument register");
-                            if mask & (1 << i) != 0 {
-                                trace_string(uc, value).unwrap_or_else(|| format!("0x{value:x}"))
-                            } else {
-                                format!("0x{value:x}")
-                            }
-                        })
-                        .collect();
-                    let offset = lr - app.base;
-                    let mut from = format!("{}+0x{offset:x}", app.name);
-                    if let Some(symbol) = app.image.function(offset) {
-                        from.push_str(&format!(" ({symbol})"));
-                    }
+                    let args =
+                        super::arguments::register_arguments(uc, arch, strings(&target.function));
+                    let from = app.symbolize(lr);
                     uc.get_data_mut().import = Some(address);
                     events.borrow_mut().emit(Event::Call {
                         function: target.function.clone(),
@@ -208,23 +179,9 @@ impl Emulator {
             self.imports.hook = Some(hook);
             self.cpu_mut()?.ctl_flush_tb()?;
         } else if !enabled && let Some(hook) = self.imports.hook.take() {
-            self.cpu_mut()?.remove_hook(hook)?;
-            self.cpu_mut()?.ctl_flush_tb()?;
+            super::hooks::remove_hooks(self.cpu_mut()?, [hook])?;
             *self.imports.targets.borrow_mut() = Targets::default();
         }
         Ok(())
     }
-}
-
-fn trace_string(uc: &Unicorn<'_, CpuData>, address: u64) -> Option<String> {
-    let mut bytes = Vec::new();
-    for i in 0..256 {
-        let mut byte = [0];
-        uc.mem_read(address.checked_add(i)?, &mut byte).ok()?;
-        if byte[0] == 0 {
-            break;
-        }
-        bytes.push(byte[0]);
-    }
-    Some(format!("{:?}", String::from_utf8_lossy(&bytes)))
 }

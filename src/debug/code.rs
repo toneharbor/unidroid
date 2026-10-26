@@ -15,7 +15,7 @@ pub(crate) use selection::{Selection, Spec};
 
 #[derive(Default)]
 pub(crate) struct Code {
-    hooks: Vec<(u64, u64, UcHookId)>,
+    hooks: Vec<UcHookId>,
     block: Option<UcHookId>,
     memory: Option<UcHookId>,
     state: Rc<RefCell<State>>,
@@ -179,30 +179,20 @@ impl State {
 
 impl Emulator {
     pub(crate) fn trace_code(&mut self, entries: &[String]) -> Result<()> {
-        let selection = Selection::new(entries, &self.modules)?;
-        if self.uc.is_none() {
+        let Some(selection) = self.prepare_range_trace(entries, |emu| {
+            let mut hooks = std::mem::take(&mut emu.code.hooks);
+            hooks.extend(emu.code.block.take());
+            hooks.extend(emu.code.memory.take());
+            hooks
+        })?
+        else {
+            *self.code.state.borrow_mut() = State::default();
             return Ok(());
-        }
-        for (start, end, hook) in std::mem::take(&mut self.code.hooks) {
-            self.cpu_mut()?.remove_hook(hook)?;
-            self.cpu_mut()?.ctl_remove_cache(start, end + 4)?;
-        }
-        if let Some(hook) = self.code.block.take() {
-            self.cpu_mut()?.remove_hook(hook)?;
-            self.cpu_mut()?.ctl_flush_tb()?;
-        }
-        if let Some(hook) = self.code.memory.take() {
-            self.cpu_mut()?.remove_hook(hook)?;
-            self.cpu_mut()?.ctl_flush_tb()?;
-        }
+        };
         let arch = self.architecture();
         let mut state = self.code.state.borrow_mut();
         let ranges = selection.instruction_hooks();
         state.selection = selection;
-        if ranges.is_empty() {
-            *state = State::default();
-            return Ok(());
-        }
         if state.disassembler.is_none() {
             state.disassembler = Some(match arch {
                 Architecture::Arm32 => Capstone::new()
@@ -273,8 +263,7 @@ impl Emulator {
                             ));
                         }
                     })?;
-            self.code.hooks.push((start, end, hook));
-            self.cpu_mut()?.ctl_remove_cache(start, end + 4)?;
+            self.code.hooks.push(hook);
         }
         self.cpu_mut()?.ctl_flush_tb()?;
         Ok(())

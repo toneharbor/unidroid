@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{self, Write};
 use unicorn_engine::{RegisterARM, RegisterARM64};
 
+mod arguments;
 pub(crate) mod calls;
 pub(crate) mod code;
 pub(crate) mod control;
@@ -11,6 +12,7 @@ pub(crate) mod crypto;
 pub(crate) mod events;
 mod expr;
 pub(crate) mod heap;
+mod hooks;
 pub(crate) mod imports;
 pub(crate) mod maps;
 pub(crate) mod modules;
@@ -23,43 +25,21 @@ pub(crate) mod watch;
 
 const STACK_WORDS: usize = 32;
 
-pub(crate) fn symbolize<'a>(
-    address: u64,
-    mut modules: impl Iterator<Item = (u64, &'a str, &'a crate::Image)>,
-) -> String {
-    let Some((base, name, image)) =
-        modules.find(|(base, _, image)| (*base..*base + image.size).contains(&address))
-    else {
-        return format!("0x{address:x}");
-    };
-    let offset = address - base;
-    let mut at = format!("{name}+0x{offset:x}");
-    if let Some(symbol) = image.function(offset) {
-        at.push_str(&format!(" ({symbol})"));
-    }
-    at
-}
-
-pub(crate) fn memory_location(
-    address: u64,
-    modules: &[crate::ModuleInfo],
-    mapping: Option<&crate::Mapping>,
-) -> String {
-    modules::module_location(
-        address,
-        modules.iter().map(|m| (m.name.as_str(), m.base, m.size)),
-    )
-    .unwrap_or_else(|| match mapping.filter(|m| !m.name.is_empty()) {
-        Some(mapping) => format!("0x{address:x} {}", mapping.name),
-        None => format!("0x{address:x}"),
-    })
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Frame {
     pub address: u64,
     pub location: String,
     pub symbol: Option<String>,
+}
+
+impl fmt::Display for Frame {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.location)?;
+        if let Some(symbol) = &self.symbol {
+            write!(f, " ({symbol})")?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -82,11 +62,7 @@ impl Crash {
     pub fn report(&self) -> String {
         let mut text = format!("{}\nthread {}\n", self.message, self.thread);
         for (i, frame) in self.backtrace.iter().enumerate() {
-            let _ = write!(text, "#{i} {}", frame.location);
-            if let Some(symbol) = &frame.symbol {
-                let _ = write!(text, " ({symbol})");
-            }
-            text.push('\n');
+            let _ = writeln!(text, "#{i} {frame}");
         }
         for row in self.registers.chunks(4) {
             for (i, (name, value)) in row.iter().enumerate() {
@@ -141,50 +117,17 @@ impl Emulator {
     }
 
     pub fn backtrace(&self) -> Result<Vec<Frame>> {
+        let modules = self.module_table();
         Ok(
             backtrace_addresses(self.cpu()?, self.architecture(), false)?
                 .into_iter()
-                .map(|address| {
-                    frame(
-                        address,
-                        self.modules.iter().map(|module| {
-                            (module.base, module.name.as_str(), module.image.as_ref())
-                        }),
-                    )
-                })
+                .map(|address| modules.frame(address))
                 .collect(),
         )
     }
 
     pub fn symbolize(&self, address: u64) -> String {
-        symbolize(
-            address,
-            self.modules
-                .iter()
-                .map(|m| (m.base, m.name.as_str(), m.image.as_ref())),
-        )
-    }
-}
-
-pub(crate) fn frame<'a>(
-    address: u64,
-    mut modules: impl Iterator<Item = (u64, &'a str, &'a crate::Image)>,
-) -> Frame {
-    if let Some((base, name, image)) =
-        modules.find(|(base, _, image)| (*base..*base + image.size).contains(&address))
-    {
-        let offset = address - base;
-        Frame {
-            address,
-            location: format!("{name}+0x{offset:x}"),
-            symbol: image.function(offset),
-        }
-    } else {
-        Frame {
-            address,
-            location: format!("0x{address:x}"),
-            symbol: (address == RETURN).then(|| "host return".into()),
-        }
+        self.module_table().symbolize(address)
     }
 }
 

@@ -140,7 +140,7 @@ Both features parse expressions once when added. Errors include the bad text; a 
 
 | expression | value |
 |---|---|
-| `REG` | any name accepted by `emu.register`, including `x20`, `r4`, `sp`, `pc` and `d0` on the appropriate architecture |
+| `REG` | any scalar register name accepted by `emu.register` under [Memory and registers](#memory-and-registers), including `w0`, `x29`, `ip`, `sb`, `s0` and `d0` on the appropriate architecture |
 | `0xHEX` | a 64-bit constant |
 | `[EXPR]` | memory at that address, read as a pointer-size word (4 bytes on ARM32, 8 on arm64) |
 | `[EXPR+0xHEX]` / `[EXPR-0xHEX]` | memory at that address plus/minus a constant; address arithmetic wraps at 64 bits |
@@ -208,7 +208,7 @@ println!("{}", before.diff(&after).report());
 
 Maps and snapshots install no hooks and store no copies until called. A snapshot holds all guest memory, including keys and inputs; keep snapshot files out of git. This repository ignores `*.snap`.
 
-`emu.register(name)?` reads a register and `emu.set_register(name, value)?` writes it. Names are `x0`–`x28`, `fp`, `lr`, `sp`, `pc`, `nzcv` on arm64; `r0`–`r12`, `sp`, `lr`, `pc`, `cpsr` on arm32; and `d0`–`d31` on both. The `d` registers hold 64-bit floating-point bits and are available through named reads and writes, including serve's `set_register`. Dumps from `registers()`, crash reports, break questions and serve's `registers` list only the general registers, sp, lr, pc and flags, in the order above. An unknown name lists the valid names.
+`emu.register(name)?` reads a register and `emu.set_register(name, value)?` writes it. Named reads, writes, breakpoint conditions and tracepoint expressions accept scalar registers of at most 64 bits: `x0`–`x30`, `w0`–`w30`, `fp`, `lr`, `sp`, `wsp`, `pc`, `nzcv`, `fpcr`, `fpsr`, `b0`–`b31` and `h0`–`h31` on arm64; `r0`–`r12`, `sp`, `lr`, `pc`, `sb`, `sl`, `fp`, `ip`, `cpsr`, `apsr`, `apsr_nzcv`, `fpscr`, `fpexc`, `fpsid` and `spsr` on arm32; and `s0`–`s31` and `d0`–`d31` on both. The `s` and `d` registers hold floating-point bits, including through serve's `set_register`. The 128-bit `q`/`v` names and synthetic trace values are only available in instruction traces. Dumps from `registers()`, crash reports, break questions and serve's `registers` keep the general-register order: `x0`–`x28`, `fp`, `lr`, `sp`, `pc`, `nzcv` on arm64; `r0`–`r12`, `sp`, `lr`, `pc`, `cpsr` on arm32. An unknown name lists the valid names with indexed families written as ranges.
 
 ### Heap and objects
 
@@ -264,7 +264,7 @@ Function call tracing uses `Trace { calls: vec!["libfoo.so+0x1000-0x2000".into()
 function libfoo.so+0x1800 (mix)(0x7, 0x8, 0x40001000, 0xa) from libfoo.so+0x1234 (sign+0x10)
 ```
 
-Syscall events show the guest number, arguments, signed result, errno name, instruction location and caller. Import events show calls from app libraries into other modules, including dl, property and unresolved-symbol stubs. The previous executed block in the same guest thread must be in an app library; app PLT stubs count, but internal tail calls within a dependency do not. The caller location comes from lr. They show the first four argument registers, with known C strings quoted and capped at 256 bytes. Dependencies next to an app count as app libraries; dependencies found in rootfs do not.
+Syscall events show the guest number, arguments, signed result, errno name, instruction location and caller; known C string arguments are quoted and capped at 256 bytes, using the same reader as import traces. Import events show calls from app libraries into other modules, including dl, property and unresolved-symbol stubs. The previous executed block in the same guest thread must be in an app library; app PLT stubs count, but internal tail calls within a dependency do not. The caller location comes from lr. They show the first four argument registers, with known C strings quoted and capped at 256 bytes. Dependencies next to an app count as app libraries; dependencies found in rootfs do not.
 
 Import hooks appear in import traces under their symbol name with module `<hook>`. Returning `None` can then enter the original export; it preserves the original call's stack and floating-point registers. Hooks and saved originals are restored by rewind, including into a fresh emulator.
 

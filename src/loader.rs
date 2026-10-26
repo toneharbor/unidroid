@@ -26,7 +26,9 @@ impl Emulator {
         self.load_library_internal(Library::Host(path.to_owned()))
     }
     pub(super) fn load_library_internal(&mut self, library: Library) -> Result<Module> {
-        let module = self.load_image(library)?;
+        let module = self.load_image(library);
+        self.rebuild_module_table();
+        let module = module?;
         for i in 0..self.modules.len() {
             self.relocate(Module(i), None)?;
         }
@@ -300,13 +302,7 @@ impl Emulator {
         Ok(())
     }
     pub fn location(&self, address: u64) -> String {
-        crate::debug::modules::module_location(
-            address,
-            self.modules
-                .iter()
-                .map(|m| (m.name.as_str(), m.base, m.image.size)),
-        )
-        .unwrap_or_else(|| format!("0x{address:x}"))
+        self.module_table().location(address)
     }
 }
 

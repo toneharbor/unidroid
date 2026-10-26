@@ -143,6 +143,7 @@ pub struct Emulator {
     cache_size: u32,
     arch: Option<Architecture>,
     modules: Vec<Loaded>,
+    module_table: debug::modules::SharedModules,
     regions: Vec<Region>,
     host: Vec<HostFunction>,
     overrides: HashMap<String, u64>,

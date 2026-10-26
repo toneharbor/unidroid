@@ -13,20 +13,53 @@ pub struct Mapping {
     pub name: String,
 }
 
+pub(super) fn locate<'a>(
+    address: u64,
+    mut mappings: impl Iterator<Item = &'a Mapping>,
+) -> Option<&'a Mapping> {
+    mappings.find(|m| (m.start..m.end).contains(&address))
+}
+
 impl Emulator {
+    pub(crate) fn read_mappings(
+        &self,
+        mappings: impl IntoIterator<Item = Mapping>,
+    ) -> impl Iterator<Item = Result<(Mapping, Vec<u8>)>> {
+        mappings.into_iter().map(|mapping| {
+            let bytes = self.read_bytes(mapping.start, (mapping.end - mapping.start) as usize)?;
+            Ok((mapping, bytes))
+        })
+    }
+
+    pub(crate) fn memory_location<'a>(
+        &self,
+        address: u64,
+        mappings: impl Iterator<Item = &'a Mapping>,
+        symbols: bool,
+    ) -> String {
+        if let Some((_, module)) = self.module_table().at(address) {
+            if symbols {
+                module.symbolize(address)
+            } else {
+                module.info.location(address)
+            }
+        } else {
+            super::modules::mapping_location(address, locate(address, mappings))
+        }
+    }
     pub fn maps(&self) -> Result<Vec<Mapping>> {
         let mut regions = self.cpu()?.mem_regions()?;
         regions.sort_unstable_by_key(|region| region.begin);
+        let modules = self.module_table();
         Ok(regions
             .into_iter()
             .map(|region| {
                 let start = region.begin;
                 let end = region.end + 1;
-                let name = self
-                    .modules
-                    .iter()
-                    .find(|m| start >= m.base && end <= m.base + m.image.size)
-                    .map(|m| m.name.as_str())
+                let name = modules
+                    .at(start)
+                    .filter(|(_, m)| end <= m.info.base + m.info.size)
+                    .map(|(_, m)| m.info.name.as_str())
                     .unwrap_or_else(|| {
                         [
                             (TRAMPOLINE, RETURN + PAGE, "[trampoline]"),

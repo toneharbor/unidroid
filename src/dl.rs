@@ -74,11 +74,7 @@ impl Emulator {
                     (0..self.modules.len()).find_map(|i| self.local_symbol(Module(i), &symbol))
                 } else if a == self.architecture().rtld_next() {
                     let caller = self.lr()?;
-                    let start = self
-                        .modules
-                        .iter()
-                        .position(|m| caller >= m.base && caller < m.base + m.image.size)
-                        .map_or(0, |i| i + 1);
+                    let start = self.module_table().at(caller).map_or(0, |(i, _)| i + 1);
                     (start..self.modules.len()).find_map(|i| self.local_symbol(Module(i), &symbol))
                 } else if a != 0
                     && a <= self.modules.len() as u64
@@ -108,11 +104,7 @@ impl Emulator {
             }
             "dlerror" => Ok(self.dlerror()),
             "dladdr" => {
-                let Some(i) = self
-                    .modules
-                    .iter()
-                    .position(|m| a >= m.base && a < m.base + m.image.size)
-                else {
+                let Some(i) = self.module_table().at(a).map(|(i, _)| i) else {
                     return Ok(0);
                 };
                 let path = self.modules[i].path_ptr;

@@ -142,7 +142,7 @@ impl Parser<'_> {
             let n = self
                 .rest
                 .bytes()
-                .take_while(u8::is_ascii_alphanumeric)
+                .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
                 .count();
             if n == 0 {
                 return Err("expected a register, constant or memory expression".into());

@@ -19,19 +19,12 @@ struct Pending {
 
 impl Emulator {
     pub(crate) fn trace_calls(&mut self, entries: &[String]) -> Result<()> {
-        let selection = Selection::new(entries, &self.modules)?;
-        if self.uc.is_none() {
+        let Some(selection) = self.prepare_range_trace(entries, |emu| {
+            emu.calls.take().map_or_else(Vec::new, |calls| calls.hooks)
+        })?
+        else {
             return Ok(());
-        }
-        if let Some(calls) = self.calls.take() {
-            for hook in calls.hooks {
-                self.cpu_mut()?.remove_hook(hook)?;
-            }
-            self.cpu_mut()?.ctl_flush_tb()?;
-        }
-        if selection.ranges.is_empty() {
-            return Ok(());
-        }
+        };
         let ranges = selection.ranges.clone();
         let state = Rc::new(RefCell::new(State {
             selection,
@@ -57,14 +50,7 @@ impl Emulator {
                     events.borrow_mut().emit(Event::FunctionCall {
                         to: state.selection.location(address),
                         address,
-                        args: (0..4)
-                            .map(|i| {
-                                format!(
-                                    "0x{:x}",
-                                    cpu.reg_read(arch.gp(i)).expect("argument register")
-                                )
-                            })
-                            .collect(),
+                        args: super::arguments::register_arguments(cpu, arch, 0),
                         from: state.selection.location(pending.from),
                     });
                 })?,

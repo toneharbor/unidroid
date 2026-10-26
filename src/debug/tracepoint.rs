@@ -45,26 +45,14 @@ impl Emulator {
 
     pub fn remove_tracepoint(&mut self, address: u64) -> Result<()> {
         let address = address & !1;
-        let hook = self
-            .tracepoints
-            .points
-            .get(&address)
-            .map(|(_, hook)| *hook)
-            .ok_or_else(|| format!("no tracepoint at {}", self.symbolize(address)))?;
-        let end = self.debug_hook_end(address);
-        let cpu = self.cpu_mut()?;
-        cpu.ctl_remove_cache(address, end + 1)?;
-        cpu.remove_hook(hook)?;
+        let hook = self.tracepoint(address)?.1;
+        self.remove_address_hook(address, hook)?;
         self.tracepoints.points.remove(&address);
         Ok(())
     }
 
     pub fn tracepoint_hits(&self, address: u64) -> Result<Vec<(u64, u64)>> {
-        let (point, _) = self
-            .tracepoints
-            .points
-            .get(&(address & !1))
-            .ok_or_else(|| format!("no tracepoint at {}", self.symbolize(address & !1)))?;
+        let (point, _) = self.tracepoint(address)?;
         Ok(point
             .borrow()
             .hits
@@ -80,13 +68,16 @@ impl Emulator {
     }
 
     pub(crate) fn reset_tracepoint(&mut self, address: u64) -> Result<()> {
-        let (point, _) = self
-            .tracepoints
-            .points
-            .get(&(address & !1))
-            .ok_or_else(|| format!("no tracepoint at {}", self.symbolize(address & !1)))?;
-        point.borrow_mut().hits.clear();
+        self.tracepoint(address)?.0.borrow_mut().hits.clear();
         Ok(())
+    }
+
+    fn tracepoint(&self, address: u64) -> Result<&(Rc<RefCell<Point>>, UcHookId)> {
+        let address = address & !1;
+        self.tracepoints
+            .points
+            .get(&address)
+            .ok_or_else(|| format!("no tracepoint at {}", self.symbolize(address)).into())
     }
 
     pub(crate) fn refresh_tracepoints(&mut self) -> Result<()> {
@@ -99,13 +90,10 @@ impl Emulator {
 
     fn install_tracepoint(&mut self, address: u64, point: Rc<RefCell<Point>>) -> Result<()> {
         let at = self.symbolize(address);
-        let end = self.debug_hook_end(address);
         let events = self.events.clone();
         let previous = self.tracepoints.points.get(&address).map(|(_, hook)| *hook);
         let callback = point.clone();
-        let cpu = self.cpu_mut()?;
-        cpu.ctl_remove_cache(address, end + 1)?;
-        let hook = cpu.add_code_hook(address, end, move |cpu, pc, _| {
+        let hook = self.install_address_hook(address, move |cpu, pc, _| {
             if pc != address {
                 return;
             }
@@ -131,6 +119,8 @@ impl Emulator {
                 });
             }
         })?;
+        // Installation already invalidated this range; keep replacement atomic.
+        let cpu = self.cpu_mut()?;
         if let Some(previous) = previous
             && let Err(error) = cpu.remove_hook(previous)
         {

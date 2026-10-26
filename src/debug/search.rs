@@ -4,14 +4,18 @@ pub const SEARCH_LIMIT: usize = 1000;
 
 impl Emulator {
     pub fn search(&self, pattern: &[u8]) -> Result<Vec<u64>> {
+        self.search_mappings(pattern, self.maps()?)
+    }
+
+    pub(crate) fn search_mappings(
+        &self,
+        pattern: &[u8],
+        mappings: impl IntoIterator<Item = crate::Mapping>,
+    ) -> Result<Vec<u64>> {
         search_runs(
             pattern,
-            self.maps()?.into_iter().map(|mapping| {
-                Ok((
-                    mapping.start,
-                    self.read_bytes(mapping.start, (mapping.end - mapping.start) as usize)?,
-                ))
-            }),
+            self.read_mappings(mappings)
+                .map(|run| run.map(|(mapping, bytes)| (mapping.start, bytes))),
         )
     }
 }

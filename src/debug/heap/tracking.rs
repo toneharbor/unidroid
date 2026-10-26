@@ -1,11 +1,11 @@
 use super::Allocation;
-use crate::{CpuData, Emulator, Frame, Image, Result, arch::Architecture};
+use crate::debug::modules::SharedModules;
+use crate::{CpuData, Emulator, Frame, Result, arch::Architecture};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
     ops::Bound::{Excluded, Included, Unbounded},
     rc::Rc,
-    sync::Arc,
 };
 use unicorn_engine::{UcHookId, Unicorn};
 
@@ -38,7 +38,6 @@ pub(super) struct State {
     pub next_order: u64,
     pub freed_order: Vec<u64>,
     pub pending: HashMap<u32, Vec<Pending>>,
-    modules: Vec<(u64, String, Arc<Image>)>,
     entry_hooks: HashMap<u64, UcHookId>,
     return_hooks: HashMap<u64, UcHookId>,
 }
@@ -55,25 +54,14 @@ pub(super) fn configure(emu: &mut Emulator, enabled: bool) -> Result<()> {
     if !enabled {
         let mut data = state.borrow_mut();
         data.pending.clear();
-        data.modules.clear();
         let hooks: Vec<_> = data.entry_hooks.drain().map(|(_, hook)| hook).collect();
         let hooks: Vec<_> = hooks
             .into_iter()
             .chain(data.return_hooks.drain().map(|(_, hook)| hook))
             .collect();
-        if !hooks.is_empty() {
-            for hook in hooks {
-                emu.cpu_mut()?.remove_hook(hook)?;
-            }
-            emu.cpu_mut()?.ctl_flush_tb()?;
-        }
+        crate::debug::hooks::remove_hooks(emu.cpu_mut()?, hooks)?;
         return Ok(());
     }
-    state.borrow_mut().modules = emu
-        .modules
-        .iter()
-        .map(|module| (module.base, module.name.clone(), module.image.clone()))
-        .collect();
     let mut targets = BTreeMap::new();
     if let Some(module) = emu.modules.iter().find(|module| module.name == "libc.so") {
         for (name, function) in [
@@ -114,10 +102,11 @@ pub(super) fn configure(emu: &mut Emulator, enabled: bool) -> Result<()> {
             continue;
         }
         let callback = state.clone();
+        let modules = emu.module_table.clone();
         let hook = emu
             .cpu_mut()?
             .add_code_hook(address, address, move |cpu, _, _| {
-                enter(cpu, &callback, arch, function);
+                enter(cpu, &callback, &modules, arch, function);
             })?;
         state.borrow_mut().entry_hooks.insert(address, hook);
         changed = true;
@@ -131,6 +120,7 @@ pub(super) fn configure(emu: &mut Emulator, enabled: bool) -> Result<()> {
 fn enter(
     cpu: &mut Unicorn<'_, CpuData>,
     state: &Rc<RefCell<State>>,
+    modules: &SharedModules,
     arch: Architecture,
     function: Function,
 ) {
@@ -166,14 +156,7 @@ fn enter(
     let backtrace = crate::debug::backtrace_addresses(cpu, arch, true)
         .expect("heap backtrace")
         .into_iter()
-        .map(|address| {
-            crate::debug::frame(
-                address,
-                data.modules
-                    .iter()
-                    .map(|(base, name, image)| (*base, name.as_str(), image.as_ref())),
-            )
-        })
+        .map(|address| modules.borrow().frame(address))
         .collect();
     let order = data.next_order;
     data.next_order += 1;

@@ -57,10 +57,7 @@ impl RunControl {
 
     pub fn clear_finish(&mut self, emu: &mut Emulator) -> Result<()> {
         if let Some((target, hook)) = self.finish.take() {
-            let end = emu.debug_hook_end(target.address);
-            let cpu = emu.cpu_mut()?;
-            cpu.remove_hook(hook)?;
-            cpu.ctl_remove_cache(target.address, end + 1)?;
+            emu.remove_address_hook(target.address, hook)?;
         }
         Ok(())
     }
@@ -101,9 +98,7 @@ impl RunControl {
                     sp: emu.sp()?,
                 };
                 let sp = emu.architecture().sp();
-                let end = emu.debug_hook_end(target.address);
-                let cpu = emu.cpu_mut()?;
-                let hook = cpu.add_code_hook(target.address, end, move |cpu, pc, _| {
+                let hook = emu.install_address_hook(target.address, move |cpu, pc, _| {
                     let data = cpu.get_data();
                     if pc == target.address
                         && data.finish == Some(target)
@@ -116,7 +111,6 @@ impl RunControl {
                         let _ = cpu.emu_stop();
                     }
                 })?;
-                cpu.ctl_remove_cache(target.address, end + 1)?;
                 self.finish = Some((target, hook));
             }
             Resume::Return(bits) => {
@@ -143,16 +137,6 @@ impl RunControl {
 }
 
 impl Emulator {
-    pub(super) fn debug_hook_end(&self, address: u64) -> u64 {
-        // Thumb IT blocks can defer emu_stop through four 32-bit instructions.
-        // Leave room for the exclusive cache endpoint, even at the address limit.
-        address.saturating_add(if self.arch == Some(crate::arch::Architecture::Arm32) {
-            16
-        } else {
-            0
-        }) & !1
-    }
-
     pub(crate) fn run_cpu(&mut self, pc: u64, stepping: bool) -> Result<()> {
         let cpu = self.cpu_mut()?;
         let hook = if stepping {
@@ -176,10 +160,7 @@ impl Emulator {
         let cpu = self.cpu_mut()?;
         let result = cpu.emu_start(pc, crate::RETURN, 0, 0);
         let source_error = cpu.get_data_mut().source_error.take();
-        if let Some(hook) = hook {
-            cpu.remove_hook(hook)?;
-            cpu.ctl_flush_tb()?;
-        }
+        super::hooks::remove_hooks(cpu, hook)?;
         self.settle_code(result.is_err() || source_error.is_some())?;
         if let Some((pc, error)) = source_error {
             return Err(format!("{error} from {}", self.location(pc)).into());
@@ -201,9 +182,7 @@ impl Emulator {
         if self.breakpoints.contains_key(&address) {
             self.remove_breakpoint(address)?;
         }
-        let end = self.debug_hook_end(address);
-        let cpu = self.cpu_mut()?;
-        let hook = cpu.add_code_hook(address, end, move |cpu, pc, _| {
+        let hook = self.install_address_hook(address, move |cpu, pc, _| {
             let data = cpu.get_data();
             if pc == address {
                 if data.skip_breakpoint == Some((data.thread, address)) {
@@ -219,7 +198,6 @@ impl Emulator {
                 let _ = cpu.emu_stop();
             }
         })?;
-        cpu.ctl_remove_cache(address, end + 1)?;
         self.breakpoints.insert(address, hook);
         Ok(())
     }
@@ -230,10 +208,6 @@ impl Emulator {
             .breakpoints
             .remove(&address)
             .ok_or_else(|| format!("no breakpoint at {}", self.symbolize(address)))?;
-        let end = self.debug_hook_end(address);
-        let cpu = self.cpu_mut()?;
-        cpu.remove_hook(hook)?;
-        cpu.ctl_remove_cache(address, end + 1)?;
-        Ok(())
+        self.remove_address_hook(address, hook)
     }
 }

@@ -115,6 +115,9 @@ impl Emulator {
             });
         Memory::restore(self, &checkpoint.memory)?;
         self.modules = checkpoint.modules.clone();
+        if modules_changed {
+            self.rebuild_module_table();
+        }
         self.next_module = checkpoint.next_module;
         self.regions = checkpoint.regions.clone();
         self.host = checkpoint.host.clone();

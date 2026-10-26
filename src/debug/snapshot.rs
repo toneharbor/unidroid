@@ -39,15 +39,7 @@ impl Emulator {
                 .map(|(name, value)| (name.into(), value))
                 .collect(),
             modules: self.modules(),
-            memory: self
-                .maps()?
-                .into_iter()
-                .map(|mapping| {
-                    let bytes =
-                        self.read_bytes(mapping.start, (mapping.end - mapping.start) as usize)?;
-                    Ok((mapping, bytes))
-                })
-                .collect::<Result<_>>()?,
+            memory: self.read_mappings(self.maps()?).collect::<Result<_>>()?,
             heap: if self.trace.heap {
                 self.known_allocations()
             } else {

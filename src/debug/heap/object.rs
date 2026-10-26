@@ -61,21 +61,11 @@ pub(super) fn build(emu: &Emulator, address: u64, depth: usize) -> Result<HeapOb
         .ok_or_else(|| {
             format!(
                 "{} is not inside a known allocation",
-                crate::debug::memory_location(
-                    address,
-                    &emu.modules(),
-                    maps.iter().find(|m| m.start <= address && address < m.end)
-                )
+                emu.memory_location(address, maps.iter(), false)
             )
         })?;
     // All recursion uses this one copy, including strings and inbound pointers.
-    let runs = maps
-        .into_iter()
-        .map(|mapping| {
-            let bytes = emu.read_bytes(mapping.start, (mapping.end - mapping.start) as usize)?;
-            Ok((mapping, bytes))
-        })
-        .collect::<Result<_>>()?;
+    let runs = emu.read_mappings(maps).collect::<Result<_>>()?;
     let mut browser = Browser {
         emu,
         runs,
@@ -93,23 +83,8 @@ impl Browser<'_> {
     }
 
     fn location(&self, address: u64) -> String {
-        if self
-            .emu
-            .modules
-            .iter()
-            .any(|module| (module.base..module.base + module.image.size).contains(&address))
-        {
-            self.emu.symbolize(address)
-        } else {
-            crate::debug::memory_location(
-                address,
-                &self.emu.modules(),
-                self.runs
-                    .iter()
-                    .map(|(mapping, _)| mapping)
-                    .find(|mapping| mapping.start <= address && address < mapping.end),
-            )
-        }
+        self.emu
+            .memory_location(address, self.runs.iter().map(|(mapping, _)| mapping), true)
     }
 
     fn byte(&self, address: u64) -> Option<u8> {
@@ -169,10 +144,11 @@ impl Browser<'_> {
                     offset: value - block.address,
                     object: self.nested(&block, depth)?,
                 })
-            } else if self
-                .runs
-                .iter()
-                .any(|(mapping, _)| mapping.start <= value && value < mapping.end)
+            } else if crate::debug::maps::locate(
+                value,
+                self.runs.iter().map(|(mapping, _)| mapping),
+            )
+            .is_some()
             {
                 Some(Target::Location {
                     location: self.location(value),

@@ -82,16 +82,7 @@ const SIGNATURES: &[Signature] = &[
 
 impl Emulator {
     pub fn crypto_constants(&self) -> Result<Vec<CryptoConstant>> {
-        let runs: Vec<_> = self
-            .maps()?
-            .into_iter()
-            .map(|mapping| {
-                let bytes =
-                    self.read_bytes(mapping.start, (mapping.end - mapping.start) as usize)?;
-                Ok((mapping, bytes))
-            })
-            .collect::<Result<_>>()?;
-        let modules = self.modules();
+        let runs: Vec<_> = self.read_mappings(self.maps()?).collect::<Result<_>>()?;
         let mut constants = Vec::new();
         for signature in SIGNATURES {
             for address in super::search::search_runs(
@@ -99,14 +90,14 @@ impl Emulator {
                 runs.iter()
                     .map(|(mapping, bytes)| Ok((mapping.start, bytes))),
             )? {
-                let mapping = runs
-                    .iter()
-                    .find(|(mapping, _)| mapping.start <= address && address < mapping.end)
-                    .map(|(mapping, _)| mapping);
                 constants.push(CryptoConstant {
                     name: signature.name,
                     address,
-                    location: super::memory_location(address, &modules, mapping),
+                    location: self.memory_location(
+                        address,
+                        runs.iter().map(|(mapping, _)| mapping),
+                        false,
+                    ),
                 });
             }
         }

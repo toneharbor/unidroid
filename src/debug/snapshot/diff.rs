@@ -1,5 +1,5 @@
 use super::Snapshot;
-use crate::{Allocation, Mapping, debug::memory_location};
+use crate::{Allocation, Mapping, debug::modules::memory_location};
 use serde::Serialize;
 use std::fmt::Write;
 
@@ -59,13 +59,10 @@ impl Diff {
                     text.push_str("  (none)\n");
                 }
                 for allocation in allocations {
-                    let first = allocation.backtrace.first().map_or_else(
-                        || "(none)".into(),
-                        |frame| match &frame.symbol {
-                            Some(symbol) => format!("{} ({symbol})", frame.location),
-                            None => frame.location.clone(),
-                        },
-                    );
+                    let first = allocation
+                        .backtrace
+                        .first()
+                        .map_or_else(|| "(none)".into(), ToString::to_string);
                     let _ = writeln!(
                         text,
                         "  0x{:x}, {} bytes, {} from {}",
@@ -112,6 +109,21 @@ impl Diff {
     }
 }
 
+fn changed_allocations(current: &[Allocation], other: &[Allocation]) -> Vec<Allocation> {
+    current
+        .iter()
+        .filter(|allocation| {
+            allocation.live
+                && !other.iter().any(|other| {
+                    other.live
+                        && other.address == allocation.address
+                        && other.size == allocation.size
+                })
+        })
+        .cloned()
+        .collect()
+}
+
 impl Snapshot {
     pub fn diff(&self, after: &Self) -> Diff {
         let mut diff = Diff {
@@ -126,32 +138,8 @@ impl Snapshot {
             mapped: Vec::new(),
             unmapped: Vec::new(),
             changes: Vec::new(),
-            allocated: after
-                .heap
-                .iter()
-                .filter(|allocation| {
-                    allocation.live
-                        && !self.heap.iter().any(|before| {
-                            before.live
-                                && before.address == allocation.address
-                                && before.size == allocation.size
-                        })
-                })
-                .cloned()
-                .collect(),
-            freed: self
-                .heap
-                .iter()
-                .filter(|allocation| {
-                    allocation.live
-                        && !after.heap.iter().any(|after| {
-                            after.live
-                                && after.address == allocation.address
-                                && after.size == allocation.size
-                        })
-                })
-                .cloned()
-                .collect(),
+            allocated: changed_allocations(&after.heap, &self.heap),
+            freed: changed_allocations(&self.heap, &after.heap),
             heap_data: !self.heap.is_empty() || !after.heap.is_empty(),
         };
         let mut boundaries: Vec<_> = self

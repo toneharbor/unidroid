@@ -38,7 +38,7 @@ fn resolve_accepts_locations_hex_and_exports_and_names_bad_parts() -> Result<()>
 }
 
 #[test]
-fn named_registers_share_the_snapshot_table_and_preserve_float_bits() -> Result<()> {
+fn named_registers_match_dumps_and_preserve_float_bits() -> Result<()> {
     for (dir, gp) in [("lib64", "x0"), ("lib", "r0")] {
         let mut emu = Emulator::builder().build()?;
         emu.load_library(format!("rootfs/{dir}/libc.so"))?;
@@ -61,10 +61,12 @@ fn named_registers_share_the_snapshot_table_and_preserve_float_bits() -> Result<
             emu.set_register("oops", 1).unwrap_err(),
         ] {
             assert!(error.to_string().contains("unknown register oops"));
-            for n in 0..32 {
-                assert!(error.to_string().contains(&format!("d{n}")));
-            }
-            for (name, _) in &registers {
+            assert!(error.to_string().contains("d0-d31"));
+            for name in if dir == "lib64" {
+                &["x0-x28", "fp", "lr", "sp", "pc", "nzcv"][..]
+            } else {
+                &["r0-r12", "sp", "lr", "pc", "cpsr"][..]
+            } {
                 assert!(error.to_string().contains(name));
             }
         }

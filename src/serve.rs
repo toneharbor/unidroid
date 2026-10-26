@@ -186,12 +186,12 @@ impl<R: BufRead, W: Write> Session<R, W> {
                 "start": m.start.to_string(), "end": m.end.to_string(), "perms": m.perms, "name": m.name,
             })).collect::<Vec<_>>()),
             Command::Search { base64 } => {
-                let addresses = emu.search(&BASE64_STANDARD.decode(base64)?)?;
+                let pattern = BASE64_STANDARD.decode(base64)?;
                 let maps = emu.maps()?;
-                let modules = emu.modules();
+                let addresses = emu.search_mappings(&pattern, maps.iter().cloned())?;
                 json!(addresses.into_iter().map(|address| json!({
                     "address": address.to_string(),
-                    "location": crate::debug::memory_location(address, &modules, maps.iter().find(|m| m.start <= address && address < m.end)),
+                    "location": emu.memory_location(address, maps.iter(), false),
                 })).collect::<Vec<_>>())
             }
             Command::Crypto => json!(emu

@@ -1,5 +1,8 @@
 use crate::{Emulator, Event, arch::Architecture};
 
+#[cfg(test)]
+mod tests;
+
 fn description(arch: Architecture, number: u64) -> Option<(&'static str, usize)> {
     Some(match number {
         23 => ("dup", 1),
@@ -107,21 +110,13 @@ impl Emulator {
             || (format!("syscall_{guest}"), 6),
             |(name, count)| (name.into(), count),
         );
-        let args = args[..count]
-            .iter()
-            .enumerate()
-            .map(|(i, &value)| {
-                if (matches!(number, 34 | 35 | 38 | 56 | 78 | 79 | 276) && i == 1)
-                    || (matches!(number, 38 | 276) && i == 3)
-                {
-                    self.cstring(value)
-                        .map(|s| format!("{s:?}"))
-                        .unwrap_or_else(|_| format!("0x{value:x}"))
-                } else {
-                    format!("0x{value:x}")
-                }
-            })
-            .collect();
+        let strings = u8::from(matches!(number, 34 | 35 | 38 | 56 | 78 | 79 | 276)) << 1
+            | u8::from(matches!(number, 38 | 276)) << 3;
+        let args = super::arguments::arguments(
+            self.cpu().expect("syscall CPU"),
+            args[..count].iter().copied(),
+            strings,
+        );
         Event::Syscall {
             name,
             number: guest,
