@@ -256,8 +256,7 @@ Commands:
 
 | command | fields | result |
 |---|---|---|
-| `load` | `path` | module number |
-| `load` (optional field) | `constructors` (boolean, default `true`; `false` defers constructors) | module number |
+| `load` | `path`, optional `constructors` (boolean, default `true`; `false` defers constructors) | module number |
 | `load_apk_library` | `name`, optional `constructors` (boolean, default `true`) | module number |
 | `apk` | | `{path, package, version_name, version_code, signatures, signers, signing_history}`; certificate lists are base64; `null` without an APK |
 | `set_apk` | optional `package`, `version_name` (string or `null`), `version_code`, `signatures`, `signers`, `signing_history` (base64 lists); omitted fields stay | `null`; error without an APK |
@@ -277,7 +276,6 @@ Commands:
 | `add_host_file` | `path`, `host_path` | `null` |
 | `remove_file` | `path` | `null` |
 | `file` | `path` | base64 |
-| `crypto` | | list of `{name, address, location}` constants; address is a decimal string |
 | `new_string` / `string` | `value` / `handle` | handle / the string |
 | `new_array` / `array` | `type` (`Z B C S I J F D`), `base64` / `handle` | handle / base64 |
 | `new_object_array` / `object_array` | `class`, `items` / `handle` | handle / list of handles |
@@ -305,7 +303,7 @@ A question looks like this:
 - `type` is what your answer must be, using the letters above. `V` means just `{"cmd":"answer"}`.
 - `args` are written the same way as values. For `set`, the value being written is in `args`.
 
-Hooked C calls ask `{"import":{"name":"strlen","args":["4096","0","0","0"],"original":"268439552","from":"libfoo.so+0x1234"}}`. `args` holds four ARM32 or eight ARM64 register values; it and `original` use decimal strings, and `original` is `null` if absent. Reply `{"cmd":"answer","value":"5"}` to return 5, or `{"cmd":"unhandled"}` to run the original. If the client disconnects or question I/O fails, the guest call stops with the session error; the original runs only after an explicit `unhandled` reply. JNI and debugger stop questions also stop the guest on disconnection or I/O failure. A malformed import answer returns an error and leaves the question open for another answer. Nested commands, including `call_function` of `original`, work while waiting; resume commands error and leave the question open. Policies have no import rules; without a driver (batch or fields), imports pass through. Record/replay includes these questions and commands.
+Hooked C calls send an `import` question instead of a `jni` one; see [stops and questions](DEBUGGING.md#stops-and-questions).
 
 ### Answering Java calls from a file
 

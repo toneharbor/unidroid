@@ -18,7 +18,7 @@ let emu = Emulator::builder()
 
 The address layout, mmap/brk/host-malloc allocation, thread switching by executed code bytes and futex virtual time are already deterministic. `fixed_clock(unix_seconds: i64)` gives guest clock syscalls and arm64 direct counter reads one shared elapsed counter, initially zero. `clock_gettime` realtime and `gettimeofday` return the supplied Unix time plus elapsed time; monotonic starts at one second plus elapsed time. Each read then adds one microsecond. Futex virtual time stays separate. On arm64, `mrs` reads of `CNTVCT_EL0` and `CNTPCT_EL0` return monotonic time converted to ticks at the CPU's `CNTFRQ_EL0` frequency. Each counter read consumes the same one-microsecond clock tick and is recorded and replayed as a monotonic clock read. Other system registers keep Unicorn's behavior.
 
-With `fixed_clock`, `stat` and `fstat` for rootfs, host-linked and overlay files report all three timestamps as the supplied Unix seconds with zero nanoseconds, device/uid/gid as zero, and blocks as size rounded up to 512-byte units. The inode is the 64-bit FNV-1a hash of the normalized guest path; ARM32's additional 32-bit inode field gets the low 32 bits. An open file retains its resolved guest path for `fstat`, and rename updates that path. Host files keep their usual size, mode, nlink, rdev and blksize; overlay files report their stored mode and current length, nlink 1, rdev 0 and blksize 4096. Without a fixed clock, the first stat after an overlay change reads the guest realtime clock and caches the time until the next change. Generated maps and cmdline files read that clock at each stat, using the metadata values described in [ENVIRONMENT.md](ENVIRONMENT.md). These clock reads are recorded and replayed. File changes and path lookups never read the clock; with a fixed clock, stat does not read it either. Symbolic links use their own rootfs metadata with `AT_SYMLINK_NOFOLLOW`, including these fixed-clock rules.
+With `fixed_clock`, `stat` and `fstat` also report fixed file metadata; see [files and system calls](ENVIRONMENT.md#files-and-system-calls).
 
 `random_seed(seed: u64)` supplies a SplitMix64 byte stream to `getrandom`, `/dev/urandom` and `/dev/random`. Successive outputs are consumed as little-endian bytes across all reads, so splitting a read does not change the stream on any platform. The options are independent; omitted options keep their host behavior. The CLI equivalents are `--fixed-clock SECONDS` and `--random-seed N`. Replay always serves recorded clock/random values before consulting either setting.
 
@@ -277,7 +277,7 @@ let emu = Emulator::builder()
     .build()?;
 ```
 
-`Output { fd, text }` reports guest stdout/stderr from `write` and `writev` even with tracing off; one event contains the whole call's bytes decoded as lossy UTF-8. Its text is `stdout: TEXT` or `stderr: TEXT`, dropping one trailing newline, while JSON preserves the text unchanged; see files and system calls in [ENVIRONMENT.md](ENVIRONMENT.md).
+`Output { fd, text }` reports guest stdout/stderr from `write` and `writev` even with tracing off; see [files and system calls](ENVIRONMENT.md#files-and-system-calls).
 
 Events serialize as objects tagged with `event`: `jni`, `jni_call`, `syscall`, `call`, `function_call`, `instruction`, `watch`, `tracepoint`, `output` or `warning`. Arguments are arrays of text; JNI member arguments keep their typed debug form, such as `Object(Handle(7))`. Syscall numbers and returned results are JSON numbers. If dispatch fails, ends the thread or process, or switches away from the thread, `result` is `null` and `errno` is absent. Its text line ends with `= (no return)`. The event is emitted before any crash propagates. Otherwise `errno` is present only for a Linux error result. JNI locations keep the existing text; syscall and import locations include symbols.
 
@@ -289,7 +289,7 @@ Built-in Java classes answer covered calls and type checks before `JniHandler`, 
 
 For the basic protocol, calling and object commands, see [README.md](README.md#serve-drive-it-from-your-program).
 
-`unidroid batch` uses this protocol without a driver. Its jobs and setup refuse `break`, `unbreak`, `watch`, `unwatch`, `tracepoint`, `untracepoint`, `continue`, `step`, `finish`, `return`, `abort`, `answer`, `unhandled`, `checkpoint`, `rewind` and `drop_checkpoint`. Unanswered JNI calls fail immediately; traces, coverage, snapshots and crash responses remain available. See [README.md](README.md) for batch jobs and reports.
+`unidroid batch` uses this protocol without a driver. Its jobs and setup refuse the commands listed under [`batch`](README.md#batch-run-many-inputs-and-compare-reports). Unanswered JNI calls fail immediately; traces, coverage, snapshots and crash responses remain available.
 
 ### Crash responses
 
@@ -311,7 +311,7 @@ Heap and object replies use decimal strings for addresses, sizes, offsets and wo
 
 Serve `load` runs constructors with the session as handler, so constructor breakpoints and hooked imports reach the driver. To set a breakpoint after mapping but before execution, send `{"cmd":"load","path":"libfoo.so","constructors":false}`, then `break`, then `{"cmd":"run_constructors","module":0}`. The last command returns `{"ok":null}` after pending constructors finish; the module number is the one returned by `load`.
 
-Import questions use `{"import":{"name":"strlen","args":["4096","0","0","0"],"original":"268439552","from":"libfoo.so+0x1234"}}`; the example is ARM32, and ARM64 has eight arguments. Reply with `{"cmd":"answer","value":"5"}` or `{"cmd":"unhandled"}`. `unhandled` tail-jumps to the original, or fails with the symbol and caller when `original` is `null`. As with JNI questions, nested commands work, including calling `original`; resume commands error and keep the import question open. Answer or resume the innermost question first. The command list is in [README.md](README.md); the Rust hook example is in [ENVIRONMENT.md](ENVIRONMENT.md).
+Import questions use `{"import":{"name":"strlen","args":["4096","0","0","0"],"original":"268439552","from":"libfoo.so+0x1234"}}`. `args` holds four ARM32 or eight ARM64 register values; `args` and `original` are decimal strings, and `original` is `null` if absent. Reply with `{"cmd":"answer","value":"5"}` or `{"cmd":"unhandled"}`, and a malformed answer returns an error and leaves the question open for another answer. `unhandled` tail-jumps to the original, or fails with the symbol and caller when `original` is `null`. If the client disconnects or question I/O fails, the guest call stops with the session error; the original runs only after an explicit `unhandled` reply, and JNI and debugger stop questions stop the same way. As with JNI questions, nested commands work, including calling `original`; resume commands error and keep the import question open. Answer or resume the innermost question first. Policies have no import rules; without a driver (batch or fields), imports pass through. Record/replay includes these questions and commands. The command list is in [README.md](README.md); the Rust hook example is in [ENVIRONMENT.md](ENVIRONMENT.md).
 
 Use `{"cmd":"watch","at":"0x40001000","size":4,"kind":"write","log":true}` to record hits throughout a call. Log hits go to stderr as text or JSON according to `--log-format`, just like traces, and never ask a `break` question. Omitting `log` or setting it to `false` selects stop mode.
 
@@ -360,8 +360,7 @@ A resume command with no stop open errors with `no breakpoint stop is waiting`. 
 | `coverage` | `reset` (boolean, omitted means false) | list of `{address, location, count}` in address order; address is a decimal string, count is a number; `reset: true` returns the collected counts and then clears them |
 | `heap` | `reset` (boolean, omitted means false) | libc allocation records in allocation-entry order; `reset: true` returns the collected records and then clears them |
 | `object` | `at` (text for `resolve`), `depth` (number, default 1, at most 64) | containing live known block, fields and referrers; depth 0 includes only the root, depth 1 also expands direct targets and referrer blocks, each further level follows one more link |
-| `break` / `unbreak` | `at` (text for `resolve`) | address with Thumb bit cleared / `null` |
-| `break` (conditional) | `at` (text for `resolve`), optional `if` (condition text; omitted means plain breakpoint) | address with Thumb bit cleared (decimal string) |
+| `break` / `unbreak` | `at` (text for `resolve`), plus optional `if` (condition text) for `break` | address with Thumb bit cleared (decimal string) / `null` |
 | `tracepoint` | `at` (text for `resolve`), `values` (nonempty list of expression strings), `log` (boolean, default true) | address with Thumb bit cleared (decimal string); replaces the point and clears its counts |
 | `untracepoint` | `at` (text for `resolve`) | `null` |
 | `tracepoint_hits` | `at` (text for `resolve`), `reset` (boolean, default false) | list of `{value, count}` sorted by value; value is a decimal string, count a number; reset clears only this point’s counts after reading; allowed in batch |
