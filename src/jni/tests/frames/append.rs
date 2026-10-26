@@ -1,7 +1,7 @@
 use super::*;
 
 // (JNIEnv*, builder, append method ID, object): append 1,000 times and delete each result.
-fn append_loop(emu: &mut Emulator) -> Result<u64> {
+pub(super) fn append_loop(emu: &mut Emulator) -> Result<u64> {
     let mut words = match emu.architecture() {
         Architecture::Arm32 => vec![
             0xe92d47f0, // push {r4-r10,lr}

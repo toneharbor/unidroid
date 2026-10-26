@@ -188,6 +188,9 @@ impl Emulator {
         let object = self.allocate_object(object);
         self.insert_ref(object, 0)
     }
+    pub(crate) fn move_to_current_jni_scope(&mut self, handle: Handle) {
+        self.jni.objects.get_mut(&handle).unwrap().scope = self.jni.scope;
+    }
     pub(super) fn jni_object(&self, handle: Handle) -> Result<Rc<RefCell<Object>>> {
         self.jni
             .objects
