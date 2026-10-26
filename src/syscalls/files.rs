@@ -8,13 +8,7 @@ impl Emulator {
         Ok(self.guest_path(dirfd, &self.path_argument(address)?)?)
     }
     pub(super) fn file_syscall(&mut self, nr: u64, a: [u64; 6]) -> Result<u64> {
-        match self.file_operation(nr, a) {
-            Ok(result) => Ok(result),
-            Err(error) => match error.downcast::<Error>() {
-                Ok(error) => Ok(error.result()),
-                Err(error) => Err(error),
-            },
-        }
+        self.file_operation(nr, a).or_else(super::file_error)
     }
     fn file_operation(&mut self, nr: u64, a: [u64; 6]) -> Result<u64> {
         Ok(match nr {
@@ -62,16 +56,7 @@ impl Emulator {
                 }
                 self.read_file(a[0], a[1], a[2], position)?
             }
-            68 => {
-                self.vfs.writable(a[0])?;
-                if (a[3] as i64) < 0 {
-                    return Err(Error(22).into());
-                }
-                let bytes = self
-                    .read_bytes(a[1], a[2].min(crate::vfs::IO_LIMIT) as usize)
-                    .map_err(|_| Error(14))?;
-                self.write_file_bytes(a[0], &bytes, Some(a[3]))?
-            }
+            64 | 68 => self.write_file(a[0], a[1], a[2], (nr == 68).then_some(a[3]))?,
             78 => {
                 if a[3] == 0 {
                     return Err(Error(22).into());

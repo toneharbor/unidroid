@@ -23,17 +23,8 @@ pub fn record(
     }
     let journal = Journal::recording(file, &effective, policy.as_ref())?;
     emu.source.shared.borrow_mut().mode = crate::source::Mode::Recording(Box::new(journal.clone()));
-    let mut session = Session {
-        input,
-        output,
-        error: None,
-        fatal: false,
-        journal: Some(journal),
-        driver: true,
-        policy,
-        checkpoints: Default::default(),
-        next_checkpoint: 0,
-    };
+    let mut session = Session::new(input, output, policy);
+    session.journal = Some(journal);
     session.run(&mut emu)
 }
 
@@ -42,17 +33,8 @@ pub fn replay(file: impl BufRead, builder: EmulatorBuilder) -> Result<usize> {
     let (options, policy, journal) = Journal::replaying(file)?;
     let mut emu = options.build(builder.threads(!options.no_threads))?;
     emu.source.shared.borrow_mut().mode = crate::source::Mode::Replaying(Box::new(journal.clone()));
-    let mut session = Session {
-        input: std::io::empty(),
-        output: std::io::sink(),
-        error: None,
-        fatal: false,
-        journal: Some(journal.clone()),
-        driver: true,
-        policy,
-        checkpoints: Default::default(),
-        next_checkpoint: 0,
-    };
+    let mut session = Session::new(std::io::empty(), std::io::sink(), policy);
+    session.journal = Some(journal.clone());
     session.run(&mut emu)?;
     Ok(journal.borrow().commands)
 }

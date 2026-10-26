@@ -71,11 +71,11 @@ impl Emulator {
             "dlsym" => {
                 let symbol = self.cstring(b)?;
                 let value = if a == self.architecture().rtld_default() {
-                    (0..self.modules.len()).find_map(|i| self.local_symbol(Module(i), &symbol))
+                    self.global_symbol(&symbol, 0)
                 } else if a == self.architecture().rtld_next() {
                     let caller = self.lr()?;
                     let start = self.module_table().at(caller).map_or(0, |(i, _)| i + 1);
-                    (start..self.modules.len()).find_map(|i| self.local_symbol(Module(i), &symbol))
+                    self.global_symbol(&symbol, start)
                 } else if a != 0
                     && a <= self.modules.len() as u64
                     && self.modules[(a - 1) as usize].dl_references != 0

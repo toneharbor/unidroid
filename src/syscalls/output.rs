@@ -1,18 +1,24 @@
 use crate::{
     Emulator,
-    vfs::{Error, IO_LIMIT},
+    vfs::{Error, FsResult, IO_LIMIT},
 };
 
 impl Emulator {
-    pub(super) fn write_output(&mut self, fd: u64, address: u64, length: u64) -> u64 {
-        if let Err(error) = self.vfs.writable(fd) {
-            return error.result();
+    pub(super) fn write_file(
+        &mut self,
+        fd: u64,
+        address: u64,
+        length: u64,
+        position: Option<u64>,
+    ) -> FsResult<u64> {
+        self.vfs.writable(fd)?;
+        if position.is_some_and(|offset| (offset as i64) < 0) {
+            return Err(Error(22));
         }
-        let Ok(bytes) = self.read_bytes(address, length.min(IO_LIMIT) as usize) else {
-            return (-14i64) as u64;
-        };
-        self.write_file_bytes(fd, &bytes, None)
-            .unwrap_or_else(Error::result)
+        let bytes = self
+            .read_bytes(address, length.min(IO_LIMIT) as usize)
+            .map_err(|_| Error(14))?;
+        self.write_file_bytes(fd, &bytes, position)
     }
 
     pub(super) fn writev_output(&mut self, fd: u64, address: u64, count: u64) -> u64 {

@@ -32,18 +32,7 @@ pub fn serve(
     input: impl BufRead,
     output: impl Write,
 ) -> Result<()> {
-    let mut session = Session {
-        input,
-        output,
-        error: None,
-        fatal: false,
-        journal: None,
-        policy,
-        checkpoints: HashMap::new(),
-        next_checkpoint: 0,
-        driver: true,
-    };
-    session.run(emu)
+    Session::new(input, output, policy).run(emu)
 }
 
 struct Session<R, W> {
@@ -59,6 +48,20 @@ struct Session<R, W> {
     driver: bool,
 }
 impl<R: BufRead, W: Write> Session<R, W> {
+    fn new(input: R, output: W, policy: Option<Policy>) -> Self {
+        Self {
+            input,
+            output,
+            error: None,
+            fatal: false,
+            journal: None,
+            policy,
+            checkpoints: HashMap::new(),
+            next_checkpoint: 0,
+            driver: true,
+        }
+    }
+
     fn run(&mut self, emu: &mut Emulator) -> Result<()> {
         while let Some(command) = self.read()? {
             self.respond(emu, command)?;

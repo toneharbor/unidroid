@@ -1,5 +1,4 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use goblin::elf::{Elf, sym};
 use std::{fs, path::PathBuf, process::ExitCode};
 use unidroid::{Crash, Emulator, JniHandler, Probe, Result, Snapshot, Trace};
 
@@ -27,9 +26,8 @@ enum Command {
         options: unidroid::serve::Options,
         #[command(flatten)]
         batch: unidroid::serve::BatchOptions,
-        /// Format diagnostic events on stderr.
-        #[arg(long, value_enum, default_value = "text")]
-        log_format: LogFormat,
+        #[command(flatten)]
+        logging: LogOptions,
         jobs: PathBuf,
     },
     /// Identify which input fields change which output bytes.
@@ -38,9 +36,8 @@ enum Command {
         options: unidroid::serve::Options,
         #[command(flatten)]
         fields: unidroid::serve::FieldsOptions,
-        /// Format diagnostic events on stderr.
-        #[arg(long, value_enum, default_value = "text")]
-        log_format: LogFormat,
+        #[command(flatten)]
+        logging: LogOptions,
         spec: PathBuf,
     },
     /// Replay a recorded serve session and compare every response.
@@ -93,6 +90,12 @@ struct Diagnostics {
     /// Trace function calls from a module or module+0xSTART-0xEND.
     #[arg(long, value_name = "SPEC")]
     trace_calls: Vec<String>,
+    #[command(flatten)]
+    logging: LogOptions,
+}
+
+#[derive(Args)]
+struct LogOptions {
     /// Format diagnostic events on stderr.
     #[arg(long, value_enum, default_value = "text")]
     log_format: LogFormat,
@@ -100,7 +103,7 @@ struct Diagnostics {
 
 impl Diagnostics {
     fn builder(self, inspect: bool) -> unidroid::EmulatorBuilder {
-        self.log_format.builder().trace(Trace {
+        self.logging.log_format.builder().trace(Trace {
             jni: inspect || self.verbose,
             syscalls: self.trace_syscalls,
             imports: self.trace_imports,
@@ -130,59 +133,39 @@ impl LogFormat {
 fn inspect(options: Options, lib: PathBuf, probe: bool) -> Result<ExitCode> {
     let mut emu = options.emulator.build(options.diagnostics.builder(true))?;
     let module = if options.emulator.apk.is_some() {
-        Some(emu.load_apk_library_without_constructors(&lib.to_string_lossy())?)
+        emu.load_apk_library_without_constructors(&lib.to_string_lossy())?
     } else {
-        None
+        emu.load_library_without_constructors(&lib)?
     };
-    let host_bytes;
-    let bytes = if let Some(module) = module {
-        emu.module_bytes(module)?
-    } else {
-        host_bytes = fs::read(&lib)?;
-        &host_bytes
-    };
-    let elf = Elf::parse(bytes)?;
+    let info = emu.library_info(module)?;
     let name = lib.file_name().unwrap().to_string_lossy();
-    let architecture = match (elf.header.e_machine, elf.is_64) {
-        (183, true) => "64-bit ARM (arm64-v8a)",
-        (40, false) => "32-bit ARM (armeabi-v7a)",
-        _ => return Err(format!("{name}: not an ARM library").into()),
+    let architecture = if info.arm64 {
+        "64-bit ARM (arm64-v8a)"
+    } else {
+        "32-bit ARM (armeabi-v7a)"
     };
     println!("{name}: {architecture}");
     println!(
         "Needs: {}",
-        if elf.libraries.is_empty() {
+        if info.needed.is_empty() {
             "(nothing)".into()
         } else {
-            elf.libraries.join(", ")
+            info.needed.join(", ")
         }
     );
     println!("Java_ exports:");
-    let exports: Vec<_> = elf
-        .dynsyms
-        .iter()
-        .filter(|symbol| {
-            symbol.st_shndx != 0 && matches!(symbol.st_bind(), sym::STB_GLOBAL | sym::STB_WEAK)
-        })
-        .filter_map(|symbol| elf.dynstrtab.get_at(symbol.st_name))
-        .collect();
     let mut any = false;
-    for name in exports.iter().filter(|name| name.starts_with("Java_")) {
+    for name in info.exports.iter().filter(|name| name.starts_with("Java_")) {
         println!("  {name}");
         any = true;
     }
     if !any {
         println!("  (none)");
     }
-    let onload = exports.contains(&"JNI_OnLoad");
+    let onload = info.exports.iter().any(|name| name == "JNI_OnLoad");
     println!("JNI_OnLoad: {}", if onload { "yes" } else { "no" });
     let mut policy = options.emulator.load_policy()?;
-    let module = if let Some(module) = module {
-        emu.run_constructors(module, &mut ())?;
-        module
-    } else {
-        emu.load_library(lib)?
-    };
+    emu.run_constructors(module, &mut ())?;
     let mut status = ExitCode::SUCCESS;
     let mut answers = Probe::default();
     if onload {
@@ -277,13 +260,13 @@ fn run() -> Result<ExitCode> {
         Command::Batch {
             options,
             batch,
-            log_format,
+            logging,
             jobs,
         } => {
             let report = unidroid::serve::batch(
                 &options,
                 &batch,
-                || log_format.builder(),
+                || logging.log_format.builder(),
                 std::io::BufReader::new(fs::File::open(jobs)?),
             )?;
             println!("{report}");
@@ -296,13 +279,13 @@ fn run() -> Result<ExitCode> {
         Command::Fields {
             options,
             fields,
-            log_format,
+            logging,
             spec,
         } => {
             let report = unidroid::serve::fields(
                 &options,
                 &fields,
-                || log_format.builder(),
+                || logging.log_format.builder(),
                 serde_json::from_reader(fs::File::open(spec)?)?,
             )?;
             println!("{report}");

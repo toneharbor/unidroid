@@ -80,15 +80,7 @@ impl Emulator {
         }
     }
     fn build(builder: EmulatorBuilder) -> Result<Self> {
-        for spec in builder
-            .trace
-            .code
-            .iter()
-            .chain(&builder.trace.calls)
-            .chain(&builder.trace.coverage)
-        {
-            debug::code::Spec::parse(spec)?;
-        }
+        builder.trace.validate()?;
         let apk = builder.apk.as_deref().map(crate::Apk::open).transpose()?;
         let process_name = builder.process_name.unwrap_or_else(|| {
             apk.as_ref()

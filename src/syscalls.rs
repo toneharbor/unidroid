@@ -3,6 +3,14 @@ mod files;
 mod output;
 mod procfs;
 mod system;
+
+fn file_error(error: Box<dyn std::error::Error>) -> Result<u64> {
+    match error.downcast::<crate::vfs::Error>() {
+        Ok(error) => Ok(error.result()),
+        Err(error) => Err(error),
+    }
+}
+
 impl Emulator {
     pub(crate) fn syscall(&mut self, guest_nr: u64, mut a: [u64; 6], pc: u64) -> Result<u64> {
         let nr = self
@@ -28,12 +36,11 @@ impl Emulator {
     fn dispatch_syscall(&mut self, guest_nr: u64, nr: u64, a: [u64; 6], pc: u64) -> Result<u64> {
         let errno = |n: i64| (-n) as u64;
         Ok(match nr {
-            23 | 24 | 25 | 34 | 35 | 38 | 46 | 48 | 56 | 57 | 61 | 62 | 63 | 67 | 68 | 78 | 79
-            | 80 | 82 | 83 | 276 => self.file_syscall(nr, a)?,
+            23 | 24 | 25 | 34 | 35 | 38 | 46 | 48 | 56 | 57 | 61 | 62 | 63 | 64 | 67 | 68 | 78
+            | 79 | 80 | 82 | 83 | 276 => self.file_syscall(nr, a)?,
             140 if self.architecture() == crate::arch::Architecture::Arm32 => {
                 self.file_syscall(nr, a)?
             }
-            64 => self.write_output(a[0], a[1], a[2]),
             66 => self.writev_output(a[0], a[1], a[2]),
             160 => self.uname(a[0]),
             167 => match a[0] {
@@ -179,10 +186,7 @@ impl Emulator {
                         Ok(bytes) => bytes,
                         Err(error) => {
                             let _ = self.cpu_mut()?.mem_unmap(address, length);
-                            return match error.downcast::<crate::vfs::Error>() {
-                                Ok(error) => Ok(error.result()),
-                                Err(error) => Err(error),
-                            };
+                            return file_error(error);
                         }
                     };
                     let n = bytes.len();
@@ -248,18 +252,9 @@ impl Emulator {
             if region.end <= start || region.start >= end {
                 keep.push(region);
             } else {
-                if region.start < start {
-                    keep.push(Region {
-                        end: start,
-                        ..region.clone()
-                    });
-                }
-                if region.end > end {
-                    keep.push(Region {
-                        start: end,
-                        ..region
-                    });
-                }
+                let (left, right) = region.split_around(start, end);
+                keep.extend(left);
+                keep.extend(right);
             }
         }
         self.regions = keep;

@@ -77,6 +77,28 @@ impl Emulator {
         }
         result
     }
+    fn return_value(&self, pc: u64) -> Result<Option<u64>> {
+        if pc & !1 != RETURN {
+            return Ok(None);
+        }
+        let thread = self.threads.tid();
+        if self.threads.depth != 1 || thread == threads::MAIN_TID {
+            return self.reg(0).map(Some);
+        }
+        Err(format!(
+            "guest thread {thread} returned to RETURN at {}",
+            self.location(pc)
+        )
+        .into())
+    }
+
+    fn suspend_active_traces(&mut self, pc: u64) -> Result<()> {
+        if self.trace.imports || !self.trace.code.is_empty() || !self.trace.calls.is_empty() {
+            self.suspend_traces(pc & !1)?;
+        }
+        Ok(())
+    }
+
     fn run_loop(
         &mut self,
         mut pc: u64,
@@ -101,15 +123,8 @@ impl Emulator {
                 finish: control.finish_target(),
                 ..CpuData::default()
             };
-            if pc & !1 == RETURN {
-                if !outermost || thread == threads::MAIN_TID {
-                    return self.reg(0);
-                }
-                return Err(format!(
-                    "guest thread {thread} returned to RETURN at {}",
-                    self.location(pc)
-                )
-                .into());
+            if let Some(value) = self.return_value(pc)? {
+                return Ok(value);
             }
             let result = self.run_cpu(pc, stepping);
             let (restart, location) = self.restart_pc()?;
@@ -131,10 +146,7 @@ impl Emulator {
             let pending = self.cpu()?.get_data().stop;
             let watched = self.cpu()?.get_data().watch.is_some();
             if pending.is_some() || finished || watched {
-                if self.trace.imports || !self.trace.code.is_empty() || !self.trace.calls.is_empty()
-                {
-                    self.suspend_traces(pc & !1)?;
-                }
+                self.suspend_active_traces(pc)?;
                 let reason = if watched {
                     crate::StopReason::Watchpoint
                 } else if finished || pending == Some(crate::StopReason::Finish) {
@@ -156,32 +168,16 @@ impl Emulator {
             result?;
             let Some(interrupt) = interrupt else {
                 if stepping {
-                    if self.trace.imports
-                        || !self.trace.code.is_empty()
-                        || !self.trace.calls.is_empty()
-                    {
-                        self.suspend_traces(pc & !1)?;
-                    }
+                    self.suspend_active_traces(pc)?;
                     if !(TRAMPOLINE..RETURN).contains(&(pc & !1)) {
                         pc = control.stopped(self, handler, crate::StopReason::Step)?;
                     }
                     continue;
                 }
-                if pc & !1 == RETURN {
-                    if !outermost || self.threads.tid() == threads::MAIN_TID {
-                        return self.reg(0);
-                    }
-                    return Err(format!(
-                        "guest thread {} returned to RETURN at {}",
-                        self.threads.tid(),
-                        self.location(pc)
-                    )
-                    .into());
+                if let Some(value) = self.return_value(pc)? {
+                    return Ok(value);
                 }
-                if self.trace.imports || !self.trace.code.is_empty() || !self.trace.calls.is_empty()
-                {
-                    self.suspend_traces(pc & !1)?;
-                }
+                self.suspend_active_traces(pc)?;
                 pc = self.switch_thread(pc)?;
                 continue;
             };

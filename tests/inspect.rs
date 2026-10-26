@@ -163,10 +163,7 @@ fn inspect_names_a_non_arm_library_in_its_error() {
     assert!(output.stdout.is_empty());
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
-        format!(
-            "error: {}: not an ARM library\n",
-            library.0.file_name().unwrap().to_string_lossy()
-        )
+        format!("error: ELF {}: not an ARM library\n", library.0.display())
     );
 }
 

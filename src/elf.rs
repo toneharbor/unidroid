@@ -45,6 +45,16 @@ pub(crate) struct Symbol {
     pub function: bool,
 }
 
+impl Symbol {
+    pub fn address(&self, base: u64) -> u64 {
+        if self.absolute {
+            self.value
+        } else {
+            base + self.value
+        }
+    }
+}
+
 impl Image {
     pub fn function(&self, offset: u64) -> Option<String> {
         let functions = self.functions.get_or_init(|| {
@@ -122,7 +132,7 @@ impl Image {
         let arch = match (elf.header.e_machine, elf.is_64) {
             (183, true) => Architecture::Arm64,
             (40, false) => Architecture::Arm32,
-            _ => return Err(std::io::Error::from(std::io::ErrorKind::InvalidData).into()),
+            _ => return Err("not an ARM library".into()),
         };
         if !elf.little_endian {
             return Err(std::io::Error::from(std::io::ErrorKind::InvalidData).into());

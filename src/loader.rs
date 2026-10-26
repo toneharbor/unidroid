@@ -6,7 +6,34 @@ use crate::{
 use std::{collections::HashMap, path::Path};
 use unicorn_engine::unicorn_const::Prot;
 
+/// Metadata from the loader's parsed ELF image.
+pub struct LibraryInfo {
+    pub arm64: bool,
+    pub needed: Vec<String>,
+    /// Defined exports in dynamic symbol table order.
+    pub exports: Vec<String>,
+}
+
 impl Emulator {
+    /// Read library metadata without reparsing its ELF or running guest code.
+    pub fn library_info(&self, module: Module) -> Result<LibraryInfo> {
+        let loaded = self
+            .modules
+            .get(module.0)
+            .ok_or_else(|| format!("no module {} is loaded", module.0))?;
+        let image = &loaded.image;
+        let mut exports: Vec<_> = image.exports.values().copied().collect();
+        exports.sort_unstable();
+        Ok(LibraryInfo {
+            arm64: image.arch == crate::Architecture::Arm64,
+            needed: image.needed.clone(),
+            exports: exports
+                .into_iter()
+                .map(|index| image.symbols[index].name.clone())
+                .collect(),
+        })
+    }
+
     pub fn symbol_alias(&mut self, name: impl Into<String>, target: impl Into<String>) {
         self.symbol_aliases.insert(name.into(), target.into());
     }
@@ -35,16 +62,7 @@ impl Emulator {
         if self.trace.imports {
             self.refresh_imports();
         }
-        if !self.trace.code.is_empty() {
-            self.trace_code(&self.trace.code.clone())?;
-        }
-        if !self.trace.calls.is_empty() {
-            self.trace_calls(&self.trace.calls.clone())?;
-        }
-        if !self.trace.coverage.is_empty() {
-            self.trace_coverage(&self.trace.coverage.clone())?;
-        }
-        self.trace_heap(self.trace.heap)?;
+        self.apply_trace_selections(&self.trace.clone())?;
         Ok(module)
     }
     fn load_image(&mut self, library: Library) -> Result<Module> {
@@ -169,11 +187,10 @@ impl Emulator {
     pub(super) fn exported_symbol(&self, module: Module, name: &str) -> Option<u64> {
         let m = &self.modules[module.0];
         let symbol = &m.image.symbols[*m.image.exports.get(name)?];
-        Some(if symbol.absolute {
-            symbol.value
-        } else {
-            m.base + symbol.value
-        })
+        Some(symbol.address(m.base))
+    }
+    pub(super) fn global_symbol(&self, name: &str, start: usize) -> Option<u64> {
+        (start..self.modules.len()).find_map(|i| self.local_symbol(Module(i), name))
     }
     pub(super) fn search_symbol(
         &self,
@@ -197,7 +214,13 @@ impl Emulator {
             return Err(format!("no module {} is loaded", module.0).into());
         }
         self.search_symbol(module, name, &mut Vec::new())
-            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound).into())
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("unknown symbol {name} in {}", self.modules[module.0].name),
+                )
+                .into()
+            })
     }
     pub(super) fn relocate(&mut self, module: Module, hook: Option<&str>) -> Result<()> {
         if self.modules[module.0].relocated && hook.is_none() {
@@ -243,18 +266,11 @@ impl Emulator {
                 if let Some(value) = self.overrides.get(&symbol.name) {
                     *value
                 } else if symbol.defined {
-                    if symbol.absolute {
-                        symbol.value
-                    } else {
-                        base + symbol.value
-                    }
-                } else if let Some(value) = (0..self.modules.len())
-                    .find_map(|i| self.local_symbol(Module(i), &symbol.name))
-                    .or_else(|| {
-                        let target = self.symbol_aliases.get(&symbol.name)?;
-                        (0..self.modules.len()).find_map(|i| self.local_symbol(Module(i), target))
-                    })
-                {
+                    symbol.address(base)
+                } else if let Some(value) = self.global_symbol(&symbol.name, 0).or_else(|| {
+                    let target = self.symbol_aliases.get(&symbol.name)?;
+                    self.global_symbol(target, 0)
+                }) {
                     value
                 } else if symbol.binding == 2 {
                     0

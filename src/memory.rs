@@ -4,6 +4,17 @@ use unicorn_engine::{
     unicorn_const::{HookType, MemType, Prot, uc_error},
 };
 
+impl Region {
+    pub(super) fn split_around(self, start: u64, end: u64) -> (Option<Self>, Option<Self>) {
+        let left = (self.start < start).then(|| Self {
+            end: start,
+            ..self.clone()
+        });
+        let right = (end < self.end).then_some(Self { start: end, ..self });
+        (left, right)
+    }
+}
+
 impl Emulator {
     pub(crate) fn memory_hook(
         &mut self,
@@ -146,23 +157,14 @@ impl Emulator {
                 self.cpu_mut()?.mem_unmap(lo, hi - lo)?;
                 self.cpu_mut()?.mem_map(lo, hi - lo, permissions)?;
                 self.write_bytes(lo, &bytes)?;
-                if region.start < lo {
-                    regions.push(Region {
-                        end: lo,
-                        ..region.clone()
-                    });
-                }
+                let (left, right) = region.split_around(lo, hi);
+                regions.extend(left);
                 regions.push(Region {
                     start: lo,
                     end: hi,
                     shared: None,
                 });
-                if hi < region.end {
-                    regions.push(Region {
-                        start: hi,
-                        ..region
-                    });
-                }
+                regions.extend(right);
             } else {
                 regions.push(region);
             }

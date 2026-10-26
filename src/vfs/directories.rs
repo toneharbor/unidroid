@@ -40,12 +40,15 @@ impl Emulator {
                     );
                 }
             }
-            for generated in resolution::generated_paths() {
-                if resolution::parent(&generated) == path && !self.vfs.hidden(&generated) {
+            for (generated, kind) in resolution::generated_paths() {
+                if generated != path
+                    && resolution::parent(generated) == path
+                    && !self.vfs.hidden(generated)
+                {
                     let name = generated.rsplit('/').next().unwrap().as_bytes().to_vec();
                     entries.insert(
                         name,
-                        if self.guest_node(&generated)?.borrow().is_dir() {
+                        if matches!(kind, resolution::GeneratedKind::Directory) {
                             4
                         } else {
                             8

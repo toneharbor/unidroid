@@ -21,6 +21,36 @@ fn listing(emu: &mut Emulator, libc: Module, path: &str) -> Result<Vec<String>> 
 }
 
 #[test]
+fn proc_getdents64_lists_fd_as_a_directory() -> Result<()> {
+    for (dir, nr) in [("lib64", 61), ("lib", 217)] {
+        let mut emu = Emulator::builder().build()?;
+        let libc = emu.load_library(format!("rootfs/{dir}/libc.so"))?;
+        let buffer = emu.malloc(4096)?;
+        for path in ["/proc/self", "/proc/1234"] {
+            let path = emu.new_cstring(path)?;
+            let fd = call(&mut emu, libc, "open", &[path, 0])?;
+            let length = call(&mut emu, libc, "syscall", &[nr, fd, buffer, 4096])?;
+            let bytes = emu.read_bytes(buffer, length as usize)?;
+            let mut entries = Vec::new();
+            let mut offset = 0;
+            while offset < bytes.len() {
+                let length =
+                    u16::from_le_bytes(bytes[offset + 16..offset + 18].try_into()?) as usize;
+                let name = bytes[offset + 19..offset + length]
+                    .split(|byte| *byte == 0)
+                    .next()
+                    .unwrap();
+                entries.push((name.to_vec(), bytes[offset + 18]));
+                offset += length;
+            }
+            assert!(entries.contains(&(b"fd".to_vec(), 4)), "{entries:?}");
+            assert_eq!(call(&mut emu, libc, "close", &[fd])?, 0);
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn directories_merge_sorted_entries_and_hide_removed_rootfs_paths() -> Result<()> {
     for dir in ["lib64", "lib"] {
         let mut emu = Emulator::builder().build()?;

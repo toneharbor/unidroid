@@ -170,8 +170,7 @@ impl Emulator {
         if text.starts_with("0x") {
             return number(text);
         }
-        (0..self.modules.len())
-            .find_map(|i| self.local_symbol(Module(i), text))
+        self.global_symbol(text, 0)
             .ok_or_else(|| format!("unknown symbol {text}").into())
     }
 }

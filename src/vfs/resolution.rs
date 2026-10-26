@@ -35,28 +35,42 @@ pub(super) fn under(path: &str, ancestor: &str) -> bool {
             .is_some_and(|tail| tail.starts_with('/'))
 }
 
-pub(super) fn generated_paths() -> Vec<String> {
-    let pid = crate::threads::MAIN_TID;
-    [
-        "/dev",
-        "/dev/random",
-        "/dev/urandom",
-        "/proc",
-        "/proc/self",
-        "/proc/self/maps",
-        "/proc/self/cmdline",
-        "/proc/self/task",
-    ]
-    .into_iter()
-    .map(String::from)
-    .chain([
-        format!("/proc/{pid}"),
-        format!("/proc/{pid}/maps"),
-        format!("/proc/{pid}/cmdline"),
-        format!("/proc/self/task/{pid}"),
-        format!("/proc/self/task/{pid}/maps"),
-    ])
-    .collect()
+pub(super) enum GeneratedKind {
+    Directory,
+    Random,
+    Cmdline,
+    Maps,
+}
+
+pub(super) fn generated_paths() -> &'static [(String, GeneratedKind)] {
+    use GeneratedKind::*;
+    static PATHS: std::sync::OnceLock<Vec<(String, GeneratedKind)>> = std::sync::OnceLock::new();
+    PATHS.get_or_init(|| {
+        let pid = crate::threads::MAIN_TID;
+        [
+            ("/", Directory),
+            ("/dev", Directory),
+            ("/dev/random", Random),
+            ("/dev/urandom", Random),
+            ("/proc", Directory),
+            ("/proc/self", Directory),
+            ("/proc/self/maps", Maps),
+            ("/proc/self/cmdline", Cmdline),
+            ("/proc/self/task", Directory),
+            ("/proc/self/fd", Directory),
+        ]
+        .into_iter()
+        .map(|(path, kind)| (path.into(), kind))
+        .chain([
+            (format!("/proc/{pid}"), Directory),
+            (format!("/proc/{pid}/maps"), Maps),
+            (format!("/proc/{pid}/cmdline"), Cmdline),
+            (format!("/proc/{pid}/fd"), Directory),
+            (format!("/proc/self/task/{pid}"), Directory),
+            (format!("/proc/self/task/{pid}/maps"), Maps),
+        ])
+        .collect()
+    })
 }
 impl Emulator {
     pub(super) fn rootfs_path(&self, path: &str) -> FsResult<PathBuf> {
@@ -140,36 +154,20 @@ impl Emulator {
         if self.vfs.hidden(path) {
             return Err(Error(2));
         }
-        let pid = crate::threads::MAIN_TID;
-        if path == "/dev/urandom" || path == "/dev/random" {
-            return Ok(Node::new(Data::Random, 0o020666));
-        }
-        if path == "/proc/self/cmdline" || path == format!("/proc/{pid}/cmdline") {
-            let mut bytes = self.process_name.as_bytes().to_vec();
-            bytes.push(0);
-            return Ok(Node::new(Data::Generated(Rc::new(bytes)), 0o100000));
-        }
-        if path == "/proc/self/maps"
-            || path == format!("/proc/{pid}/maps")
-            || path == format!("/proc/self/task/{pid}/maps")
-        {
-            let bytes = self.proc_maps().map_err(|_| Error(5))?;
-            return Ok(Node::new(Data::Generated(Rc::new(bytes)), 0o100000));
-        }
-        if [
-            "/",
-            "/dev",
-            "/proc",
-            "/proc/self",
-            "/proc/self/task",
-            "/proc/self/fd",
-            &format!("/proc/{pid}/fd"),
-            &format!("/proc/{pid}"),
-            &format!("/proc/self/task/{pid}"),
-        ]
-        .contains(&path)
-        {
-            return Ok(Node::new(Data::Directory, 0o040755));
+        if let Some((_, kind)) = generated_paths().iter().find(|(entry, _)| entry == path) {
+            return Ok(match kind {
+                GeneratedKind::Directory => Node::new(Data::Directory, 0o040755),
+                GeneratedKind::Random => Node::new(Data::Random, 0o020666),
+                GeneratedKind::Cmdline => {
+                    let mut bytes = self.process_name.as_bytes().to_vec();
+                    bytes.push(0);
+                    Node::new(Data::Generated(Rc::new(bytes)), 0o100000)
+                }
+                GeneratedKind::Maps => {
+                    let bytes = self.proc_maps().map_err(|_| Error(5))?;
+                    Node::new(Data::Generated(Rc::new(bytes)), 0o100000)
+                }
+            });
         }
         for descriptor in self.vfs.fds.values() {
             let file = descriptor.file.borrow();

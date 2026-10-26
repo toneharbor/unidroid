@@ -12,6 +12,7 @@ mod hook;
 pub use hook::ImportCall;
 mod jni;
 mod loader;
+pub use loader::LibraryInfo;
 mod memory;
 mod policy;
 pub use policy::{Policy, PolicyHandler};

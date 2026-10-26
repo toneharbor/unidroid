@@ -13,6 +13,15 @@ pub struct Trace {
     pub coverage: Vec<String>,
 }
 
+impl Trace {
+    pub(crate) fn validate(&self) -> Result<()> {
+        for entry in self.code.iter().chain(&self.calls).chain(&self.coverage) {
+            super::code::Spec::parse(entry)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct MemoryAccess {
     #[serde(rename = "access", serialize_with = "access_kind")]
@@ -284,15 +293,17 @@ impl Emulator {
         &self.trace
     }
     pub fn set_trace(&mut self, trace: Trace) -> Result<()> {
-        for entry in trace.calls.iter().chain(&trace.coverage) {
-            super::code::Spec::parse(entry)?;
-        }
-        self.trace_code(&trace.code)?;
-        self.trace_calls(&trace.calls)?;
-        self.trace_coverage(&trace.coverage)?;
-        self.trace_heap(trace.heap)?;
+        trace.validate()?;
+        self.apply_trace_selections(&trace)?;
         self.trace_imports(trace.imports)?;
         self.trace = trace;
         Ok(())
+    }
+
+    pub(crate) fn apply_trace_selections(&mut self, trace: &Trace) -> Result<()> {
+        self.trace_code(&trace.code)?;
+        self.trace_calls(&trace.calls)?;
+        self.trace_coverage(&trace.coverage)?;
+        self.trace_heap(trace.heap)
     }
 }

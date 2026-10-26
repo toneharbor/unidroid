@@ -6,17 +6,9 @@ use std::io::{Empty, Sink};
 pub(super) type BatchSession = Session<Empty, Sink>;
 
 pub(super) fn session(policy: Option<Policy>) -> BatchSession {
-    Session {
-        input: std::io::empty(),
-        output: std::io::sink(),
-        error: None,
-        fatal: false,
-        journal: None,
-        policy,
-        checkpoints: Default::default(),
-        next_checkpoint: 0,
-        driver: false,
-    }
+    let mut session = Session::new(std::io::empty(), std::io::sink(), policy);
+    session.driver = false;
+    session
 }
 
 pub(super) fn run(

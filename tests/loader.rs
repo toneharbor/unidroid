@@ -5,6 +5,87 @@ mod elf;
 mod errors;
 
 #[test]
+fn library_info_reports_loaded_architecture_dependencies_and_exports_in_dynsym_order() -> Result<()>
+{
+    for arm64 in [true, false] {
+        let library = elf::TestLibrary::new(arm64, false);
+        let mut bytes = std::fs::read(&library.0)?;
+        let width = if arm64 { 8 } else { 4 };
+        let names = b"\0zvalue\0data\0protect\0weak\0libdl.so\0";
+        bytes[0x1100..0x1100 + names.len()].copy_from_slice(names);
+        bytes[0x1000 + 7 * width..0x1000 + 8 * width]
+            .copy_from_slice(&(names.len() as u64).to_le_bytes()[..width]);
+        // Add DT_NEEDED after the existing dynamic entries.
+        bytes[0x1000 + 20 * width..0x1000 + 21 * width]
+            .copy_from_slice(&1u64.to_le_bytes()[..width]);
+        bytes[0x1000 + 21 * width..0x1000 + 22 * width]
+            .copy_from_slice(&26u64.to_le_bytes()[..width]);
+        // A defined local symbol belongs to the loader's exports too.
+        bytes[0x121c] = 0x02;
+        std::fs::write(&library.0, bytes)?;
+        let mut emu = Emulator::builder().build()?;
+        let module = emu.load_library_without_constructors(&library.0)?;
+        let info: unidroid::LibraryInfo = emu.library_info(module)?;
+        assert_eq!(info.arm64, arm64);
+        assert_eq!(info.needed, ["libdl.so"]);
+        assert_eq!(info.exports, ["zvalue", "data", "protect"]);
+    }
+    Ok(())
+}
+
+#[test]
+fn missing_symbol_names_the_symbol_and_module() -> Result<()> {
+    for arm64 in [true, false] {
+        let library = elf::TestLibrary::new(arm64, false);
+        let mut emu = Emulator::builder().build()?;
+        let module = emu.load_library(&library.0)?;
+        let name = library.0.file_name().unwrap().to_string_lossy();
+        assert_eq!(
+            emu.find_symbol(module, "missing").unwrap_err().to_string(),
+            format!("unknown symbol missing in {name}")
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn relocations_use_their_own_symbol_entry_for_unnamed_and_duplicate_exports() -> Result<()> {
+    for arm64 in [true, false] {
+        for (unnamed, absolute) in [(true, false), (true, true), (false, false)] {
+            let library = elf::TestLibrary::new(arm64, false);
+            let mut bytes = std::fs::read(&library.0)?;
+            let width = if arm64 { 8 } else { 4 };
+            let size = if arm64 { 24 } else { 16 };
+            let symbol = 0x1200 + size;
+            if unnamed {
+                bytes[symbol..symbol + 4].copy_from_slice(&0u32.to_le_bytes());
+            } else {
+                // The later "protect" export takes the name "answer".
+                bytes[0x1200 + 3 * size..0x1204 + 3 * size].copy_from_slice(&1u32.to_le_bytes());
+            }
+            if absolute {
+                let section = symbol + if arm64 { 6 } else { 14 };
+                bytes[section..section + 2].copy_from_slice(&0xfff1u16.to_le_bytes());
+            }
+            std::fs::write(&library.0, bytes)?;
+            let mut emu = Emulator::builder().build()?;
+            let module = emu.load_library_without_constructors(&library.0)?;
+            let base = emu.modules()[module.0].base;
+            let data = emu.find_symbol(module, "data")?;
+            let expected = if absolute { 0x204 } else { base + 0x204 };
+            assert_eq!(
+                emu.read_bytes(data + 8, width)?,
+                expected.to_le_bytes()[..width]
+            );
+            if !unnamed {
+                assert_eq!(emu.find_symbol(module, "answer")?, base + 0x240);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn cpu_calls_require_a_library_but_host_objects_do_not() -> Result<()> {
     let mut emu = Emulator::builder().build()?;
     let text = emu.new_string("before loading");
