@@ -292,3 +292,73 @@ fn unknown_syscall_returns_linux_enosys() {
     emu.setup_cpu(Architecture::Arm64).unwrap();
     assert_eq!(emu.syscall(9999, [0; 6], 0x8000).unwrap() as i64, -38);
 }
+
+#[test]
+fn nanosleep_returns_eintr() {
+    for arch in [Architecture::Arm64, Architecture::Arm32] {
+        let mut emu = Emulator::builder().build().unwrap();
+        emu.setup_cpu(arch).unwrap();
+        let nr = if arch == Architecture::Arm64 {
+            101
+        } else {
+            162
+        };
+        assert_eq!(emu.syscall(nr, [0; 6], 0x8000).unwrap() as i64, -4);
+    }
+}
+
+#[test]
+fn clock_nanosleep_returns_eintr() {
+    for arch in [Architecture::Arm64, Architecture::Arm32] {
+        let mut emu = Emulator::builder().build().unwrap();
+        emu.setup_cpu(arch).unwrap();
+        let nr = if arch == Architecture::Arm64 {
+            115
+        } else {
+            265
+        };
+        assert_eq!(emu.syscall(nr, [0; 6], 0x8000).unwrap() as i64, -4);
+    }
+}
+
+#[test]
+fn tgkill_returns_zero() {
+    for arch in [Architecture::Arm64, Architecture::Arm32] {
+        let mut emu = Emulator::builder().build().unwrap();
+        emu.setup_cpu(arch).unwrap();
+        let nr = if arch == Architecture::Arm64 {
+            131
+        } else {
+            268
+        };
+        assert_eq!(emu.syscall(nr, [0; 6], 0x8000).unwrap(), 0);
+    }
+}
+
+#[test]
+fn rt_sigaction_returns_zero() {
+    for arch in [Architecture::Arm64, Architecture::Arm32] {
+        let mut emu = Emulator::builder().build().unwrap();
+        emu.setup_cpu(arch).unwrap();
+        let nr = if arch == Architecture::Arm64 {
+            134
+        } else {
+            174
+        };
+        assert_eq!(emu.syscall(nr, [0; 6], 0x8000).unwrap(), 0);
+    }
+}
+
+#[test]
+fn accept4_returns_eagain() {
+    for arch in [Architecture::Arm64, Architecture::Arm32] {
+        let mut emu = Emulator::builder().build().unwrap();
+        emu.setup_cpu(arch).unwrap();
+        let nr = if arch == Architecture::Arm64 {
+            242
+        } else {
+            366
+        };
+        assert_eq!(emu.syscall(nr, [0; 6], 0x8000).unwrap() as i64, -11);
+    }
+}

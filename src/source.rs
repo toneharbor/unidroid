@@ -131,25 +131,36 @@ impl Source {
                 1,
                 0,
                 move |cpu, register, system| {
-                    if !matches!(
+                    if matches!(
                         (system.op0, system.op1, system.crn, system.crm, system.op2),
                         (3, 3, 14, 0, 1 | 2)
                     ) {
-                        return false;
+                        let result = (|| -> Result<()> {
+                            let mut frequency = RegisterARM64CP::new().op0(3).op1(3).crn(14);
+                            cpu.reg_read_arm64_coproc(&mut frequency)?;
+                            let time = shared.borrow_mut().time(Clock::Monotonic)?;
+                            let nanoseconds = time.sec as u128 * 1_000_000_000 + time.nsec as u128;
+                            let ticks = nanoseconds * frequency.val as u128 / 1_000_000_000;
+                            cpu.reg_write(register, ticks as u64)?;
+                            Ok(())
+                        })();
+                        if let Err(error) = result {
+                            let pc = cpu.reg_read(RegisterARM64::PC).expect("program counter");
+                            cpu.get_data_mut().source_error = Some((pc, error));
+                            let _ = cpu.emu_stop();
+                        }
+                        return true;
                     }
-                    let result = (|| -> Result<()> {
-                        let mut frequency = RegisterARM64CP::new().op0(3).op1(3).crn(14);
-                        cpu.reg_read_arm64_coproc(&mut frequency)?;
-                        let time = shared.borrow_mut().time(Clock::Monotonic)?;
-                        let nanoseconds = time.sec as u128 * 1_000_000_000 + time.nsec as u128;
-                        let ticks = nanoseconds * frequency.val as u128 / 1_000_000_000;
-                        cpu.reg_write(register, ticks as u64)?;
-                        Ok(())
-                    })();
-                    if let Err(error) = result {
-                        let pc = cpu.reg_read(RegisterARM64::PC).expect("program counter");
-                        cpu.get_data_mut().source_error = Some((pc, error));
-                        let _ = cpu.emu_stop();
+                    let mut cp = RegisterARM64CP::new()
+                        .op0(system.op0)
+                        .op1(system.op1)
+                        .crn(system.crn)
+                        .crm(system.crm)
+                        .op2(system.op2);
+                    if cpu.reg_read_arm64_coproc(&mut cp).is_ok() {
+                        cpu.reg_write(register, cp.val).expect("reg_write");
+                    } else {
+                        cpu.reg_write(register, 0).expect("reg_write");
                     }
                     true
                 },

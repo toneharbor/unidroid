@@ -446,4 +446,34 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    fn arm64_tpidr_el0_is_readable_via_mrs_instruction() -> Result<()> {
+        let mut emu = Emulator::builder()
+            .fixed_clock(1_700_000_000)
+            .random_seed(42)
+            .build()?;
+        emu.load_library("rootfs/lib64/libc.so")?;
+        let tls = emu.cpu()?.reg_read(emu.architecture().tls())?;
+        assert_ne!(tls, 0, "TPIDR_EL0 should be non-zero after setup_tls");
+        let code = RETURN + 0x100;
+        let words: &[u32] = &[
+            0xd53bd041, // mrs x1, TPIDR_EL0
+            0xaa0103e0, // mov x0, x1
+            0xd65f03c0, // ret
+        ];
+        emu.write_bytes(
+            code,
+            &words
+                .iter()
+                .flat_map(|w| w.to_le_bytes())
+                .collect::<Vec<_>>(),
+        )?;
+        let result = emu.call_function(code, &[])?;
+        assert_eq!(
+            result, tls,
+            "mrs TPIDR_EL0 should return the TLS pointer set by setup_tls"
+        );
+        Ok(())
+    }
 }

@@ -234,30 +234,68 @@ fn a_partly_executed_thread_resumes_after_main_returns() -> Result<()> {
 }
 
 #[test]
-fn sleep_syscalls_yield_and_signal_setup_returns_zero() -> Result<()> {
+fn sched_yield_yields_and_signal_setup_returns_zero() -> Result<()> {
     for arch in [Architecture::Arm32, Architecture::Arm64] {
-        for (arm32, arm64) in [(158, 124), (162, 101), (265, 115)] {
-            let (mut emu, libc) = libc_emulator(arch)?;
-            let worker = code(
-                &mut emu,
-                0x100,
-                if arch == Architecture::Arm32 {
-                    &[0xe3a01001, 0xe5801000, 0xe12fff1e]
-                } else {
-                    &[0x52800021, 0xb9000001, 0xd65f03c0]
-                },
-            )?;
-            let yield_call = syscall_code(&mut emu, 0x200, arm32, arm64)?;
-            let flag = emu.malloc(4)?;
-            let thread = spawn(&mut emu, libc, worker, flag)?;
-            assert_eq!(emu.call_function(yield_call, &[0; 6])?, 0);
-            assert_eq!(emu.read_bytes(flag, 4)?, 1u32.to_le_bytes());
-            assert_eq!(call(&mut emu, libc, "pthread_join", &[thread, 0])?, 0);
-            for (arm32, arm64) in [(186, 132), (175, 135)] {
-                let signal = syscall_code(&mut emu, 0x300, arm32, arm64)?;
-                assert_eq!(emu.call_function(signal, &[0; 6])?, 0);
-            }
+        let (mut emu, libc) = libc_emulator(arch)?;
+        let worker = code(
+            &mut emu,
+            0x100,
+            if arch == Architecture::Arm32 {
+                &[0xe3a01001, 0xe5801000, 0xe12fff1e]
+            } else {
+                &[0x52800021, 0xb9000001, 0xd65f03c0]
+            },
+        )?;
+        let yield_call = syscall_code(&mut emu, 0x200, 158, 124)?;
+        let flag = emu.malloc(4)?;
+        let thread = spawn(&mut emu, libc, worker, flag)?;
+        assert_eq!(emu.call_function(yield_call, &[0; 6])?, 0);
+        assert_eq!(emu.read_bytes(flag, 4)?, 1u32.to_le_bytes());
+        assert_eq!(call(&mut emu, libc, "pthread_join", &[thread, 0])?, 0);
+        for (arm32, arm64) in [(186, 132), (175, 135)] {
+            let signal = syscall_code(&mut emu, 0x300, arm32, arm64)?;
+            assert_eq!(emu.call_function(signal, &[0; 6])?, 0);
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn nanosleep_returns_eintr_when_interrupted() -> Result<()> {
+    for arch in [Architecture::Arm32, Architecture::Arm64] {
+        for (arm32, arm64) in [(162, 101), (265, 115)] {
+            let (mut emu, _libc) = libc_emulator(arch)?;
+            let sleep_call = syscall_code(&mut emu, 0x200, arm32, arm64)?;
+            assert_eq!(
+                emu.call_function(sleep_call, &[0; 6])?,
+                ((-4i64) as u64) & arch.pointer_mask()
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn tgkill_and_sigaction_return_zero() -> Result<()> {
+    for arch in [Architecture::Arm32, Architecture::Arm64] {
+        for (arm32, arm64) in [(268, 131), (174, 134)] {
+            let (mut emu, _libc) = libc_emulator(arch)?;
+            let syscall_fn = syscall_code(&mut emu, 0x200, arm32, arm64)?;
+            assert_eq!(emu.call_function(syscall_fn, &[0; 6])?, 0);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn accept4_returns_eagain() -> Result<()> {
+    for arch in [Architecture::Arm32, Architecture::Arm64] {
+        let (mut emu, _libc) = libc_emulator(arch)?;
+        let syscall_fn = syscall_code(&mut emu, 0x200, 366, 242)?;
+        assert_eq!(
+            emu.call_function(syscall_fn, &[0; 6])?,
+            ((-11i64) as u64) & arch.pointer_mask()
+        );
     }
     Ok(())
 }
