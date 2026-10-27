@@ -249,11 +249,19 @@ fn pthread_join_returns_value_and_clears_tid() -> Result<()> {
 }
 
 #[test]
-fn exit_group_one_is_suppressed_on_main_thread() -> Result<()> {
+fn exit_group_one_stops_emulation_on_main_thread() -> Result<()> {
     for arch in [Architecture::Arm32, Architecture::Arm64] {
         let (mut emu, _libc) = libc_emulator(arch)?;
         let exit_group = syscall_code(&mut emu, 0x100, 248, 94)?;
-        assert_eq!(emu.call_function(exit_group, &[1, 0, 0, 0, 0, 0])?, 0);
+        let at = exit_group + if arch == Architecture::Arm32 { 16 } else { 4 };
+        let error = emu
+            .call_function(exit_group, &[1, 0, 0, 0, 0, 0])
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            format!("emulation stopped: exit_group(1) at 0x{at:x}")
+        );
     }
     Ok(())
 }

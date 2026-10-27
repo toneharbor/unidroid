@@ -252,12 +252,6 @@ impl Emulator {
                 self.threads.action = Action::Exit;
             }
         }
-        if status == 1 && group && self.threads.tid() == MAIN_TID {
-            self.events.borrow_mut().emit(crate::Event::Warning {
-                message: format!("suppressed exit_group(1) at {}", self.location(pc)),
-            });
-            return Ok(0);
-        }
         if group || self.threads.tid() == MAIN_TID || self.threads.depth > 1 {
             return Err(format!(
                 "emulation stopped: {}({}) at {}",

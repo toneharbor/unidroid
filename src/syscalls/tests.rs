@@ -364,17 +364,17 @@ fn accept4_returns_eagain() {
 }
 
 #[test]
-fn ioctl_unknown_returns_zero() {
+fn ioctl_unknown_returns_enotty() {
     for arch in [Architecture::Arm64, Architecture::Arm32] {
         let mut emu = Emulator::builder().build().unwrap();
         emu.setup_cpu(arch).unwrap();
         let nr = if arch == Architecture::Arm64 { 29 } else { 54 };
-        assert_eq!(emu.syscall(nr, [0; 6], 0x8000).unwrap(), 0);
+        assert_eq!(emu.syscall(nr, [0; 6], 0x8000).unwrap() as i64, -25);
     }
 }
 
 #[test]
-fn ioctl_tcgets_returns_zero() {
+fn ioctl_tcgets_returns_enotty() {
     let tcgets: u64 = 0x5401;
     for arch in [Architecture::Arm64, Architecture::Arm32] {
         let mut emu = Emulator::builder().build().unwrap();
@@ -382,49 +382,40 @@ fn ioctl_tcgets_returns_zero() {
         let nr = if arch == Architecture::Arm64 { 29 } else { 54 };
         assert_eq!(
             emu.syscall(nr, [0, tcgets, 0x10000, 0, 0, 0], 0x8000)
-                .unwrap(),
-            0
+                .unwrap() as i64,
+            -25
         );
     }
 }
 
 #[test]
-fn ioctl_tcgets_arm32_writes_36_bytes_with_cflags() {
-    let tcgets: u64 = 0x5401;
-    let mut emu = Emulator::builder().build().unwrap();
-    emu.setup_cpu(Architecture::Arm32).unwrap();
-    let addr = 0x10000u64;
-    emu.syscall(54, [0, tcgets, addr, 0, 0, 0], 0x8000).unwrap();
-    let c_cflag = u32::from_le_bytes(emu.read_bytes(addr + 8, 4).unwrap().try_into().unwrap());
-    let c_lflag = u32::from_le_bytes(emu.read_bytes(addr + 12, 4).unwrap().try_into().unwrap());
-    assert_eq!(c_cflag, 0x00B0);
-    assert_eq!(c_lflag, 0x000B);
-}
-
-#[test]
-fn ioctl_tiocgwinsz_field_order() {
+fn ioctl_tiocgwinsz_returns_enotty() {
     let tiocgwinsz: u64 = 0x5413;
-    let mut emu = Emulator::builder().build().unwrap();
-    emu.setup_cpu(Architecture::Arm64).unwrap();
-    let addr = 0x10000u64;
-    emu.syscall(29, [0, tiocgwinsz, addr, 0, 0, 0], 0x8000)
-        .unwrap();
-    let ws_row = u16::from_le_bytes(emu.read_bytes(addr, 2).unwrap().try_into().unwrap());
-    let ws_col = u16::from_le_bytes(emu.read_bytes(addr + 2, 2).unwrap().try_into().unwrap());
-    assert_eq!(ws_row, 24);
-    assert_eq!(ws_col, 80);
+    for arch in [Architecture::Arm64, Architecture::Arm32] {
+        let mut emu = Emulator::builder().build().unwrap();
+        emu.setup_cpu(arch).unwrap();
+        let nr = if arch == Architecture::Arm64 { 29 } else { 54 };
+        assert_eq!(
+            emu.syscall(nr, [0, tiocgwinsz, 0x10000, 0, 0, 0], 0x8000)
+                .unwrap() as i64,
+            -25
+        );
+    }
 }
 
 #[test]
-fn ioctl_tiocgpgrp_returns_main_tid() {
+fn ioctl_tiocgpgrp_returns_enotty() {
     let tiocgpgrp: u64 = 0x540F;
-    let mut emu = Emulator::builder().build().unwrap();
-    emu.setup_cpu(Architecture::Arm64).unwrap();
-    let addr = 0x10000u64;
-    emu.syscall(29, [0, tiocgpgrp, addr, 0, 0, 0], 0x8000)
-        .unwrap();
-    let pgid = i32::from_le_bytes(emu.read_bytes(addr, 4).unwrap().try_into().unwrap());
-    assert_eq!(pgid, crate::threads::MAIN_TID as i32);
+    for arch in [Architecture::Arm64, Architecture::Arm32] {
+        let mut emu = Emulator::builder().build().unwrap();
+        emu.setup_cpu(arch).unwrap();
+        let nr = if arch == Architecture::Arm64 { 29 } else { 54 };
+        assert_eq!(
+            emu.syscall(nr, [0, tiocgpgrp, 0x10000, 0, 0, 0], 0x8000)
+                .unwrap() as i64,
+            -25
+        );
+    }
 }
 
 #[test]
@@ -445,6 +436,21 @@ fn ioctl_fionread_returns_zero() {
 }
 
 #[test]
+fn ioctl_fionbio_returns_zero() {
+    let fionbio: u64 = 0x5421;
+    for arch in [Architecture::Arm64, Architecture::Arm32] {
+        let mut emu = Emulator::builder().build().unwrap();
+        emu.setup_cpu(arch).unwrap();
+        let nr = if arch == Architecture::Arm64 { 29 } else { 54 };
+        assert_eq!(
+            emu.syscall(nr, [0, fionbio, 0x10000, 0, 0, 0], 0x8000)
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
 fn sysinfo_returns_zero() {
     for arch in [Architecture::Arm64, Architecture::Arm32] {
         let mut emu = Emulator::builder().build().unwrap();
@@ -459,14 +465,12 @@ fn sysinfo_returns_zero() {
 }
 
 #[test]
-fn sysinfo_totalram_times_mem_unit_equals_2gib() {
-    let totalram_bytes = 2u64 * 1024 * 1024 * 1024;
-    let arch = Architecture::Arm64;
+fn sysinfo_arm64_totalram_times_mem_unit_equals_8gib() {
+    let totalram_bytes = 8u64 * 1024 * 1024 * 1024;
     let mut emu = Emulator::builder().build().unwrap();
-    emu.setup_cpu(arch).unwrap();
-    let nr = 173;
+    emu.setup_cpu(Architecture::Arm64).unwrap();
     let addr = 0x10000u64;
-    emu.syscall(nr, [addr; 6], 0x8000).unwrap();
+    emu.syscall(173, [addr; 6], 0x8000).unwrap();
     let totalram = u64::from_le_bytes(emu.read_bytes(addr + 32, 8).unwrap().try_into().unwrap());
     let mem_unit =
         u32::from_le_bytes(emu.read_bytes(addr + 100, 4).unwrap().try_into().unwrap()) as u64;
@@ -474,14 +478,12 @@ fn sysinfo_totalram_times_mem_unit_equals_2gib() {
 }
 
 #[test]
-fn sysinfo_totalram_times_mem_unit_equals_2gib_arm32() {
+fn sysinfo_arm32_totalram_times_mem_unit_equals_2gib() {
     let totalram_bytes = 2u64 * 1024 * 1024 * 1024;
-    let arch = Architecture::Arm32;
     let mut emu = Emulator::builder().build().unwrap();
-    emu.setup_cpu(arch).unwrap();
-    let nr = 116;
+    emu.setup_cpu(Architecture::Arm32).unwrap();
     let addr = 0x10000u64;
-    emu.syscall(nr, [addr; 6], 0x8000).unwrap();
+    emu.syscall(116, [addr; 6], 0x8000).unwrap();
     let totalram =
         u32::from_le_bytes(emu.read_bytes(addr + 16, 4).unwrap().try_into().unwrap()) as u64;
     let mem_unit =

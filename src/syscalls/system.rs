@@ -1,24 +1,16 @@
 use crate::{Architecture, Emulator};
 
-const IOC_DIRSHIFT: u32 = 30;
 const IOC_TYPESHIFT: u32 = 8;
 const IOC_NRSHIFT: u32 = 0;
-const IOC_SIZESHIFT: u32 = 16;
 
 const IOC_T: u32 = b'T' as u32;
 const IOC_F: u32 = b'f' as u32;
 
-fn ioc_dir(cmd: u32) -> u32 {
-    (cmd >> IOC_DIRSHIFT) & 0x3
-}
 fn ioc_type(cmd: u32) -> u32 {
     (cmd >> IOC_TYPESHIFT) & 0xFF
 }
 fn ioc_nr(cmd: u32) -> u32 {
     (cmd >> IOC_NRSHIFT) & 0xFF
-}
-fn ioc_size(cmd: u32) -> u32 {
-    (cmd >> IOC_SIZESHIFT) & 0x3FFF
 }
 
 impl Emulator {
@@ -26,51 +18,32 @@ impl Emulator {
         let req = request as u32;
         let typ = ioc_type(req);
         let nr = ioc_nr(req);
-        let size = ioc_size(req) as usize;
         let errno = |n: i64| (-n) as u64;
+        let enotty = errno(25);
+        let efault = errno(14);
         match (typ, nr) {
-            (IOC_T, 1) => {
-                let termios_size = match self.architecture() {
-                    Architecture::Arm32 => 36,
-                    Architecture::Arm64 => 60,
-                };
-                let n = if size > 0 { size } else { termios_size };
-                let mut buf = vec![0u8; n];
-                if n >= 16 {
-                    buf[8..12].copy_from_slice(&0x00B0u32.to_le_bytes());
-                    buf[12..16].copy_from_slice(&0x000Bu32.to_le_bytes());
-                }
-                self.write_bytes(arg, &buf).map(|_| 0).unwrap_or(errno(14))
-            }
-            (IOC_T, 15) => {
-                let pgid = (crate::threads::MAIN_TID as i32).to_le_bytes();
-                self.write_bytes(arg, &pgid).map(|_| 0).unwrap_or(errno(14))
-            }
-            (IOC_T, 16) => 0,
-            (IOC_T, 19) => {
-                let ws_size = if size > 0 { size } else { 8 };
-                let mut ws = vec![0u8; ws_size];
-                ws[0..2].copy_from_slice(&24u16.to_le_bytes());
-                ws[2..4].copy_from_slice(&80u16.to_le_bytes());
-                self.write_bytes(arg, &ws).map(|_| 0).unwrap_or(errno(14))
-            }
+            (IOC_T, 1)
+            | (IOC_T, 2)
+            | (IOC_T, 3)
+            | (IOC_T, 4)
+            | (IOC_T, 10)
+            | (IOC_T, 11)
+            | (IOC_T, 15)
+            | (IOC_T, 16)
+            | (IOC_T, 19)
+            | (IOC_T, 20)
+            | (IOC_T, 34) => enotty,
             (IOC_T, 27) => {
                 let zero = 0i32.to_le_bytes();
-                self.write_bytes(arg, &zero).map(|_| 0).unwrap_or(errno(14))
+                self.write_bytes(arg, &zero).map(|_| 0).unwrap_or(efault)
             }
             (IOC_T, 33) => 0,
             (IOC_F, 126) => 0,
             (IOC_F, 127) => {
                 let zero = 0i32.to_le_bytes();
-                self.write_bytes(arg, &zero).map(|_| 0).unwrap_or(errno(14))
+                self.write_bytes(arg, &zero).map(|_| 0).unwrap_or(efault)
             }
-            _ => {
-                if ioc_dir(req) & 2 != 0 && size > 0 && arg != 0 {
-                    let zeros = vec![0u8; size.min(4096)];
-                    let _ = self.write_bytes(arg, &zeros);
-                }
-                0
-            }
+            _ => enotty,
         }
     }
 
@@ -96,7 +69,11 @@ impl Emulator {
         for &load in &[128u64, 64, 32] {
             write_long(&mut buf, &mut offset, load << 16, ptr_size);
         }
-        let totalram = 2u64 * 1024 * 1024 * 1024;
+        let totalram = if ptr_size == 8 {
+            8u64 * 1024 * 1024 * 1024
+        } else {
+            2u64 * 1024 * 1024 * 1024
+        };
         write_long(&mut buf, &mut offset, totalram / mem_unit, ptr_size);
         write_long(&mut buf, &mut offset, totalram / 4 * 3 / mem_unit, ptr_size);
         write_long(&mut buf, &mut offset, 0, ptr_size);
