@@ -208,7 +208,9 @@ impl Emulator {
                 self.protect(a[0], a[1], Prot(a[2] as u32))?;
                 0
             }
+            29 => self.ioctl(a[0], a[1], a[2]),
             131 | 134 => 0,
+            173 => self.sysinfo(a[0]),
             242 => errno(11),
             _ => {
                 self.events.borrow_mut().emit(crate::Event::Warning {
