@@ -30,7 +30,7 @@ fn access_resolves_rootfs_paths_and_ignores_permission_modes() -> Result<()> {
 
 #[test]
 fn uname_writes_all_six_padded_fields_and_reports_bad_memory() -> Result<()> {
-    for (dir, machine) in [("lib64", "armv8l"), ("lib", "armv7l")] {
+    for (dir, machine) in [("lib64", "aarch64"), ("lib", "armv7l")] {
         let mut emu = Emulator::builder().build()?;
         let libc = emu.load_library(format!("rootfs/{dir}/libc.so"))?;
         let uname = emu.find_symbol(libc, "uname")?;
@@ -41,10 +41,10 @@ fn uname_writes_all_six_padded_fields_and_reports_bad_memory() -> Result<()> {
         for (field, expected) in bytes[..390].as_chunks::<65>().0.iter().zip([
             "Linux",
             "localhost",
-            "1.0.0-unidbg",
+            "4.14.190-g5f07fba0b5da",
             "#1 SMP PREEMPT Thu Apr 19 14:36:58 CST 2018",
             machine,
-            "localdomain",
+            "",
         ]) {
             assert_eq!(&field[..expected.len()], expected.as_bytes());
             assert!(field[expected.len()..].iter().all(|byte| *byte == 0));
