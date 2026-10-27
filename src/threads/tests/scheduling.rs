@@ -261,15 +261,25 @@ fn sched_yield_yields_and_signal_setup_returns_zero() -> Result<()> {
 }
 
 #[test]
-fn nanosleep_returns_eintr_when_interrupted() -> Result<()> {
+fn nanosleep_yields_and_returns_zero() -> Result<()> {
     for arch in [Architecture::Arm32, Architecture::Arm64] {
         for (arm32, arm64) in [(162, 101), (265, 115)] {
-            let (mut emu, _libc) = libc_emulator(arch)?;
+            let (mut emu, libc) = libc_emulator(arch)?;
+            let worker = code(
+                &mut emu,
+                0x100,
+                if arch == Architecture::Arm32 {
+                    &[0xe3a01001, 0xe5801000, 0xe12fff1e]
+                } else {
+                    &[0x52800021, 0xb9000001, 0xd65f03c0]
+                },
+            )?;
             let sleep_call = syscall_code(&mut emu, 0x200, arm32, arm64)?;
-            assert_eq!(
-                emu.call_function(sleep_call, &[0; 6])?,
-                ((-4i64) as u64) & arch.pointer_mask()
-            );
+            let flag = emu.malloc(4)?;
+            let thread = spawn(&mut emu, libc, worker, flag)?;
+            assert_eq!(emu.call_function(sleep_call, &[0; 6])?, 0);
+            assert_eq!(emu.read_bytes(flag, 4)?, 1u32.to_le_bytes());
+            assert_eq!(call(&mut emu, libc, "pthread_join", &[thread, 0])?, 0);
         }
     }
     Ok(())

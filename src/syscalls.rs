@@ -73,9 +73,7 @@ impl Emulator {
             93 | 94 => self.exit_thread(a[0], nr == 94, pc)?,
             96 => self.threads.set_tid_address(a[0]),
             98 => self.futex(a, pc)?,
-            101 => errno(4),
-            115 => errno(4),
-            124 => {
+            101 | 115 | 124 => {
                 if self.threads.depth == 1 && self.threads.has_runnable() {
                     self.threads.action = crate::threads::Action::Yield;
                 }

@@ -294,7 +294,7 @@ fn unknown_syscall_returns_linux_enosys() {
 }
 
 #[test]
-fn nanosleep_returns_eintr() {
+fn nanosleep_returns_zero() {
     for arch in [Architecture::Arm64, Architecture::Arm32] {
         let mut emu = Emulator::builder().build().unwrap();
         emu.setup_cpu(arch).unwrap();
@@ -303,12 +303,12 @@ fn nanosleep_returns_eintr() {
         } else {
             162
         };
-        assert_eq!(emu.syscall(nr, [0; 6], 0x8000).unwrap() as i64, -4);
+        assert_eq!(emu.syscall(nr, [0; 6], 0x8000).unwrap(), 0);
     }
 }
 
 #[test]
-fn clock_nanosleep_returns_eintr() {
+fn clock_nanosleep_returns_zero() {
     for arch in [Architecture::Arm64, Architecture::Arm32] {
         let mut emu = Emulator::builder().build().unwrap();
         emu.setup_cpu(arch).unwrap();
@@ -317,7 +317,7 @@ fn clock_nanosleep_returns_eintr() {
         } else {
             265
         };
-        assert_eq!(emu.syscall(nr, [0; 6], 0x8000).unwrap() as i64, -4);
+        assert_eq!(emu.syscall(nr, [0; 6], 0x8000).unwrap(), 0);
     }
 }
 
