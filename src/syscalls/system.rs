@@ -49,7 +49,7 @@ impl Emulator {
 
     pub(super) fn sysinfo(&mut self, address: u64) -> u64 {
         let ptr_size = self.architecture().pointer_size() as usize;
-        let struct_size = if ptr_size == 8 { 104 } else { 64 };
+        let struct_size = if ptr_size == 8 { 112 } else { 64 };
         let mem_unit: u64 = if ptr_size == 8 { 1 } else { 4096 };
         let mut buf = vec![0u8; struct_size];
         let mut offset = 0;
@@ -66,8 +66,10 @@ impl Emulator {
         // They only need to be self-consistent so that guest code branching
         // on sysinfo sees a plausible environment.
         write_long(&mut buf, &mut offset, 3600, ptr_size);
-        for &load in &[128u64, 64, 32] {
-            write_long(&mut buf, &mut offset, load << 16, ptr_size);
+        // Load averages are stored in 1/65536 units: 1.0, 0.8 and 0.5.
+        // Write the scaled values directly; shifting by 16 again would overflow u32 on arm32.
+        for &load in &[65536u64, 52429, 32768] {
+            write_long(&mut buf, &mut offset, load, ptr_size);
         }
         let totalram = if ptr_size == 8 {
             8u64 * 1024 * 1024 * 1024
@@ -84,13 +86,17 @@ impl Emulator {
         offset += 2;
         buf[offset..offset + 2].copy_from_slice(&0u16.to_le_bytes());
         offset += 2;
+        if ptr_size == 8 {
+            offset += 4;
+        }
         write_long(&mut buf, &mut offset, 0, ptr_size);
         write_long(&mut buf, &mut offset, 0, ptr_size);
         debug_assert!(mem_unit <= u32::MAX as u64);
         buf[offset..offset + 4].copy_from_slice(&(mem_unit as u32).to_le_bytes());
         offset += 4;
-        if ptr_size == 4 {
-            buf[offset..offset + 8].copy_from_slice(&[0u8; 8]);
+        if ptr_size == 8 {
+            offset += 4;
+        } else {
             offset += 8;
         }
         debug_assert_eq!(offset, struct_size);

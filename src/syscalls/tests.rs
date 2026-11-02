@@ -473,8 +473,22 @@ fn sysinfo_arm64_totalram_times_mem_unit_equals_8gib() {
     emu.syscall(173, [addr; 6], 0x8000).unwrap();
     let totalram = u64::from_le_bytes(emu.read_bytes(addr + 32, 8).unwrap().try_into().unwrap());
     let mem_unit =
-        u32::from_le_bytes(emu.read_bytes(addr + 100, 4).unwrap().try_into().unwrap()) as u64;
+        u32::from_le_bytes(emu.read_bytes(addr + 104, 4).unwrap().try_into().unwrap()) as u64;
     assert_eq!(totalram * mem_unit, totalram_bytes);
+    let loads: Vec<u64> = (0..3)
+        .map(|i| {
+            u64::from_le_bytes(
+                emu.read_bytes(addr + 8 + i * 8, 8)
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(loads, vec![65536, 52429, 32768]);
+    let totalhigh = u64::from_le_bytes(emu.read_bytes(addr + 88, 8).unwrap().try_into().unwrap());
+    let freehigh = u64::from_le_bytes(emu.read_bytes(addr + 96, 8).unwrap().try_into().unwrap());
+    assert_eq!((totalhigh, freehigh), (0, 0));
 }
 
 #[test]
@@ -489,6 +503,17 @@ fn sysinfo_arm32_totalram_times_mem_unit_equals_2gib() {
     let mem_unit =
         u32::from_le_bytes(emu.read_bytes(addr + 52, 4).unwrap().try_into().unwrap()) as u64;
     assert_eq!(totalram * mem_unit, totalram_bytes);
+    let loads: Vec<u64> = (0..3)
+        .map(|i| {
+            u32::from_le_bytes(
+                emu.read_bytes(addr + 4 + i * 4, 4)
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+            ) as u64
+        })
+        .collect();
+    assert_eq!(loads, vec![65536, 52429, 32768]);
 }
 
 #[test]
