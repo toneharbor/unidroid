@@ -47,4 +47,17 @@ impl Vfs {
             _ => Err(Error(22)),
         }
     }
+    pub(crate) fn ensure_open(&self, fd: u64) -> FsResult<()> {
+        self.descriptor(fd).map(|_| ())
+    }
+    pub(crate) fn set_nonblocking(&self, fd: u64, nonblocking: bool) -> FsResult<()> {
+        let file = self.descriptor(fd)?.file.clone();
+        let mut file = file.borrow_mut();
+        if nonblocking {
+            file.flags |= 0x800;
+        } else {
+            file.flags &= !0x800;
+        }
+        Ok(())
+    }
 }

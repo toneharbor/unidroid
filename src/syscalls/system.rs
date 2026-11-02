@@ -14,13 +14,14 @@ fn ioc_nr(cmd: u32) -> u32 {
 }
 
 impl Emulator {
-    pub(super) fn ioctl(&mut self, _fd: u64, request: u64, arg: u64) -> u64 {
+    pub(super) fn ioctl(&mut self, fd: u64, request: u64, arg: u64) -> u64 {
         let req = request as u32;
         let typ = ioc_type(req);
         let nr = ioc_nr(req);
         let errno = |n: i64| (-n) as u64;
         let enotty = errno(25);
         let efault = errno(14);
+        let ebadf = errno(9);
         match (typ, nr) {
             (IOC_T, 1)
             | (IOC_T, 2)
@@ -37,8 +38,19 @@ impl Emulator {
                 let zero = 0i32.to_le_bytes();
                 self.write_bytes(arg, &zero).map(|_| 0).unwrap_or(efault)
             }
-            (IOC_T, 33) => 0,
-            (IOC_F, 126) => 0,
+            (IOC_T, 33) | (IOC_F, 126) => {
+                if self.vfs.ensure_open(fd).is_err() {
+                    return ebadf;
+                }
+                let value = match self.read_bytes(arg, 4) {
+                    Ok(bytes) => u32::from_le_bytes(bytes.try_into().unwrap()),
+                    Err(_) => return efault,
+                };
+                match self.vfs.set_nonblocking(fd, value != 0) {
+                    Ok(()) => 0,
+                    Err(error) => error.result(),
+                }
+            }
             (IOC_F, 127) => {
                 let zero = 0i32.to_le_bytes();
                 self.write_bytes(arg, &zero).map(|_| 0).unwrap_or(efault)

@@ -451,6 +451,67 @@ fn ioctl_fionbio_returns_zero() {
 }
 
 #[test]
+fn ioctl_fionbio_rejects_unreadable_argument() {
+    let linux_fionbio: u64 = 0x5421;
+    let bsd_fionbio: u64 = 0x8004_667E;
+    for arch in [Architecture::Arm64, Architecture::Arm32] {
+        let nr = if arch == Architecture::Arm64 { 29 } else { 54 };
+        for request in [linux_fionbio, bsd_fionbio] {
+            let mut emu = Emulator::builder().build().unwrap();
+            emu.setup_cpu(arch).unwrap();
+            assert_eq!(
+                emu.syscall(nr, [0, request, 0, 0, 0, 0], 0x8000).unwrap() as i64,
+                -14,
+                "request {request:#x} on {arch:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn ioctl_fionbio_toggles_nonblocking_flag() {
+    let fionbio: u64 = 0x5421;
+    for arch in [Architecture::Arm64, Architecture::Arm32] {
+        let ioctl_nr = if arch == Architecture::Arm64 { 29 } else { 54 };
+        let fcntl_nr = if arch == Architecture::Arm64 { 25 } else { 221 };
+        let mut emu = Emulator::builder().build().unwrap();
+        emu.setup_cpu(arch).unwrap();
+        let get_flags =
+            |emu: &mut Emulator| emu.syscall(fcntl_nr, [0, 3, 0, 0, 0, 0], 0x8000).unwrap();
+        assert_eq!(get_flags(&mut emu) & 0x800, 0, "initially blocking");
+        emu.write_bytes(0x10000, &1u32.to_le_bytes()).unwrap();
+        assert_eq!(
+            emu.syscall(ioctl_nr, [0, fionbio, 0x10000, 0, 0, 0], 0x8000)
+                .unwrap(),
+            0
+        );
+        assert_eq!(get_flags(&mut emu) & 0x800, 0x800, "now non-blocking");
+        emu.write_bytes(0x10000, &0u32.to_le_bytes()).unwrap();
+        assert_eq!(
+            emu.syscall(ioctl_nr, [0, fionbio, 0x10000, 0, 0, 0], 0x8000)
+                .unwrap(),
+            0
+        );
+        assert_eq!(get_flags(&mut emu) & 0x800, 0, "blocking again");
+    }
+}
+
+#[test]
+fn ioctl_fionbio_invalid_fd_returns_ebadf() {
+    let fionbio: u64 = 0x5421;
+    for arch in [Architecture::Arm64, Architecture::Arm32] {
+        let nr = if arch == Architecture::Arm64 { 29 } else { 54 };
+        let mut emu = Emulator::builder().build().unwrap();
+        emu.setup_cpu(arch).unwrap();
+        assert_eq!(
+            emu.syscall(nr, [999, fionbio, 0x10000, 0, 0, 0], 0x8000)
+                .unwrap() as i64,
+            -9
+        );
+    }
+}
+
+#[test]
 fn sysinfo_returns_zero() {
     for arch in [Architecture::Arm64, Architecture::Arm32] {
         let mut emu = Emulator::builder().build().unwrap();
