@@ -68,7 +68,7 @@ const BRK_START: u64 = 0x60000000;
 pub(crate) fn page_up(n: u64) -> u64 {
     (n + PAGE - 1) & !(PAGE - 1)
 }
-fn page_down(n: u64) -> u64 {
+pub(crate) fn page_down(n: u64) -> u64 {
     n & !(PAGE - 1)
 }
 

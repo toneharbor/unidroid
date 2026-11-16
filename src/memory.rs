@@ -1,4 +1,4 @@
-use crate::{CpuData, Emulator, Region, Result, arch::Architecture, page_up};
+use crate::{CpuData, Emulator, Region, Result, arch::Architecture, page_down, page_up};
 use unicorn_engine::{
     RegisterARM, UcHookId, Unicorn,
     unicorn_const::{HookType, MemType, Prot, uc_error},
@@ -125,6 +125,49 @@ impl Emulator {
         }
         Ok(())
     }
+    /// Write guest code, privatizing a shared read-only mapping first.
+    ///
+    /// A segment mapped through `mem_map_ptr` shares its pages with the host
+    /// image, so `write_bytes` refuses to touch it. This entry point copies the
+    /// pages out the way a guest `mprotect` would, keeping the original
+    /// permissions and adding `WRITE`, then writes.
+    pub fn write_code(&mut self, address: u64, bytes: &[u8]) -> Result<()> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let end = address
+            .checked_add(bytes.len() as u64)
+            .ok_or(uc_error::NOMEM)?;
+        let pages: Vec<(u64, u64)> = self
+            .regions
+            .iter()
+            .filter(|region| region.shared.is_some() && address < region.end && end > region.start)
+            .map(|region| {
+                (
+                    page_down(address.max(region.start)),
+                    page_up(end.min(region.end)),
+                )
+            })
+            .collect();
+        for (start, stop) in pages {
+            // A write may span shared regions or a range a guest mprotect split,
+            // so privatize each mapped chunk with its own permissions.
+            let mut cursor = start;
+            while cursor < stop {
+                let mapped = self
+                    .cpu()?
+                    .mem_regions()?
+                    .into_iter()
+                    .find(|region| region.begin <= cursor && cursor <= region.end)
+                    .ok_or(uc_error::WRITE_PROT)?;
+                let chunk_end = stop.min(mapped.end.saturating_add(1));
+                let permissions = Prot(mapped.perms | Prot::WRITE.0);
+                self.protect(cursor, chunk_end - cursor, permissions)?;
+                cursor = chunk_end;
+            }
+        }
+        self.write_bytes(address, bytes)
+    }
     pub(super) fn read_u64(&self, address: u64) -> Result<u64> {
         Ok(u64::from_le_bytes(
             self.read_bytes(address, 8)?.try_into().unwrap(),
@@ -187,8 +230,98 @@ impl Emulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Architecture, PAGE};
+    use crate::{Architecture, PAGE, Region, SharedMapping};
     use unicorn_engine::unicorn_const::Prot;
+
+    #[test]
+    fn write_code_privatizes_shared_read_only_pages() -> Result<()> {
+        let mut emu = Emulator::builder().build()?;
+        let module = emu.load_library("rootfs/lib64/libc.so")?;
+        let image = emu.modules[module.0].image.clone();
+        let address = 0x3000_0000;
+        unsafe {
+            emu.cpu_mut()?.mem_map_ptr(
+                address,
+                PAGE,
+                Prot::READ | Prot::EXEC,
+                image.bytes.as_ptr().cast_mut().cast(),
+            )?;
+        }
+        emu.regions.push(Region {
+            start: address,
+            end: address + PAGE,
+            shared: Some(SharedMapping {
+                image: image.clone(),
+                start: address,
+                file_offset: 0,
+            }),
+        });
+        let host = image.bytes[..4].to_vec();
+        let error = emu.write_bytes(address, &[0xaa; 4]).unwrap_err();
+        assert!(error.to_string().contains("WRITE_PROT"), "{error}");
+        emu.write_code(address, &[0xbb; 4])?;
+        assert_eq!(emu.read_bytes(address, 4)?, [0xbb; 4]);
+        assert_eq!(image.bytes[..4], host[..]);
+        let region = emu
+            .regions
+            .iter()
+            .find(|region| region.start == address)
+            .unwrap();
+        assert!(region.shared.is_none());
+        let mapped = emu
+            .cpu()?
+            .mem_regions()?
+            .into_iter()
+            .find(|region| region.begin == address)
+            .unwrap();
+        assert_eq!(mapped.perms & Prot::EXEC.0, Prot::EXEC.0);
+        emu.write_code(address, &0xd65f03c0u32.to_le_bytes())?;
+        assert_eq!(emu.call_function(address, &[])?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn write_code_privatizes_across_a_shared_region_boundary() -> Result<()> {
+        let mut emu = Emulator::builder().build()?;
+        let module = emu.load_library("rootfs/lib64/libc.so")?;
+        let image = emu.modules[module.0].image.clone();
+        let first = 0x3000_0000;
+        for (address, offset) in [(first, 0), (first + PAGE, PAGE as usize)] {
+            unsafe {
+                emu.cpu_mut()?.mem_map_ptr(
+                    address,
+                    PAGE,
+                    Prot::READ | Prot::EXEC,
+                    image.bytes.as_ptr().add(offset).cast_mut().cast(),
+                )?;
+            }
+            emu.regions.push(Region {
+                start: address,
+                end: address + PAGE,
+                shared: Some(SharedMapping {
+                    image: image.clone(),
+                    start: address,
+                    file_offset: offset,
+                }),
+            });
+        }
+        let host = image.bytes[..2 * PAGE as usize].to_vec();
+        let tail = first + PAGE - 2;
+        assert!(emu.write_bytes(tail, &[0xcc; 4]).is_err());
+        emu.write_code(tail, &[0xcc; 4])?;
+        assert_eq!(emu.read_bytes(tail, 4)?, [0xcc; 4]);
+        assert_eq!(image.bytes[..2 * PAGE as usize], host[..]);
+        for address in [first, first + PAGE] {
+            let region = emu
+                .regions
+                .iter()
+                .find(|region| region.start == address)
+                .unwrap();
+            assert!(region.shared.is_none());
+        }
+        assert!(emu.write_code(tail, &[]).is_ok());
+        Ok(())
+    }
 
     #[test]
     fn cstring_reads_across_page_boundaries() -> Result<()> {
