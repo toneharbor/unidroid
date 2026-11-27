@@ -121,3 +121,38 @@ fn api_object_arrays_are_stable_handles() -> Result<()> {
     assert_eq!(emu.string(retained[2])?, "b");
     Ok(())
 }
+
+#[test]
+fn spinning_single_threaded_guest_is_interrupted() -> Result<()> {
+    let library = elf::TestLibrary::new(true, false);
+    let mut emu = Emulator::builder().instruction_budget(1_000_000).build()?;
+    let module = emu.load_library(&library.0)?;
+    let answer = emu.find_symbol(module, "answer")?;
+    emu.write_code(answer, &0x1400_0000u32.to_le_bytes())?;
+    let error = emu.call_function(answer, &[]).unwrap_err();
+    assert!(error.to_string().contains("budget"), "{error}");
+    Ok(())
+}
+
+#[test]
+fn cancelling_a_spinning_guest_stops_it() -> Result<()> {
+    let library = elf::TestLibrary::new(true, false);
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+    let mut emu = Emulator::builder()
+        // Safety net: without it a broken cancel flag would hang the test suite
+        // instead of failing on the "cancelled" assertion below.
+        .instruction_budget(100_000_000)
+        .cancel_flag(cancel)
+        .build()?;
+    let module = emu.load_library(&library.0)?;
+    let answer = emu.find_symbol(module, "answer")?;
+    emu.write_code(answer, &0x1400_0000u32.to_le_bytes())?;
+    let error = emu.call_function(answer, &[]).unwrap_err();
+    assert!(error.to_string().contains("cancelled"), "{error}");
+    Ok(())
+}

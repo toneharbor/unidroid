@@ -1,6 +1,7 @@
 use crate::hook::HostResult;
 use crate::{
-    CpuData, Emulator, HostFunction, JniHandler, JniValue, RETURN, Result, TRAMPOLINE, threads,
+    Architecture, CpuData, Emulator, HostFunction, JniHandler, JniValue, RETURN, Result,
+    TRAMPOLINE, threads,
 };
 use unicorn_engine::unicorn_const::{MemType, uc_error};
 
@@ -106,7 +107,25 @@ impl Emulator {
         control: &mut crate::debug::control::RunControl,
     ) -> Result<u64> {
         let outermost = self.threads.depth == 1;
+        // The budget lives in CpuData so nested calls (guest -> host -> guest) and
+        // handlers that re-enter the guest consume from the same slot instead of
+        // restarting the cap. None means unlimited.
+        let initial_budget = if outermost {
+            (self.instruction_budget != 0).then_some(self.instruction_budget)
+        } else {
+            self.cpu()?.get_data().exec_budget
+        };
+        let instr_bytes = match self.architecture() {
+            Architecture::Arm64 => 4,
+            // Thumb instructions are two bytes while ARM ones are counted twice,
+            // so the cap is never looser than the configured instruction count.
+            Architecture::Arm32 => 2,
+        };
+        // Seed the slot so every iteration, the first one included, can simply
+        // read the remaining budget back at its top.
+        self.cpu_mut()?.get_data_mut().exec_budget = initial_budget;
         loop {
+            let budget = self.cpu()?.get_data().exec_budget;
             let mut stepping = control.step == Some(self.threads.tid());
             let slice_remaining = if !stepping && outermost && self.threads.has_runnable() {
                 threads::SLICE_CODE_BYTES
@@ -115,8 +134,12 @@ impl Emulator {
             };
             let thread = self.threads.tid();
             let depth = self.threads.depth;
+            let cancel = self.cancel.clone();
             *self.cpu_mut()?.get_data_mut() = CpuData {
                 slice_remaining,
+                exec_budget: budget,
+                instr_bytes,
+                cancel,
                 thread,
                 depth,
                 skip_breakpoint: control.skip,
@@ -127,8 +150,26 @@ impl Emulator {
                 return Ok(value);
             }
             let result = self.run_cpu(pc, stepping);
+            let exceeded = self.cpu()?.get_data().budget_exceeded;
+            let cancelled = self.cpu()?.get_data().cancelled;
             let (restart, location) = self.restart_pc()?;
             pc = restart;
+            // The hook stops on the first block that reaches the limit, but the
+            // guest may also reach RETURN within the same batch: a call that
+            // already finished must not be reported as a failure.
+            if result.is_ok() && pc & !1 != RETURN {
+                if exceeded {
+                    return Err(format!(
+                        "execution budget exceeded ({} instructions) at {}",
+                        self.instruction_budget,
+                        self.location(pc)
+                    )
+                    .into());
+                }
+                if cancelled {
+                    return Err(format!("execution cancelled at {}", self.location(pc)).into());
+                }
+            }
             // MEM_WRITE fires before Unicorn checks mapping and permissions.
             // A fault in that instruction is a crash, not a completed watch hit.
             if result.is_err()

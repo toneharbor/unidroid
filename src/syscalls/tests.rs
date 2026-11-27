@@ -517,11 +517,20 @@ fn sysinfo_returns_zero() {
         let mut emu = Emulator::builder().build().unwrap();
         emu.setup_cpu(arch).unwrap();
         let nr = if arch == Architecture::Arm64 {
-            173
+            179
         } else {
             116
         };
         assert_eq!(emu.syscall(nr, [0x10000; 6], 0x8000).unwrap(), 0);
+    }
+}
+
+#[test]
+fn getppid_is_not_sysinfo() {
+    for (arch, nr) in [(Architecture::Arm64, 173), (Architecture::Arm32, 64)] {
+        let mut emu = Emulator::builder().build().unwrap();
+        emu.setup_cpu(arch).unwrap();
+        assert_eq!(emu.syscall(nr, [0x10000; 6], 0x8000).unwrap(), 1);
     }
 }
 
@@ -531,7 +540,7 @@ fn sysinfo_arm64_totalram_times_mem_unit_equals_8gib() {
     let mut emu = Emulator::builder().build().unwrap();
     emu.setup_cpu(Architecture::Arm64).unwrap();
     let addr = 0x10000u64;
-    emu.syscall(173, [addr; 6], 0x8000).unwrap();
+    emu.syscall(179, [addr; 6], 0x8000).unwrap();
     let totalram = u64::from_le_bytes(emu.read_bytes(addr + 32, 8).unwrap().try_into().unwrap());
     let mem_unit =
         u32::from_le_bytes(emu.read_bytes(addr + 104, 4).unwrap().try_into().unwrap()) as u64;

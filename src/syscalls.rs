@@ -81,6 +81,7 @@ impl Emulator {
             }
             99 | 132 | 135 | 233 => 0,
             172 => crate::threads::MAIN_TID as u64,
+            173 => 1,
             178 => self.threads.tid() as u64,
             220 => self.clone_thread(a)?,
             113 | 169 => {
@@ -208,7 +209,7 @@ impl Emulator {
             }
             29 => self.ioctl(a[0], a[1], a[2]),
             131 | 134 => 0,
-            173 => self.sysinfo(a[0]),
+            179 => self.sysinfo(a[0]),
             242 => errno(11),
             _ => {
                 self.events.borrow_mut().emit(crate::Event::Warning {

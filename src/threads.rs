@@ -124,12 +124,42 @@ impl Emulator {
         if !self.threads.slice_hook_installed {
             let uc = self.cpu_mut()?;
             uc.add_block_hook(1, 0, |uc, _, size| {
-                let remaining = &mut uc.get_data_mut().slice_remaining;
-                if *remaining == 0 {
-                    return;
-                }
-                *remaining = remaining.saturating_sub(u64::from(size));
-                if *remaining == 0 {
+                let size = u64::from(size);
+                let stop = {
+                    let data = uc.get_data_mut();
+                    let mut stop = false;
+                    // The execution budget is independent of thread count so a
+                    // single-threaded guest cannot spin forever inside emu_start.
+                    if let Some(remaining) = data.exec_budget {
+                        // Unicorn reports the size of the basic block in bytes.
+                        let instructions = (size / data.instr_bytes.max(1)).max(1);
+                        if instructions >= remaining {
+                            data.exec_budget = Some(0);
+                            data.budget_exceeded = true;
+                            stop = true;
+                        } else {
+                            data.exec_budget = Some(remaining - instructions);
+                        }
+                    }
+                    if !stop
+                        && data
+                            .cancel
+                            .as_ref()
+                            .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Relaxed))
+                    {
+                        data.cancelled = true;
+                        stop = true;
+                    }
+                    // The slice only exists for fair scheduling between threads.
+                    if !stop && data.slice_remaining != 0 {
+                        data.slice_remaining = data.slice_remaining.saturating_sub(size);
+                        if data.slice_remaining == 0 {
+                            stop = true;
+                        }
+                    }
+                    stop
+                };
+                if stop {
                     let _ = uc.emu_stop();
                 }
             })?;

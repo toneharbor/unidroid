@@ -14,6 +14,8 @@ pub struct EmulatorBuilder {
     fixed_clock: Option<i64>,
     random_seed: Option<u64>,
     threads: bool,
+    instruction_budget: u64,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 impl EmulatorBuilder {
     pub fn rootfs(mut self, path: impl Into<PathBuf>) -> Self {
@@ -59,6 +61,24 @@ impl EmulatorBuilder {
         self.threads = run;
         self
     }
+    /// Cap guest instructions for each top-level call; 0 removes the cap.
+    ///
+    /// The cap applies to single-threaded guests too, so a spinning guest
+    /// returns an error instead of blocking the caller forever. It is shared
+    /// with nested guest calls made through host callbacks, and a non-zero cap
+    /// installs a per-block hook, which costs a host call per basic block.
+    pub fn instruction_budget(mut self, instructions: u64) -> Self {
+        self.instruction_budget = instructions;
+        self
+    }
+    /// Stop a running guest call when another thread sets this flag.
+    ///
+    /// The emulator stays single-threaded; the flag is only read between
+    /// guest basic blocks, so the caller's thread never touches the CPU.
+    pub fn cancel_flag(mut self, flag: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.cancel = Some(flag);
+        self
+    }
     pub fn build(self) -> Result<Emulator> {
         Emulator::build(self)
     }
@@ -77,6 +97,8 @@ impl Emulator {
             fixed_clock: None,
             random_seed: None,
             threads: true,
+            instruction_budget: 0,
+            cancel: None,
         }
     }
     fn build(builder: EmulatorBuilder) -> Result<Self> {
@@ -90,6 +112,8 @@ impl Emulator {
             uc: None,
             arch: None,
             cache_size: builder.cache_size,
+            instruction_budget: builder.instruction_budget,
+            cancel: builder.cancel,
             modules: Vec::new(),
             module_table: debug::modules::SharedModules::default(),
             regions: Vec::new(),

@@ -123,6 +123,14 @@ struct CpuData {
     source_error: Option<(u64, Box<dyn std::error::Error>)>,
     memory_access: Option<MemoryFault>,
     slice_remaining: u64,
+    // None means unlimited, Some(0) means the budget is used up. Keeping them
+    // apart matters: a host callback that swallows a nested budget error must
+    // not turn the remaining budget back into "unlimited".
+    exec_budget: Option<u64>,
+    instr_bytes: u64,
+    budget_exceeded: bool,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    cancelled: bool,
     thread: u32,
     depth: usize,
     import: Option<u64>,
@@ -143,6 +151,8 @@ pub struct Emulator {
     uc: Option<Unicorn<'static, CpuData>>,
     cache_size: u32,
     arch: Option<Architecture>,
+    instruction_budget: u64,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     modules: Vec<Loaded>,
     module_table: debug::modules::SharedModules,
     regions: Vec<Region>,
@@ -211,6 +221,14 @@ impl Emulator {
         self.source.configure_counter(&mut uc, arch)?;
         self.uc = Some(uc);
         self.arch = Some(arch);
+        // A fresh Unicorn has no hooks installed. Install the budget/cancel hook
+        // here so it also covers a guest that never clones a thread, but only
+        // when the caller actually asked for a limit: the hook costs a host call
+        // on every basic block, and the default configuration is unlimited.
+        self.threads.slice_hook_installed = false;
+        if self.instruction_budget != 0 || self.cancel.is_some() {
+            self.install_thread_slice_hook()?;
+        }
         Ok(())
     }
     fn setup_cpu(&mut self, arch: Architecture) -> Result<()> {
